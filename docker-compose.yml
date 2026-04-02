@@ -35,6 +35,9 @@ services:
     volumes:
       - ./backend_flask/static/captures:/app/static/captures
       - ./backend_flask/learned_models:/app/learned_models
+      - ./backend_flask/assets:/app/assets
+      - ./backend_flask/modules/plate/test:/app/modules/plate/test
+      - ./backend_flask/modules/plate/test:/app/modules/plate/best_plates_golden
     networks:
       - tads-network
 
