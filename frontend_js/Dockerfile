@@ -3,6 +3,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
+
+ARG VITE_KAKAO_MAP_API_KEY=de202e5f1e1b8c26cb092fb674de768d
+ENV VITE_KAKAO_MAP_API_KEY=$VITE_KAKAO_MAP_API_KEY
 RUN npm run build
 
 FROM nginx:stable-alpine
