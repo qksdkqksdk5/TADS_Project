@@ -21,7 +21,8 @@ services:
 
   # 2. Backend (Flask + YOLO)
   backend:
-    build: ./backend_flask
+    # build: ./backend_flask
+    image: hooneda/tads-backend:latest
     container_name: tads-backend
     restart: always
     environment:
@@ -39,7 +40,8 @@ services:
 
   # 3. Frontend (React / Vite)
   frontend:
-    build: ./frontend_js
+    # build: ./frontend_js
+    image: hooneda/tads-frontend:latest
     container_name: tads-frontend
     restart: always
     ports:

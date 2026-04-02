@@ -116,9 +116,12 @@ def stop_detection():
 # ✅ 감지 상태 확인
 @its_bp.route('/detection_status', methods=['GET'])
 def detection_status():
-    """현재 실행 중인 detector 목록 반환"""
     with detector_manager._lock:
-        active = list(detector_manager.active_detectors.keys())
+        active = [
+            name for name in detector_manager.active_detectors.keys()
+            if not name.startswith('sim_')      # 시뮬 제외
+            and not name.startswith('webcam_')  # 웹캠 제외
+        ]
     return jsonify({"active": active}), 200
 
 
