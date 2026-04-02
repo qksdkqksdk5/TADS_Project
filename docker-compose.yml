@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # 1. Database (MySQL 8.0)
+  db:
+    image: mysql:8.0.36
+    container_name: tads-db
+    restart: always
+    environment:
+      - TZ=Asia/Seoul
+      - MYSQL_ROOT_PASSWORD=12341234
+      - MYSQL_DATABASE=tads_db
+      - MYSQL_USER=tads_user
+      - MYSQL_PASSWORD=1234
+    ports:
+      - "45678:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    networks:
+      - tads-network
+
+  # 2. Backend (Flask + YOLO)
+  backend:
+    build: ./backend_flask
+    container_name: tads-backend
+    restart: always
+    environment:
+      - TZ=Asia/Seoul
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+    env_file: .env
+    volumes:
+      - ./backend_flask/static/captures:/app/static/captures
+      - ./backend_flask/learned_models:/app/learned_models
+    networks:
+      - tads-network
+
+  # 3. Frontend (React / Vite)
+  frontend:
+    build: ./frontend_js
+    container_name: tads-frontend
+    restart: always
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - tads-network
+
+networks:
+  tads-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  # hls_temp는 rtmp 서버가 없어졌으므로 삭제했습니다.
