@@ -21,7 +21,6 @@ services:
 
   # 2. Backend (Flask + YOLO)
   backend:
-    # build: ./backend_flask
     image: hooneda/tads-backend:latest
     container_name: tads-backend
     restart: always
@@ -43,7 +42,6 @@ services:
 
   # 3. Frontend (React / Vite)
   frontend:
-    # build: ./frontend_js
     image: hooneda/tads-frontend:latest
     container_name: tads-frontend
     restart: always
@@ -54,20 +52,22 @@ services:
     networks:
       - tads-network
 
+  # ★ Watchtower를 services 안으로 이동 완료!
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 60 --cleanup
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=60
+    networks:
+      - tads-network
+
 networks:
   tads-network:
     driver: bridge
 
 volumes:
   mysql_data:
-  # hls_temp는 rtmp 서버가 없어졌으므로 삭제했습니다.
-
-watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # 서버의 도커 엔진과 대화하기 위해 필수!
-    command: --interval 60 --cleanup  # 60초마다 새 이미지 확인, 업데이트 후 옛날 이미지는 삭제
-    environment:
-      - WATCHTOWER_POLL_INTERVAL=60
