@@ -60,6 +60,7 @@ services:
     environment:
       - DOCKER_API_VERSION=1.40 
       - WATCHTOWER_POLL_INTERVAL=60
+      - TZ=Asia/Seoul
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --interval 60 --cleanup
