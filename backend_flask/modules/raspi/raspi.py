@@ -1,3 +1,4 @@
+import os
 import time
 import cv2
 import numpy as np
@@ -9,6 +10,9 @@ import struct
 from flask import Blueprint, Response, jsonify, request
 from ultralytics import YOLO
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(BASE_DIR, "best_SB.pt")
+
 raspi_bp = Blueprint('raspi', __name__)
 
 # --- [1. 설정 및 AI 모델] ---
@@ -17,7 +21,7 @@ RASPI_THERMAL_IP  = "192.168.219.155"
 RASPI_THERMAL_PORT = 9999
 
 try:
-    model = YOLO('best_SB.pt')
+    model = YOLO(model_path)
     print("[INFO] YOLOv8 model loaded.")
 except Exception as e:
     print(f"[ERROR] Model load failed: {e}")
