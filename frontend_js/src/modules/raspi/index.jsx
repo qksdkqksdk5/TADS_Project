@@ -15,7 +15,7 @@ export default function RaspiModule() {
   const [streamKey,       setStreamKey]       = useState(Date.now());
   const [isCombinedMode,  setIsCombinedMode]  = useState(false);
 
-  const SERVER_IP   = "localhost";
+  const SERVER_IP   = `${window.location.hostname}`;
   const RASPI_IP    = "192.168.219.155";
   const SERVER_PORT = "5000";
   const BASE_URL    = `http://${SERVER_IP}:${SERVER_PORT}/api/raspi`;
