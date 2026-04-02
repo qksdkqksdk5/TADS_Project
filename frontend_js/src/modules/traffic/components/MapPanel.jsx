@@ -1,7 +1,7 @@
 /* eslint-disable */
 // ✅ 파일 위치: src/modules/traffic/components/MapPanel.jsx
 // 변경사항: 없음 (외부 의존성 없는 독립 컴포넌트)
-
+import { loadKakaoMapSDK } from '../loadKakaoMap';
 import React, { useEffect } from 'react';
 
 const MapPanel = ({ activeTab, isEmergency, mapRef, onHide }) => {
@@ -24,9 +24,10 @@ const MapPanel = ({ activeTab, isEmergency, mapRef, onHide }) => {
       mapRef.current = new window.kakao.maps.Map(container, options);
     };
 
-    if (window.kakao && window.kakao.maps) {
-      window.kakao.maps.load(initMap);
-    }
+    // if (window.kakao && window.kakao.maps) {
+    //   window.kakao.maps.load(initMap);
+    // }
+    loadKakaoMapSDK().then(initMap);
 
     const handleResize = () => {
       if (mapRef.current) mapRef.current.relayout();
