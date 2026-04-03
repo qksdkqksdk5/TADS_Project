@@ -111,25 +111,30 @@ function TrafficDashboard({ socket, user, setUser, onLogout }) {
       <main style={{ ...mainWrapper, height: isMobile ? 'auto' : '100vh', padding: isMobile ? '10px' : '15px', display: 'flex', flexDirection: 'column', overflow: isMobile ? 'visible' : 'hidden' }}>
         <div style={{ ...gridContainer, flexDirection: isMobile ? 'column' : 'row', flex: 1, minHeight: 0, gap: isMobile ? '10px' : '20px' }}>
 
-          {/* stats 탭 */}
-          <div style={{ display: activeTab === "stats" ? 'flex' : 'none', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
-            <StatsModule isMobile={isMobile} host={host} />
-          </div>
+          {/* ✅ 조건부 렌더링으로 변경 — 해당 탭 아닐 때 완전히 언마운트되어 폴링 자동 정지 */}
+          {activeTab === "stats" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
+              <StatsModule isMobile={isMobile} host={host} />
+            </div>
+          )}
 
-          {/* ✅ 번호판 인식 탭 */}
-          <div style={{ display: activeTab === "plate" ? 'flex' : 'none', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
-            <PlateModule isMobile={isMobile} host={host} />
-          </div>
+          {activeTab === "plate" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
+              <PlateModule isMobile={isMobile} host={host} />
+            </div>
+          )}
 
-          {/* ✅ 탄소배출/정체 탭 */}
-          <div style={{ display: activeTab === "carbon" ? 'flex' : 'none', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
-            <CarbonModule isMobile={isMobile} host={host} />
-          </div>
+          {activeTab === "carbon" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
+              <CarbonModule isMobile={isMobile} host={host} />
+            </div>
+          )}
 
-          {/* ✅ 라즈베리파이 CCTV 탭 */}
-          <div style={{ display: activeTab === "raspi" ? 'flex' : 'none', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
-            <RaspiModule isMobile={isMobile} host={host} />
-          </div>
+          {activeTab === "raspi" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
+              <RaspiModule isMobile={isMobile} host={host} />
+            </div>
+          )}
 
           {/* 관제/시뮬레이션 탭 영역 */}
           <div style={{ display: !isModuleTab ? 'flex' : 'none', flex: 1, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '10px' : '20px', minHeight: 0 }}>

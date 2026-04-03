@@ -16,16 +16,24 @@ model_path = os.path.join(BASE_DIR, "best_SB.pt")
 raspi_bp = Blueprint('raspi', __name__)
 
 # --- [1. 설정 및 AI 모델] ---
-RASPI_BACKEND_URL = "http://192.168.219.155:5000"
-RASPI_THERMAL_IP  = "192.168.219.155"
+RASPI_BACKEND_URL  = "http://192.168.219.155:5000"
+RASPI_THERMAL_IP   = "192.168.219.155"
 RASPI_THERMAL_PORT = 9999
 
-try:
-    model = YOLO(model_path)
-    print("[INFO] YOLOv8 model loaded.")
-except Exception as e:
-    print(f"[ERROR] Model load failed: {e}")
-    model = None
+# ✅ 서버 시작 시 즉시 로드하지 않음 — /start 호출 시 로드
+model      = None
+model_lock = threading.Lock()
+
+def load_model_if_needed():
+    global model
+    with model_lock:
+        if model is None:
+            try:
+                model = YOLO(model_path)
+                print("[INFO] YOLOv8 model loaded.")
+            except Exception as e:
+                print(f"[ERROR] Model load failed: {e}")
+                model = None
 
 # 전역 상태 변수
 detection_enabled = False
@@ -36,9 +44,9 @@ thermal_data      = None
 frame_lock        = threading.Lock()
 
 # 워커 제어 플래그
-_workers_started  = False
-_workers_lock     = threading.Lock()
-_stop_event       = threading.Event()  # ✅ 워커 정지 신호
+_workers_started = False
+_workers_lock    = threading.Lock()
+_stop_event      = threading.Event()
 
 
 # --- [2. 열화상 데이터 수신 스레드] ---
@@ -48,7 +56,7 @@ def thermal_receiver_worker():
         client_socket = None
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(2.0)  # ✅ 블로킹 I/O 타임아웃
+            client_socket.settimeout(2.0)
             client_socket.connect((RASPI_THERMAL_IP, RASPI_THERMAL_PORT))
             payload_size = struct.calcsize("Q")
             data = b""
@@ -78,7 +86,7 @@ def thermal_receiver_worker():
                         thermal_data = temp_thermal
 
                 except socket.timeout:
-                    continue  # ✅ 타임아웃이면 stop_event 체크 후 재시도
+                    continue
 
         except Exception as e:
             if not _stop_event.is_set():
@@ -159,7 +167,7 @@ def stream_proxy_worker():
             response  = requests.get(stream_url, stream=True, timeout=5)
             byte_data = b''
             for chunk in response.iter_content(chunk_size=16384):
-                if _stop_event.is_set():  # ✅ 청크마다 stop 체크
+                if _stop_event.is_set():
                     return
                 if not chunk:
                     break
@@ -182,13 +190,14 @@ def stream_proxy_worker():
 
 # --- [6. API 엔드포인트] ---
 
-# ✅ 탭 진입 시 워커 시작
 @raspi_bp.route('/start', methods=['POST'])
 def start_workers():
     global _workers_started
     with _workers_lock:
-        _stop_event.clear()  # ✅ 이전 stop 신호 초기화 (재진입 대응)
+        _stop_event.clear()
         if not _workers_started:
+            # ✅ 탭 진입 시점에 모델 로드 (백그라운드로 — 서버 응답 블로킹 방지)
+            threading.Thread(target=load_model_if_needed, daemon=True).start()
             threading.Thread(target=thermal_receiver_worker, daemon=True).start()
             threading.Thread(target=stream_proxy_worker,    daemon=True).start()
             _workers_started = True
@@ -196,14 +205,16 @@ def start_workers():
     return jsonify({"status": "ok"}), 200
 
 
-# ✅ 탭 이탈 시 워커 정지
 @raspi_bp.route('/stop', methods=['POST'])
 def stop_workers():
-    global _workers_started
+    global _workers_started, model
     with _workers_lock:
         _stop_event.set()
         _workers_started = False
-        print("🛑 [raspi] 워커 스레드 정지 신호 전송")
+        # ✅ 탭 이탈 시 모델도 메모리에서 해제
+        with model_lock:
+            model = None
+        print("🛑 [raspi] 워커 스레드 정지 + 모델 해제")
     return jsonify({"status": "stopped"}), 200
 
 
