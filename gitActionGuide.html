@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TADS 프로젝트 협업 가이드</title>
+    <style>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f8f9fa; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #2d3436; border-bottom: 3px solid #0984e3; padding-bottom: 10px; text-align: center; }
+        h2 { color: #0984e3; margin-top: 30px; border-left: 5px solid #0984e3; padding-left: 10px; }
+        h3 { color: #2d3436; background: #e1f5fe; padding: 8px; border-radius: 4px; }
+        code { background: #dfe6e9; padding: 2px 5px; border-radius: 4px; font-family: 'Courier New', monospace; font-weight: bold; }
+        .bash-box { background: #2d3436; color: #fab1a0; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 10px 0; }
+        .important { color: #d63031; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { border: 1px solid #dfe6e9; padding: 12px; text-align: left; }
+        th { background: #f1f2f6; }
+        .flow-container { background: #f9f9f9; padding: 15px; border: 1px dashed #b2bec3; border-radius: 8px; text-align: center; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🚀 Team Collaboration Guide</h1>
+        <p style="text-align: center; color: #636e72;">효율적인 협업과 안전한 배포를 위한 Git 워크플로우</p>
+
+        <div class="flow-container">
+            Upstream (원본) ↔ Origin (내 깃허브) ↔ Local (내 컴퓨터)
+        </div>
+
+        <h2>1. 최초 환경 설정 (딱 한 번만)</h2>
+        <p>프로젝트 참여 시 본인 계정으로 <b>Fork</b> 후 아래 명령어를 순서대로 입력하세요.</p>
+        <div class="bash-box">
+            # 1. 내 깃허브에서 클론 받기<br>
+            git clone [내_Origin_주소]<br><br>
+            # 2. 팀장 원본 저장소를 Upstream으로 등록<br>
+            git remote add upstream [팀장_Upstream_주소]<br><br>
+            # 3. 연결 확인 (origin, upstream 둘 다 떠야 함)<br>
+            git remote -v
+        </div>
+
+        <h2>2. 매일 작업 루틴 (작업 시작 전 필수)</h2>
+        <p class="important">⚠️ 주의: 절대로 main 브랜치에서 직접 코딩하지 마세요!</p>
+        <div class="bash-box">
+            # 1. 내 로컬 메인을 최신화<br>
+            git checkout main<br>
+            git pull upstream main<br><br>
+            # 2. 새로운 기능을 위한 전용 브랜치 생성<br>
+            git checkout -b feature/기능명
+        </div>
+
+        <h2>3. 결과물 제출하기 (Push & PR)</h2>
+        <p>작업이 완료되면 내 깃허브에 올리고 팀장에게 검토를 요청합니다.</p>
+        <div class="bash-box">
+            # 1. 변경사항 저장<br>
+            git add .<br>
+            git commit -m "feat: 로그인 기능 구현 완료"<br><br>
+            # 2. 내 깃허브(Origin)에 브랜치 푸시<br>
+            git push origin feature/기능명
+        </div>
+        <p>➡️ <b>GitHub 페이지 접속</b>: "Compare & pull request" 버튼 클릭하여 PR 생성</p>
+
+        <h2>4. 협업 골든 룰</h2>
+        <table>
+            <tr>
+                <th>구분</th>
+                <th>지켜야 할 규칙</th>
+            </tr>
+            <tr>
+                <td><b>Clean Main</b></td>
+                <td>로컬의 <code>main</code> 브랜치는 항상 Upstream과 동일한 청정 상태 유지</td>
+            </tr>
+            <tr>
+                <td><b>PR 전 Pull</b></td>
+                <td>PR을 날리기 직전에 반드시 <code>upstream main</code>을 한 번 더 pull 할 것</td>
+            </tr>
+            <tr>
+                <td><b>브랜치 네이밍</b></td>
+                <td><code>feature/기능</code>, <code>fix/버그수정</code> 등 목적이 명확한 이름 사용</td>
+            </tr>
+            <tr>
+                <td><b>공통 파일</b></td>
+                <td>설정 파일(docker-compose, .env 등) 수정 시 반드시 팀장과 사전 협의</td>
+            </tr>
+        </table>
+
+        <h2 style="border-color: #d63031; color: #d63031;">5. 코드가 꼬였다면? (SOS)</h2>
+        <p>작업 중인 브랜치가 엉망이 됐다면 당황하지 말고 브랜치를 새로 만드세요.</p>
+        <div class="bash-box">
+            git checkout main<br>
+            git branch -D 망가진_브랜치_이름<br>
+            git pull upstream main<br>
+            git checkout -b 새_브랜치_이름
+        </div>
+        
+        <p style="text-align: center; margin-top: 50px; font-size: 0.9em; color: #b2bec3;">&copy; 2026 TADS Project Team. All Rights Reserved.</p>
+    </div>
+</body>
+</html>
