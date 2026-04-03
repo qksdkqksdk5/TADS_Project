@@ -41,9 +41,8 @@ export default function RaspiModule() {
     }
   }, [BASE_URL]);
 
-  // ✅ 탭 진입 시 워커 시작 요청 + 폴링 시작
   useEffect(() => {
-    // 워커 시작 (한 번만 — 서버에서 중복 방지)
+    // 워커 시작
     axios.post(`${BASE_URL}/start`).catch(() => {});
 
     // 초기 모터 설정
@@ -56,7 +55,12 @@ export default function RaspiModule() {
 
     // 1초 폴링
     const timer = setInterval(() => fetchStatus(), 1000);
-    return () => clearInterval(timer);
+
+    // ✅ 탭 이탈 시 워커 정지 + 폴링 클리어
+    return () => {
+      clearInterval(timer);
+      axios.post(`${BASE_URL}/stop`).catch(() => {});
+    };
   }, [fetchStatus]);
 
   const handleStreamError = () => setStreamKey(Date.now());

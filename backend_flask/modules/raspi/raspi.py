@@ -35,47 +35,60 @@ fire_detected     = False
 thermal_data      = None
 frame_lock        = threading.Lock()
 
-# ✅ 워커 시작 여부 플래그 — import 시 자동 시작 방지
+# 워커 제어 플래그
 _workers_started  = False
 _workers_lock     = threading.Lock()
+_stop_event       = threading.Event()  # ✅ 워커 정지 신호
 
 
 # --- [2. 열화상 데이터 수신 스레드] ---
 def thermal_receiver_worker():
     global thermal_data
-    while True:
+    while not _stop_event.is_set():
+        client_socket = None
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.settimeout(2.0)  # ✅ 블로킹 I/O 타임아웃
             client_socket.connect((RASPI_THERMAL_IP, RASPI_THERMAL_PORT))
             payload_size = struct.calcsize("Q")
             data = b""
             print(f"[THERMAL] Connected to {RASPI_THERMAL_IP}:{RASPI_THERMAL_PORT}")
 
-            while True:
-                while len(data) < payload_size:
-                    packet = client_socket.recv(4096)
-                    if not packet: break
-                    data += packet
-                if not data: break
+            while not _stop_event.is_set():
+                try:
+                    while len(data) < payload_size:
+                        packet = client_socket.recv(4096)
+                        if not packet:
+                            break
+                        data += packet
+                    if not data:
+                        break
 
-                packed_msg_size = data[:payload_size]
-                data            = data[payload_size:]
-                msg_size        = struct.unpack("Q", packed_msg_size)[0]
+                    packed_msg_size = data[:payload_size]
+                    data            = data[payload_size:]
+                    msg_size        = struct.unpack("Q", packed_msg_size)[0]
 
-                while len(data) < msg_size:
-                    data += client_socket.recv(4096)
+                    while len(data) < msg_size:
+                        data += client_socket.recv(4096)
 
-                frame_data   = data[:msg_size]
-                data         = data[msg_size:]
-                temp_thermal = pickle.loads(frame_data)
-                with frame_lock:
-                    thermal_data = temp_thermal
+                    frame_data   = data[:msg_size]
+                    data         = data[msg_size:]
+                    temp_thermal = pickle.loads(frame_data)
+                    with frame_lock:
+                        thermal_data = temp_thermal
+
+                except socket.timeout:
+                    continue  # ✅ 타임아웃이면 stop_event 체크 후 재시도
 
         except Exception as e:
-            print(f"[THERMAL ERROR] {e}. 3초 후 재연결 시도...")
-            time.sleep(3)
+            if not _stop_event.is_set():
+                print(f"[THERMAL ERROR] {e}. 3초 후 재연결 시도...")
+                time.sleep(3)
         finally:
-            client_socket.close()
+            if client_socket:
+                client_socket.close()
+
+    print("[THERMAL] 워커 종료")
 
 
 # --- [3. 모터 제어 로직] ---
@@ -141,12 +154,15 @@ def process_ai_logic(jpg_data):
 def stream_proxy_worker():
     stream_url = f"{RASPI_BACKEND_URL}/video_feed"
     print(f"[INFO] Connecting to Raspi Stream: {stream_url}")
-    while True:
+    while not _stop_event.is_set():
         try:
-            response  = requests.get(stream_url, stream=True, timeout=None)
+            response  = requests.get(stream_url, stream=True, timeout=5)
             byte_data = b''
             for chunk in response.iter_content(chunk_size=16384):
-                if not chunk: break
+                if _stop_event.is_set():  # ✅ 청크마다 stop 체크
+                    return
+                if not chunk:
+                    break
                 byte_data += chunk
                 while True:
                     start = byte_data.find(b'\xff\xd8')
@@ -158,22 +174,37 @@ def stream_proxy_worker():
                     else:
                         break
         except Exception as e:
-            time.sleep(2)
+            if not _stop_event.is_set():
+                time.sleep(2)
+
+    print("[STREAM] 워커 종료")
 
 
 # --- [6. API 엔드포인트] ---
 
-# ✅ 탭 진입 시 워커 시작 (한 번만)
+# ✅ 탭 진입 시 워커 시작
 @raspi_bp.route('/start', methods=['POST'])
 def start_workers():
     global _workers_started
     with _workers_lock:
+        _stop_event.clear()  # ✅ 이전 stop 신호 초기화 (재진입 대응)
         if not _workers_started:
             threading.Thread(target=thermal_receiver_worker, daemon=True).start()
             threading.Thread(target=stream_proxy_worker,    daemon=True).start()
             _workers_started = True
             print("🚀 [raspi] 워커 스레드 시작")
     return jsonify({"status": "ok"}), 200
+
+
+# ✅ 탭 이탈 시 워커 정지
+@raspi_bp.route('/stop', methods=['POST'])
+def stop_workers():
+    global _workers_started
+    with _workers_lock:
+        _stop_event.set()
+        _workers_started = False
+        print("🛑 [raspi] 워커 스레드 정지 신호 전송")
+    return jsonify({"status": "stopped"}), 200
 
 
 @raspi_bp.route('/video_feed')
