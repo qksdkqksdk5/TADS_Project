@@ -18,6 +18,11 @@ services:
       - ./mysql_data:/var/lib/mysql
     networks:
       - tads-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # 로그 파일 하나당 최대 10MB
+        max-file: "3"     # 최대 3개까지만 보관 (총 30MB 제한)
 
   # 2. Backend (Flask + YOLO)
   backend:
@@ -36,9 +41,14 @@ services:
       - ./backend_flask/learned_models:/app/learned_models
       - ./backend_flask/assets:/app/assets
       - ./backend_flask/modules/plate/test:/app/modules/plate/test
-      - ./backend_flask/modules/plate/test:/app/modules/plate/best_plates_golden
+      - ./backend_flask/modules/plate/best_plates_golden:/app/modules/plate/best_plates_golden
     networks:
       - tads-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"   # 백엔드는 YOLO 추론 로그가 많으니 조금 더 넉넉히
+        max-file: "3"
 
   # 3. Frontend (React / Vite)
   frontend:
@@ -46,11 +56,16 @@ services:
     container_name: tads-frontend
     restart: always
     ports:
-      - "5173:80"
+      - "80:80"
     depends_on:
       - backend
     networks:
       - tads-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
 
   # ★ Watchtower를 services 안으로 이동 완료!
   watchtower:

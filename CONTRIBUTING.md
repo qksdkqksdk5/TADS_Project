@@ -67,23 +67,3 @@ docs/ : 문서 수정
 refactor/ : 코드 리팩토링
 
 Happy Coding! 🚀
-
-
----
-
-### 2단계: `README.md` 수정하기
-기존에 있던 `README.md` 파일을 열어서 **맨 아랫줄**에 이 내용을 추가하세요.
-
-```markdown
-
----
-## 🤝 협업 가이드
-우리 프로젝트의 협업 규칙(Fork, PR, 브랜치 전략)은 **[CONTRIBUTING.md](./CONTRIBUTING.md)**에서 확인하실 수 있습니다. 
-작업 시작 전 반드시 숙지해 주세요!
-3단계: 깃허브에 올리기 (터미널)
-파일을 저장했다면 터미널에 아래 명령어를 쳐서 동훈님의 깃허브에 올리세요.
-
-Bash
-git add .
-git commit -m "docs: 협업 가이드 및 CONTRIBUTING 파일 추가"
-git push origin main
