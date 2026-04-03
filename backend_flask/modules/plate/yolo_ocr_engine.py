@@ -80,7 +80,7 @@ def ocr_worker():
             detected_text = _parse_ocr_result(results, ocr_model.names)
 
             # 4글자 미만은 노이즈로 간주 (레퍼런스 코드 기준 유지)
-            if len(detected_text) < 4:
+            if len(detected_text) < 7:
                 detected_text = "인식 중..."
 
             ocr_result_queue.put((track_id, plate_img, detected_text))

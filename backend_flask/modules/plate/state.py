@@ -6,7 +6,7 @@ import os
 
 # --- [설정] ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, '01_best.pt')
+MODEL_PATH = os.path.join(BASE_DIR, 'plate_best02.pt')
 TEST_DIR = os.path.join(BASE_DIR, 'test')
 SAVE_DIR = os.path.join(BASE_DIR, 'best_plates_golden')
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -28,7 +28,7 @@ VOTE_THRESHOLD = 4
 
 # --- [검출 설정] ---
 PAD          = 8      # 번호판 크롭 패딩
-CONF         = 0.3    # YOLO 탐지 신뢰도 임계값
+CONF         = 0.7    # YOLO 탐지 신뢰도 임계값
 HISTORY_MAX  = 6      # 히스토리 최대 개수
 
 # --- [공유 상태] ---

@@ -105,8 +105,10 @@ class ReverseDetector(BaseDetector):
             if self.is_simulation:
                 model_path = os.path.join(_DIR, "detect_models/best_DW_sim_openvino_model")
             else:
-                model_path = os.path.join(_DIR, "detect_models/best_DW_openvino_model")
-            self.model = YOLO(model_path, task='detect')
+                # model_path = os.path.join(_DIR, "detect_models/best_DW_openvino_model")
+                model_path = os.path.join(_DIR, "detect_models/best_DW_v2.pt")
+            # self.model = YOLO(model_path, task='detect')
+            self.model = YOLO(model_path)
             print(f"💻 [{cctv_name}] CPU(OpenVINO) 모드로 로드")
 
         if url == 0 or url == "0":
