@@ -15,14 +15,22 @@ export default function RaspiModule() {
   const [streamKey,       setStreamKey]       = useState(Date.now());
   const [isCombinedMode,  setIsCombinedMode]  = useState(false);
 
-  const SERVER_IP   = `${window.location.hostname}`;
-  const RASPI_IP    = "192.168.219.155";
-  const SERVER_PORT = "5000";
-  const BASE_URL    = `http://${SERVER_IP}:${SERVER_PORT}/api/raspi`;
+  // ✅ 렌더마다 재생성되지 않도록 ref로 고정
+  const RASPI_IP = "192.168.219.155";
+  const BASE_URL = useRef(`http://${window.location.hostname}:5000/api/raspi`).current;
 
-  const NORMAL_VIDEO_URL  = `http://${RASPI_IP}:5000/video_feed?t=${streamKey}`;
-  const THERMAL_VIDEO_URL = `${BASE_URL}/video_feed?t=${streamKey}`;
+  // ✅ video URL도 ref로 관리 — streamKey state 변경이 useEffect 재실행 유발 안 하도록
+  const normalVideoUrl  = useRef(`http://${RASPI_IP}:5000/video_feed`);
+  const thermalVideoUrl = useRef(`${BASE_URL}/video_feed`);
 
+  const handleStreamError = useCallback(() => {
+    const t = Date.now();
+    normalVideoUrl.current  = `http://${RASPI_IP}:5000/video_feed?t=${t}`;
+    thermalVideoUrl.current = `${BASE_URL}/video_feed?t=${t}`;
+    setStreamKey(t); // img를 key로 재마운트하기 위해서만 사용
+  }, []);
+
+  // ✅ 의존성 없음 — 마운트 시 딱 한 번만 생성, BASE_URL은 closure로 캡처
   const fetchStatus = useCallback(async (gcode = null, mode = null) => {
     try {
       const params = {};
@@ -39,13 +47,12 @@ export default function RaspiModule() {
     } catch (err) {
       setIsConnecting(true);
     }
-  }, [BASE_URL]);
+  }, []); // ✅ 의존성 배열 비움
 
+  // ✅ 의존성 없음 — 마운트/언마운트 시 딱 한 번만 실행
   useEffect(() => {
-    // 워커 시작
     axios.post(`${BASE_URL}/start`).catch(() => {});
 
-    // 초기 모터 설정
     const init = async () => {
       await fetchStatus("M211 S0");
       await fetchStatus("M17");
@@ -53,17 +60,13 @@ export default function RaspiModule() {
     };
     init();
 
-    // 1초 폴링
     const timer = setInterval(() => fetchStatus(), 1000);
 
-    // ✅ 탭 이탈 시 워커 정지 + 폴링 클리어
     return () => {
       clearInterval(timer);
       axios.post(`${BASE_URL}/stop`).catch(() => {});
     };
-  }, [fetchStatus]);
-
-  const handleStreamError = () => setStreamKey(Date.now());
+  }, []); // ✅ 의존성 배열 비움
 
   const move = (x = 0, y = 0) => {
     if (isAutoTracking) {
@@ -108,8 +111,10 @@ export default function RaspiModule() {
           <div style={{ display: 'flex', gap: '20px' }}>
             <div style={videoWrapperStyle}>
               <span style={videoLabelStyle}>RGB CAMERA (RPI ORIGIN)</span>
+              {/* ✅ key prop으로 재마운트 — src 문자열 변경 대신 img 엘리먼트 자체를 교체 */}
               <img
-                src={NORMAL_VIDEO_URL}
+                key={`normal-${streamKey}`}
+                src={normalVideoUrl.current}
                 onError={handleStreamError}
                 style={{ ...videoImgStyle, transform: isFlipped ? 'rotate(180deg)' : 'rotate(0deg)' }}
                 crossOrigin="anonymous"
@@ -119,7 +124,8 @@ export default function RaspiModule() {
             <div style={{ ...videoWrapperStyle, border: fireAlert ? '3px solid #ff4444' : '1px solid #2a2a3a' }}>
               <span style={{ ...videoLabelStyle, color: '#fca5a5' }}>THERMAL SENSOR (ANALYSIS)</span>
               <img
-                src={THERMAL_VIDEO_URL}
+                key={`thermal-${streamKey}`}
+                src={thermalVideoUrl.current}
                 onError={handleStreamError}
                 style={{ ...videoImgStyle, transform: isFlipped ? 'rotate(180deg)' : 'rotate(0deg)', filter: 'contrast(1.1) brightness(1.1)' }}
                 crossOrigin="anonymous"
