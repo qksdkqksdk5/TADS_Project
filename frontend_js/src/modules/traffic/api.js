@@ -7,13 +7,19 @@ import axios from 'axios';
  */
 export const fetchCctvUrl = async (host) => {
   try {
-    // 브라우저에서 ITS API 직접 호출 (AWS IP 차단 우회)
+    // 1. 백엔드에 이미 캐시된 데이터가 있는지 확인 (우선순위 1)
+    const checkRes = await axios.get(`http://${host}:5000/api/its/get_cctv_url`);
+    if (checkRes.data.success && checkRes.data.cctvData.length > 0) {
+      return { data: checkRes.data };
+    }
+
+    // 2. 캐시가 비어있을 때만 브라우저에서 직접 ITS API 호출 (최초 1회 실행용)
     const res = await axios.get('https://openapi.its.go.kr:9443/cctvInfo', {
       params: {
         apiKey: '22f088a782aa49f6a441b24c2b36d4ec',
         type: 'ex', cctvType: '1',
         minX: '126.8', maxX: '127.89',
-        minY: '36.8',  maxY: '37.0', getType: 'json'
+        minY: '36.8', maxY: '37.0', getType: 'json'
       }
     });
 
@@ -24,7 +30,7 @@ export const fetchCctvUrl = async (host) => {
       lat: parseFloat(item.coordy), lng: parseFloat(item.coordx)
     }));
 
-    // 백엔드 캐시에도 저장 (감지 시작 시 사용)
+    // 3. 백엔드 캐시에 저장 (이후 모든 사용자가 이 데이터를 공유)
     await axios.post(`http://${host}:5000/api/its/set_cctv_list`, { cctvData });
 
     return { data: { success: true, cctvData } };
