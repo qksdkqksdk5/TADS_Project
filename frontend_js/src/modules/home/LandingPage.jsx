@@ -37,20 +37,6 @@ export default function LandingPage() {
       color: '#f97316',
     },
     {
-      icon: '🔍',
-      title: '번호판 인식',
-      desc: 'YOLO OCR 기반 글자 단위 검출과 투표(Vote) 알고리즘으로 정확한 번호판 인식 및 이력 관리를 제공합니다.',
-      tags: ['YOLO-OCR', 'Vote', 'CSV'],
-      color: '#6366f1',
-    },
-    {
-      icon: '🖥️',
-      title: '라즈베리파이 CCTV',
-      desc: '열화상 센서 데이터와 RGB 영상을 동시에 분석하여 Pan/Tilt 자동 추적 및 화재 위협을 감지합니다.',
-      tags: ['AMG8833', 'Socket', 'G-code'],
-      color: '#22c55e',
-    },
-    {
       icon: '📊',
       title: '통계 & 리포트',
       desc: '감지 이벤트를 DB에 누적하여 시간대별 통계, 정오 비율, 조치 현황 등 운영 리포트를 자동 생성합니다.',
@@ -64,10 +50,24 @@ export default function LandingPage() {
       tags: ['분석', 'AI', 'Dashboard'],
       color: '#10b981',
     },
+    {
+      icon: '🖥️',
+      title: '라즈베리파이 CCTV',
+      desc: '열화상 센서 데이터와 RGB 영상을 동시에 분석하여 Pan/Tilt 자동 추적 및 화재 위협을 감지합니다.',
+      tags: ['AMG8833', 'Socket', 'G-code'],
+      color: '#22c55e',
+    },
+    {
+      icon: '🔍',
+      title: '번호판 인식',
+      desc: 'YOLO OCR 기반 글자 단위 검출과 투표(Vote) 알고리즘으로 정확한 번호판 인식 및 이력 관리를 제공합니다.',
+      tags: ['YOLO-OCR', 'Vote', 'CSV'],
+      color: '#6366f1',
+    },
   ];
 
   const techStack = [
-    { category: 'AI / ML', items: ['YOLOv8', 'ByteTrack', 'OpenVINO', 'PaddleOCR', 'FlowMap'] },
+    { category: 'AI / ML', items: ['YOLOv8','YOLOv11', 'ByteTrack', 'OpenVINO', 'CustomOCR', 'FlowMap'] },
     { category: 'Backend', items: ['Flask', 'Socket.IO', 'MySQL', 'SQLAlchemy', 'Gevent'] },
     { category: 'Frontend', items: ['React', 'Vite', 'Kakao Maps', 'Chart.js', 'Hls.js'] },
     { category: 'Infra', items: ['Docker', 'AWS EC2', 'RDS', 'Nginx', 'GitHub Actions'] },
@@ -221,7 +221,7 @@ export default function LandingPage() {
         <div style={styles.navInner}>
           <div style={styles.logo}>
             <div style={styles.logoDot} />
-            <span style={styles.logoText}>TADS</span>
+            <span style={styles.logoText} onClick={() => navigate('/')}>TADS</span>
             <span style={styles.logoBadge}>v1.0</span>
           </div>
           <div style={styles.navLinks}>
@@ -287,7 +287,7 @@ export default function LandingPage() {
         <div style={styles.sectionHeader}>
           <div style={styles.sectionTag}>CORE MODULES</div>
           <h2 style={styles.sectionTitle}>핵심 감지 모듈</h2>
-          <p style={styles.sectionDesc}>6개월간 직접 설계하고 구현한 AI 기반 교통 관제 핵심 기능들입니다.</p>
+          <p style={styles.sectionDesc}>설계하고 구현한 AI 기반 교통 관제 핵심 기능들입니다.</p>
         </div>
 
         <div style={styles.featureGrid}>
@@ -335,25 +335,25 @@ export default function LandingPage() {
           <div style={styles.aboutLeft}>
             <div style={styles.sectionTag}>PROJECT</div>
             <h2 style={{...styles.sectionTitle, textAlign:'left', marginBottom:'16px'}}>
-              6개월 아카데미<br />프로젝트 성과물
+              AI-X<br />프로젝트 성과물
             </h2>
             <p style={{color:'rgba(255,255,255,0.5)', fontSize:'15px', lineHeight:'1.8', marginBottom:'24px'}}>
               실제 교통 관제 시스템을 목표로 설계된 풀스택 AI 프로젝트입니다.
               공공 ITS API 연동, 커스텀 YOLO 모델 학습, 실시간 소켓 통신,
-              도커 기반 배포까지 전 과정을 직접 구현했습니다.
+              도커 기반 배포까지 전 과정을 구현했습니다.
             </p>
             <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
               <button className="btn-primary" onClick={() => navigate('/login')}>
                 데모 체험하기
               </button>
-              <a href="https://github.com" target="_blank" rel="noreferrer">
+              <a href="https://github.com/qksdkqksdk5/TADS_Project.git" target="_blank" rel="noreferrer">
                 <button className="btn-ghost">GitHub →</button>
               </a>
             </div>
           </div>
           <div style={styles.aboutRight}>
             {[
-              { label: '역주행 감지 모델', value: 'YOLOv8 + ByteTrack + FlowMap' },
+              { label: '역주행 감지 모델', value: 'YOLOv11 + ByteTrack + FlowMap' },
               { label: '화재 감지 모델', value: 'YOLOv8 + OpenVINO (CPU/GPU)' },
               { label: '번호판 OCR', value: 'Custom YOLO-OCR + Vote 알고리즘' },
               { label: '실시간 통신', value: 'Flask-SocketIO + Gevent' },
@@ -395,8 +395,6 @@ export default function LandingPage() {
             © 2025 TADS Project. Traffic Anomaly Detection System.
           </div>
           <div style={{display:'flex', gap:'20px'}}>
-            <span className="nav-link" onClick={() => navigate('/login')}>로그인</span>
-            <span className="nav-link" onClick={() => navigate('/register')}>회원가입</span>
           </div>
         </div>
       </footer>
