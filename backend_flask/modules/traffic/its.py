@@ -15,42 +15,56 @@ ITS_API_KEY = os.getenv('ITS_API_KEY', '22f088a782aa49f6a441b24c2b36d4ec')
 
 cached_cctv_list = []
 
+# @its_bp.route('/get_cctv_url', methods=['GET'])
+# def get_cctv_url():
+#     global cached_cctv_list
+    
+#     if cached_cctv_list:
+#         print("♻️ [캐시 데이터 반환] 기존 CCTV 리스트를 사용합니다.")
+#         return jsonify({"success": True, "cctvData": cached_cctv_list})
+
+#     params = {
+#         'apiKey': ITS_API_KEY, 'type': 'ex', 'cctvType': '1',
+#         'minX': '126.8', 'maxX': '127.89',
+#         'minY': '36.8',  'maxY': '37.0', 'getType': 'json'
+#     }
+
+#     try:
+#         response = requests.get("https://openapi.its.go.kr:9443/cctvInfo", params=params, timeout=5)
+#         if response.status_code == 200:
+#             data      = response.json()
+#             cctv_list = data.get("response", {}).get("data", [])
+#             if cctv_list:
+#                 random_cctvs     = random.sample(cctv_list, min(len(cctv_list), 4))
+#                 cached_cctv_list = [{
+#                     "url": item['cctvurl'], "name": item['cctvname'],
+#                     "lat": float(item['coordy']), "lng": float(item['coordx'])
+#                 } for item in random_cctvs]
+#                 print(f"📡 [API 호출 성공] {len(cached_cctv_list)}개의 CCTV를 고정합니다.")
+#                 return jsonify({"success": True, "cctvData": cached_cctv_list})
+#         raise Exception("API 응답이 올바르지 않습니다.")
+#     except Exception as e:
+#         print(f"📡 ITS 연결 실패: {e}")
+#         test_url         = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+#         cached_cctv_list = [
+#             {"url": test_url, "name": f"테스트 채널 {i+1}", "lat": 37.5, "lng": 127.0}
+#             for i in range(4)
+#         ]
+#         return jsonify({"success": True, "cctvData": cached_cctv_list})
+
 @its_bp.route('/get_cctv_url', methods=['GET'])
 def get_cctv_url():
     global cached_cctv_list
     
+    # 1. 이미 누군가(프론트)가 넣어준 데이터가 있다면 그걸 줍니다.
     if cached_cctv_list:
-        print("♻️ [캐시 데이터 반환] 기존 CCTV 리스트를 사용합니다.")
+        print("♻️ [캐시 데이터 반환] 고정된 CCTV 리스트를 사용합니다.")
         return jsonify({"success": True, "cctvData": cached_cctv_list})
 
-    params = {
-        'apiKey': ITS_API_KEY, 'type': 'ex', 'cctvType': '1',
-        'minX': '126.8', 'maxX': '127.89',
-        'minY': '36.8',  'maxY': '37.0', 'getType': 'json'
-    }
-
-    try:
-        response = requests.get("https://openapi.its.go.kr:9443/cctvInfo", params=params, timeout=5)
-        if response.status_code == 200:
-            data      = response.json()
-            cctv_list = data.get("response", {}).get("data", [])
-            if cctv_list:
-                random_cctvs     = random.sample(cctv_list, min(len(cctv_list), 4))
-                cached_cctv_list = [{
-                    "url": item['cctvurl'], "name": item['cctvname'],
-                    "lat": float(item['coordy']), "lng": float(item['coordx'])
-                } for item in random_cctvs]
-                print(f"📡 [API 호출 성공] {len(cached_cctv_list)}개의 CCTV를 고정합니다.")
-                return jsonify({"success": True, "cctvData": cached_cctv_list})
-        raise Exception("API 응답이 올바르지 않습니다.")
-    except Exception as e:
-        print(f"📡 ITS 연결 실패: {e}")
-        test_url         = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-        cached_cctv_list = [
-            {"url": test_url, "name": f"테스트 채널 {i+1}", "lat": 37.5, "lng": 127.0}
-            for i in range(4)
-        ]
-        return jsonify({"success": True, "cctvData": cached_cctv_list})
+    # 2. 데이터가 없다면? 백엔드는 직접 구하러 가지 않고 "없다"고만 말합니다.
+    # 그럼 프론트엔드가 이 응답을 받고 직접 ITS API를 호출하게 됩니다.
+    print("ℹ️ [캐시 없음] 프론트엔드에게 직접 호출을 유도합니다.")
+    return jsonify({"success": False, "cctvData": []})
 
 
 # ✅ 프론트에서 직접 ITS API 호출 후 백엔드 캐시에 저장
@@ -109,20 +123,38 @@ def start_detection():
     return jsonify({"status": "ok"}), 200
 
 
-# ✅ 감지 중지
+# # ✅ 감지 중지
+# @its_bp.route('/stop_detection', methods=['POST'])
+# def stop_detection():
+#     data     = request.get_json()
+#     name     = data.get('name', '')
+#     det_type = data.get('type', 'reverse')
+#     key      = f"{name}_{det_type}"
+
+#     with detector_manager._lock:
+#         if key in detector_manager.active_detectors:
+#             detector_manager.active_detectors[key].stop()
+#             del detector_manager.active_detectors[key]
+#             del detector_manager.threads[key]
+#             print(f"⏹️ [{key}] 감지 중지")
+#             return jsonify({"status": "ok"}), 200
+
+#     return jsonify({"status": "not_found"}), 404
+
 @its_bp.route('/stop_detection', methods=['POST'])
 def stop_detection():
-    data     = request.get_json()
-    name     = data.get('name', '')
+    data = request.get_json()
+    name = data.get('name', '')
     det_type = data.get('type', 'reverse')
-    key      = f"{name}_{det_type}"
+    key = f"{name}_{det_type}"
 
     with detector_manager._lock:
-        if key in detector_manager.active_detectors:
-            detector_manager.active_detectors[key].stop()
-            del detector_manager.active_detectors[key]
-            del detector_manager.threads[key]
-            print(f"⏹️ [{key}] 감지 중지")
+        # ✅ del 대신 pop을 사용하여 키가 없어도 에러가 나지 않게 합니다.
+        detector = detector_manager.active_detectors.pop(key, None)
+        if detector:
+            detector.stop()
+            detector_manager.threads.pop(key, None) # 스레드 관리 딕셔너리에서도 제거
+            print(f"⏹️ [{key}] 감지 중지 완료")
             return jsonify({"status": "ok"}), 200
 
     return jsonify({"status": "not_found"}), 404
