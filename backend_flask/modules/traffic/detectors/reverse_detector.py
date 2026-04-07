@@ -274,10 +274,12 @@ class ReverseDetector(BaseDetector):
         cfg, st = self.cfg, self.st
         frame_count = 0
         mode_str = "GPU" if _USE_GPU else "CPU(OpenVINO)"
-        target_fps = 30.0  # 또는 self.st.video_fps
-        frame_delay = 1.0 / target_fps
-
-        print(f"🚗 [{self.cctv_name}] 분석 시작 {mode_str} (is_simulation={self.is_simulation})")
+        input_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if input_fps < 1 or input_fps > 60:
+            input_fps = 20.0 
+        
+        frame_delay = 1.0 / input_fps
+        print(f"🚗 [{self.cctv_name}] 분석 시작 (Target FPS: {input_fps})")
 
         try:
             while self.is_running:
@@ -305,8 +307,9 @@ class ReverseDetector(BaseDetector):
 
                 if frame_count % 2 != 0:
                     shared.latest_frames[self.video_origin] = frame
-                    # ⏱️ 분석을 건너뛰더라도 시간 동기화는 수행
-                    self._sync_fps(start_time, frame_delay)
+                    with self.frame_lock:
+                        self.latest_frame = frame
+                    self._sync_fps(start_time, frame_delay) # 여기서도 똑같은 시간만큼 대기!
                     continue
 
                 shared.latest_frames[self.video_origin] = frame
