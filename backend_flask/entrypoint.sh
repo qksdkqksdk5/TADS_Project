@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # 1. DB 서버가 준비될 때까지 대기 (중요!)
-echo "Waiting for MySQL to start..."
-while ! nc -z db 3306; do
-  sleep 1
+echo "Waiting for DB ($DB_HOST) to start..."
+while ! nc -z $DB_HOST $DB_PORT; do
+    sleep 1
 done
-echo "MySQL is up - executing command"
+echo "DB is up - executing command"
 
 # 2. migrations 폴더가 없으면 초기화
 if [ ! -d "migrations" ]; then
