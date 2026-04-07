@@ -1,0 +1,68 @@
+DB NAME : tads-db
+master-user : admin
+master-password : tads0511
+endpoint : tads-db.chmygic2cjvo.ap-northeast-2.rds.amazonaws.com
+port : 3306
+
+
+
+ssh -i "TADS.pem" ubuntu@15.165.99.58
+
+#타임존 서울로 변경
+sudo ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+# 시간 동기화 서비스 확인 및 재시작
+sudo systemctl restart systemd-timesyncd
+
+#mysql 설치
+sudo apt update
+sudo apt install -y mysql-client-core-8.0
+
+#확인
+mysql -h tads-db.chmygic2cjvo.ap-northeast-2.rds.amazonaws.com -u admin -p
+
+
+# 1. 4GB 스왑 파일 생성
+sudo fallocate -l 4G /swapfile
+
+# 2. 권한 설정
+sudo chmod 600 /swapfile
+
+# 3. 스왑 포맷 및 활성화
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# 4. 서버 재부팅 시에도 유지되도록 설정
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 5. 설정 확인 (Swap 항목에 4.0G가 뜨면 성공)
+free -h
+
+
+# 1. 시스템 업데이트 및 패키지 설치
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+
+# 2. Docker 공식 GPG 키 추가
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# 3. Docker 저장소 등록
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# 4. Docker 엔진 및 Compose 설치
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# 5. 현재 사용자(ubuntu)에게 Docker 권한 부여
+sudo usermod -aG docker ubuntu
+
+# 6. 구버전 호환용 docker-compose 스크립트 설치 (선택사항이지만 추천)
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+
+
+
