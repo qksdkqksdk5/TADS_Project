@@ -1,30 +1,7 @@
 version: '3.8'
 
 services:
-  # 1. Database (MySQL 8.0)
-  db:
-    image: mysql:8.0.36
-    container_name: tads-db
-    restart: always
-    environment:
-      - TZ=Asia/Seoul
-      - MYSQL_ROOT_PASSWORD=12341234
-      - MYSQL_DATABASE=tads_db
-      - MYSQL_USER=tads_user
-      - MYSQL_PASSWORD=1234
-    ports:
-      - "45678:3306"
-    volumes:
-      - ./mysql_data:/var/lib/mysql
-    networks:
-      - tads-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"   # 로그 파일 하나당 최대 10MB
-        max-file: "3"     # 최대 3개까지만 보관 (총 30MB 제한)
-
-  # 2. Backend (Flask + YOLO)
+  # 1. Backend (Flask + YOLO)
   backend:
     image: hooneda/tads-backend:latest
     container_name: tads-backend
@@ -33,8 +10,7 @@ services:
       - TZ=Asia/Seoul
     ports:
       - "5000:5000"
-    depends_on:
-      - db
+    # depends_on: db <- 이 부분 삭제됨!
     env_file: .env
     volumes:
       - ./backend_flask/static/captures:/app/static/captures
@@ -50,7 +26,7 @@ services:
         max-size: "20m"   # 백엔드는 YOLO 추론 로그가 많으니 조금 더 넉넉히
         max-file: "3"
 
-  # 3. Frontend (React / Vite)
+  # 2. Frontend (React / Vite)
   frontend:
     image: hooneda/tads-frontend:latest
     container_name: tads-frontend
@@ -67,7 +43,7 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  # ★ Watchtower를 services 안으로 이동 완료!
+  # 3. Auto-Deployment (Watchtower)
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
@@ -86,5 +62,4 @@ networks:
   tads-network:
     driver: bridge
 
-volumes:
-  mysql_data:
+# volumes: mysql_data 삭제됨!

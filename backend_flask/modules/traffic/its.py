@@ -53,6 +53,16 @@ def get_cctv_url():
         return jsonify({"success": True, "cctvData": cached_cctv_list})
 
 
+# ✅ 프론트에서 직접 ITS API 호출 후 백엔드 캐시에 저장 (AWS IP 차단 우회용)
+@its_bp.route('/set_cctv_list', methods=['POST'])
+def set_cctv_list():
+    global cached_cctv_list
+    data = request.get_json()
+    cached_cctv_list = data.get('cctvData', [])
+    print(f"📡 [프론트 수신] {len(cached_cctv_list)}개 CCTV 캐시 저장")
+    return jsonify({"success": True})
+
+
 # ✅ 감지 시작 — 스트리밍 없이 백그라운드 감지만
 @its_bp.route('/start_detection', methods=['POST'])
 def start_detection():
