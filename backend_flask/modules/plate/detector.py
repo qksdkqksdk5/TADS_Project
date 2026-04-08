@@ -81,7 +81,7 @@ def process_video():
     plate_confs         = {} 
     start_times         = {}
 
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_interval = 1.0 / video_fps
     

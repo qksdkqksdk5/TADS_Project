@@ -283,7 +283,7 @@ class ReverseDetector(BaseDetector):
         
         # 5. 캡처 객체 생성
         if is_simulation:
-            self.cap = cv2.VideoCapture(target_url)
+            self.cap = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
         else:
             self.cap = cv2.VideoCapture(target_url, cv2.CAP_FFMPEG)
             self.load_flow_map()
