@@ -90,7 +90,7 @@ function App() {
             path="/dashboard"
             element={user
               ? <TrafficDashboard socket={socket} user={user} setUser={setUser} onLogout={handleLogout} />
-              : <Navigate to="/login" />}
+              : <Navigate to="/" />}
           />
 
           <Route

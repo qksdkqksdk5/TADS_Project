@@ -219,9 +219,9 @@ export default function LandingPage() {
       {/* ── NAV ── */}
       <nav style={styles.nav}>
         <div style={styles.navInner}>
-          <div style={styles.logo}>
+          <div style={styles.logo} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div style={styles.logoDot} />
-            <span style={styles.logoText} onClick={() => navigate(0)}>TADS</span>
+            <span style={styles.logoText}>TADS</span>
             <span style={styles.logoBadge}>v1.0</span>
           </div>
           <div style={styles.navLinks}>
