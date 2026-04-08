@@ -1,9 +1,8 @@
 /* eslint-disable */
 // ✅ 파일 위치: src/modules/member/Login.jsx
-// 변경사항: 없음 (경로 이동만 — 외부 의존성 없는 독립 컴포넌트)
 
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 
@@ -13,6 +12,7 @@ function Login({ setUser }) {
   const [errorMsg, setErrorMsg] = useState("");
   const navigate = useNavigate();
 
+  // ✅ 1. 로그인 로직
   const handleLogin = async (e) => {
     e.preventDefault();
     setErrorMsg("");
@@ -26,11 +26,58 @@ function Login({ setUser }) {
           icon: 'success', background: '#1e293b', color: '#fff',
           confirmButtonColor: '#3b82f6', confirmButtonText: '대시보드 진입', heightAuto: false
         }).then((result) => {
-          if (result.isConfirmed) { setUser(res.data.user); navigate('/'); }
+          if (result.isConfirmed) { 
+            setUser(res.data.user); 
+            navigate('/'); 
+          }
         });
       }
     } catch (err) {
       setErrorMsg(err.response?.data?.message || "서버와 연결할 수 없습니다.");
+    }
+  };
+
+  // ✅ 2. 회원가입 전 관리자 코드 확인 로직 (백엔드 연동)
+  const handleRegisterClick = async () => {
+    const { value: adminCode } = await Swal.fire({
+      title: '관리자 인증',
+      text: '회원가입을 위해 관리자 코드를 입력하세요.',
+      input: 'password',
+      inputPlaceholder: 'Admin Code',
+      background: '#0f172a',
+      color: '#fff',
+      showCancelButton: true,
+      confirmButtonText: '인증하기',
+      cancelButtonText: '취소',
+      confirmButtonColor: '#2563eb',
+      cancelButtonColor: '#334155',
+      inputAttributes: {
+        autocapitalize: 'off',
+        autocorrect: 'off'
+      }
+    });
+
+    if (adminCode) {
+      try {
+        const host = window.location.hostname;
+        // 백엔드의 /verify-admin 엔드포인트 호출
+        const res = await axios.post(`http://${host}:5000/api/member/verify-admin`, { admin_code: adminCode });
+
+        if (res.data.success) {
+          // 인증 성공 시 회원가입 페이지로 이동 (코드도 같이 전달하거나 세션에 저장 가능)
+          sessionStorage.setItem('verifiedAdminCode', adminCode);
+          navigate('/register');
+        }
+      } catch (err) {
+        Swal.fire({
+          title: '인증 실패',
+          text: err.response?.data?.message || '코드가 일치하지 않습니다.',
+          icon: 'error',
+          background: '#0f172a',
+          color: '#fff',
+          confirmButtonColor: '#ef4444'
+        });
+      }
     }
   };
 
@@ -62,13 +109,15 @@ function Login({ setUser }) {
 
         <div style={{ marginTop: '25px', textAlign: 'center' }}>
           <span style={{ fontSize: '13px', color: '#64748b' }}>신규 관리자이신가요? </span>
-          <Link to="/register" style={linkStyle}>계정 등록</Link>
+          {/* ✅ Link 대신 span과 onClick을 사용하여 인증 절차 거침 */}
+          <span onClick={handleRegisterClick} style={linkStyle}>계정 등록</span>
         </div>
       </div>
     </div>
   );
 }
 
+// --- Styles (기존 스타일 유지) ---
 const containerStyle  = { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#020617' };
 const cardStyle       = { padding: '50px', background: '#0f172a', borderRadius: '16px', border: '1px solid #1e293b', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)', width: '100%', maxWidth: '400px' };
 const logoWrapper     = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '8px' };
@@ -79,7 +128,7 @@ const inputGroupStyle = { display: 'flex', flexDirection: 'column', gap: '8px' }
 const labelStyle      = { fontSize: '13px', fontWeight: '600', color: '#94a3b8', marginLeft: '4px' };
 const inputStyle      = { padding: '14px', borderRadius: '10px', border: '1px solid #334155', background: '#020617', color: '#fff', outline: 'none', fontSize: '15px' };
 const btnStyle        = { padding: '15px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold', marginTop: '10px', fontSize: '15px', transition: 'background 0.2s' };
-const linkStyle       = { fontSize: '13px', color: '#3b82f6', textDecoration: 'none', fontWeight: 'bold' };
+const linkStyle       = { fontSize: '13px', color: '#3b82f6', textDecoration: 'none', fontWeight: 'bold', cursor: 'pointer' };
 const errorBoxStyle   = { color: '#f87171', fontSize: '13px', textAlign: 'center', background: 'rgba(248, 113, 113, 0.1)', padding: '10px', borderRadius: '8px', border: '1px solid rgba(248, 113, 113, 0.2)' };
 
 export default Login;

@@ -1,11 +1,36 @@
+import os
 from flask import Blueprint, request, jsonify
 from models import db, User
 
 member_bp = Blueprint('member', __name__)
 
+# ✅ 추가: 회원가입 창으로 넘어가기 전, 관리자 코드 사전 검증
+@member_bp.route('/verify-admin', methods=['POST'])
+def verify_admin():
+    data = request.json
+    input_code = data.get('admin_code')
+    secret_code = os.environ.get('ADMIN_CODE')
+
+    if not secret_code:
+        return jsonify({"success": False, "message": "서버 설정 오류: 관리자 코드가 없습니다."}), 500
+
+    if input_code == secret_code:
+        return jsonify({"success": True, "message": "관리자 인증 성공"})
+    else:
+        return jsonify({"success": False, "message": "관리자 코드가 일치하지 않습니다."}), 403
+
+
 @member_bp.route('/register', methods=['POST'])
 def register():
     data = request.json
+    
+    # ✅ 추가: API 직접 호출(Postman 등)을 통한 비정상 가입 방지
+    admin_code = data.get('admin_code')
+    secret_code = os.environ.get('ADMIN_CODE')
+    
+    if admin_code != secret_code:
+        return jsonify({"success": False, "message": "관리자 코드가 일치하지 않거나 누락되었습니다."}), 403
+
     name = data.get('name')
     user_id = data.get('id')
     password = data.get('password')
@@ -32,6 +57,7 @@ def register():
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
+
 
 @member_bp.route('/login', methods=['POST'])
 def login():
