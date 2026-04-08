@@ -1,7 +1,7 @@
-description: Ultralytics YOLO11n model trained on /content/Korea-Car-License-Plate-1/data.yaml
+description: Ultralytics YOLO11n model trained on /content/dataset/data.yaml
 author: Ultralytics
-date: '2026-03-23T14:39:23.071451'
-version: 8.4.24
+date: '2026-04-01T09:34:45.820996'
+version: 8.4.33
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 32
@@ -11,7 +11,7 @@ imgsz:
 - 640
 - 640
 names:
-  0: LicensePlate
+  0: license_plate
 args:
   batch: 1
   fraction: 1.0

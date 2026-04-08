@@ -11,7 +11,7 @@ ocr_input_queue = queue.Queue(maxsize=2)   # 레퍼런스: OCR_QUEUE_SIZE = 2
 ocr_result_queue = queue.Queue()           # OCR → 메인: (track_id, plate_img, text)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OCR_MODEL_PATH = os.path.join(BASE_DIR, 'yolo_ocr_best04.pt')
+OCR_MODEL_PATH = os.path.join(BASE_DIR, 'ocr_openvino_model')
 
 plate_pattern = re.compile(r'\d{2,3}[가-힣]\d{4}')
 

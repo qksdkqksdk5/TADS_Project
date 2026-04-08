@@ -6,7 +6,7 @@ import os
 
 # --- [설정] ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, 'plate_best02.pt')
+MODEL_PATH = os.path.join(BASE_DIR, 'plate_openvino_model')
 TEST_DIR = os.path.join(BASE_DIR, 'test')
 SAVE_DIR = os.path.join(BASE_DIR, 'best_plates_golden')
 os.makedirs(SAVE_DIR, exist_ok=True)
