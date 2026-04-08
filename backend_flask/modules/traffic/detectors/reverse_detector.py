@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import time
+import threading
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -22,6 +23,40 @@ from modules.traffic.detectors.manager import detector_manager
 # ✅ .env의 USE_GPU=true/false 로 GPU/CPU 전환
 _USE_GPU = os.getenv('USE_GPU', 'false').lower() == 'true'
 
+# 시뮬레이션용과 실전용 모델을 따로 담을 딕셔너리 마련
+_shared_reverse_models = {}
+_reverse_model_lock = threading.Lock()
+
+def get_shared_reverse_model(is_simulation):
+    global _shared_reverse_models
+    
+    # 딕셔너리에 저장할 키값 설정 ('sim' 또는 'real')
+    model_key = 'sim' if is_simulation else 'real'
+    
+    # 해당 키의 모델이 아직 없다면 최초 1회 로드
+    if model_key not in _shared_reverse_models:
+        with _reverse_model_lock:
+            if model_key not in _shared_reverse_models: # 더블 체크
+                _DIR = os.path.dirname(os.path.abspath(__file__))
+                
+                if _USE_GPU:
+                    if is_simulation:
+                        model_path = os.path.join(_DIR, "detect_models/best_DW_sim.pt")
+                    else:
+                        model_path = os.path.join(_DIR, "detect_models/best_DW.pt")
+                    print(f"🚀 [System] Reverse GPU 모델({model_key}) 최초 1회 로드 완료")
+                    _shared_reverse_models[model_key] = YOLO(model_path).to('cuda')
+                    
+                else:
+                    if is_simulation:
+                        model_path = os.path.join(_DIR, "detect_models/best_DW_sim_openvino_model")
+                    else:
+                        model_path = os.path.join(_DIR, "detect_models/best_DW_v2.pt")
+                    print(f"🚀 [System] Reverse CPU 모델({model_key}) 최초 1회 로드 완료")
+                    # task='detect' 추가로 경고 메시지 방지
+                    _shared_reverse_models[model_key] = YOLO(model_path, task='detect')
+                    
+    return _shared_reverse_models[model_key]
 
 class State:
     def __init__(self):
@@ -92,24 +127,9 @@ class ReverseDetector(BaseDetector):
 
         _DIR = os.path.dirname(os.path.abspath(__file__))
 
-        if _USE_GPU:
-            # ✅ GPU 버전: .pt + cuda
-            if self.is_simulation:
-                model_path = os.path.join(_DIR, "detect_models/best_DW_sim.pt")
-            else:
-                model_path = os.path.join(_DIR, "detect_models/best_DW.pt")
-            self.model = YOLO(model_path).to('cuda')
-            print(f"🖥️ [{cctv_name}] GPU 모드로 로드")
-        else:
-            # ✅ CPU 버전: OpenVINO
-            if self.is_simulation:
-                model_path = os.path.join(_DIR, "detect_models/best_DW_sim_openvino_model")
-            else:
-                # model_path = os.path.join(_DIR, "detect_models/best_DW_openvino_model")
-                model_path = os.path.join(_DIR, "detect_models/best_DW_v2.pt")
-            # self.model = YOLO(model_path, task='detect')
-            self.model = YOLO(model_path)
-            print(f"💻 [{cctv_name}] CPU(OpenVINO) 모드로 로드")
+        self.model = get_shared_reverse_model(self.is_simulation)
+        mode_str = "시뮬레이션" if self.is_simulation else "실제 CCTV"
+        print(f"💻 [{cctv_name}] ReverseDetector 준비 완료 ({mode_str} 공유 모델 사용)")
 
         if url == 0 or url == "0":
             self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)

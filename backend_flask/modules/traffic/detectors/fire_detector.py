@@ -1,6 +1,7 @@
 import cv2
 import os
 import time
+import threading
 from datetime import datetime
 from ultralytics import YOLO
 
@@ -11,6 +12,26 @@ import shared.state as shared
 # ✅ .env의 USE_GPU=true/false 로 GPU/CPU 전환
 _USE_GPU = os.getenv('USE_GPU', 'false').lower() == 'true'
 
+
+# 전역 변수로 모델을 한 번만 저장할 공간 마련
+_shared_fire_model = None
+_model_lock = threading.Lock() # 스레드 동시 접근 방지
+
+def get_shared_fire_model():
+    global _shared_fire_model
+    # 모델이 아직 로드되지 않았다면 최초 1회만 로드
+    if _shared_fire_model is None:
+        with _model_lock:
+            if _shared_fire_model is None: # 더블 체크
+                _DIR = os.path.dirname(os.path.abspath(__file__))
+                if _USE_GPU:
+                    _shared_fire_model = YOLO(os.path.join(_DIR, "detect_models/best_SB.pt")).to('cuda')
+                    print("🚀 [System] FireDetector GPU 모델 최초 1회 로드 완료")
+                else:
+                    # 아까 발생했던 task 경고를 없애기 위해 task='detect' 추가
+                    _shared_fire_model = YOLO(os.path.join(_DIR, "detect_models/best_SB_openvino_model"), task='detect')
+                    print("🚀 [System] FireDetector CPU(OpenVINO) 모델 최초 1회 로드 완료")
+    return _shared_fire_model
 
 class FireDetector(BaseDetector):
     def __init__(self, cctv_name, url, lat=37.5, lng=127.0,
@@ -24,14 +45,8 @@ class FireDetector(BaseDetector):
         self.is_simulation = is_simulation
         self.video_origin  = video_origin
 
-        _DIR = os.path.dirname(os.path.abspath(__file__))
-
-        if _USE_GPU:
-            self.model = YOLO(os.path.join(_DIR, "detect_models/best_SB.pt")).to('cuda')
-            print(f"🖥️ [{cctv_name}] FireDetector GPU 모드")
-        else:
-            self.model = YOLO(os.path.join(_DIR, "detect_models/best_SB_openvino_model"))
-            print(f"💻 [{cctv_name}] FireDetector CPU(OpenVINO) 모드")
+        self.model = get_shared_fire_model()
+        print(f"💻 [{cctv_name}] FireDetector 준비 완료 (공유 모델 사용)")
 
         self._class_names       = self.model.names
         self.FIRE_THRESHOLD     = 0.10

@@ -4,6 +4,7 @@
 import queue
 import re
 import os
+import threading
 from ultralytics import YOLO
 
 # --- [스레드 간 통신 큐] --- (detector.py와 인터페이스 동일 유지)
@@ -15,6 +16,19 @@ OCR_MODEL_PATH = os.path.join(BASE_DIR, 'ocr_openvino_model')
 
 plate_pattern = re.compile(r'\d{2,3}[가-힣]\d{4}')
 
+# [추가] OCR 모델 공유를 위한 변수와 락
+_shared_ocr_model = None
+_ocr_model_lock = threading.Lock()
+
+def get_shared_ocr_model():
+    global _shared_ocr_model
+    if _shared_ocr_model is None:
+        with _ocr_model_lock:
+            if _shared_ocr_model is None:
+                print(f"🔍 [System] YOLO-OCR 엔진 최초 1회 로드 중... ({OCR_MODEL_PATH})")
+                # OpenVINO 모델인 경우 task를 명시해주는 것이 좋습니다.
+                _shared_ocr_model = YOLO(OCR_MODEL_PATH, task='detect')
+    return _shared_ocr_model
 
 def _parse_ocr_result(results, model_names: dict) -> str:
     """
@@ -42,10 +56,6 @@ def _parse_ocr_result(results, model_names: dict) -> str:
     return "".join(c[2] for c in detected_chars)
 
 
-def _init_ocr() -> YOLO:
-    return YOLO(OCR_MODEL_PATH)
-
-
 def ocr_worker():
     """
     백그라운드 OCR 전담 스레드
@@ -62,11 +72,7 @@ def ocr_worker():
                 print("🔍 YOLO-OCR 스레드 종료")
                 break
 
-            # 첫 이미지 들어올 때 초기화
-            if ocr_model is None:
-                print("🔍 YOLO-OCR 엔진 초기화 중...")
-                ocr_model = _init_ocr()
-                print("🔍 YOLO-OCR 엔진 초기화 완료")
+            ocr_model = get_shared_ocr_model()
 
             track_id, plate_img = item
 
@@ -99,7 +105,8 @@ def run_ocr_once(img, ocr_instance=None) -> str:
     reprocess 엔드포인트용 단발성 OCR
     plate.py의 /reprocess 라우트에서 호출
     """
-    model = ocr_instance or _init_ocr()
+    model = ocr_instance or get_shared_ocr_model()
+
     results = model.predict(img, conf=0.25, device='cpu', verbose=False)
     text = _parse_ocr_result(results, model.names)
 

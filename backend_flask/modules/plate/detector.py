@@ -1,3 +1,4 @@
+import threading
 import cv2
 import re
 import time
@@ -25,11 +26,23 @@ else:
 plate_pattern = re.compile(r'^\d{2,3}[가-힣]\d{4}$')
 os.makedirs(SAVE_DIR, exist_ok=True)
 
+_shared_alpr_model = None
+_alpr_model_lock = threading.Lock()
+
+def get_shared_alpr_model():
+    global _shared_alpr_model
+    if _shared_alpr_model is None:
+        with _alpr_model_lock:
+            if _shared_alpr_model is None:
+                print(f"📦 [System] ALPR YOLO 모델 최초 1회 로드 중... ({MODEL_PATH})")
+                # task='detect'와 imgsz 등을 초기 로드 시 설정할 수 있습니다.
+                _shared_alpr_model = YOLO(MODEL_PATH, task='detect')
+    return _shared_alpr_model
 
 
 def process_video():
     print("🚀 영상 처리 스레드 시작")
-    model = YOLO(MODEL_PATH, task='detect')
+    model = get_shared_alpr_model()
 
     with state_lock:
         video_path = state['current_video']
