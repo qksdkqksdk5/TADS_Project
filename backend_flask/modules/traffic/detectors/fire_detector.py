@@ -187,9 +187,6 @@ class FireDetector(BaseDetector):
         self._reset_consecutive()
 
         while self.is_running and self.cap.isOpened():
-            for _ in range(3):
-                self.cap.grab()
-
             success, frame = self.cap.read()
             if not success:
                 if self.is_simulation:

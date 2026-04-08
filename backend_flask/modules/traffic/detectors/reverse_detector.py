@@ -51,7 +51,7 @@ def get_shared_reverse_model(is_simulation):
                     if is_simulation:
                         model_path = os.path.join(_DIR, "detect_models/best_DW_sim_openvino_model")
                     else:
-                        model_path = os.path.join(_DIR, "detect_models/best_DW_v2.pt")
+                        model_path = os.path.join(_DIR, "detect_models/best_DW_sim_openvino_model")
                     print(f"🚀 [System] Reverse CPU 모델({model_key}) 최초 1회 로드 완료")
                     # task='detect' 추가로 경고 메시지 방지
                     _shared_reverse_models[model_key] = YOLO(model_path, task='detect')
@@ -306,9 +306,6 @@ class ReverseDetector(BaseDetector):
                 start_time = time.time()
 
                 success, frame = self.cap.read()
-
-                if not self.is_simulation:
-                    self.cap.grab()
 
                 if not success or frame is None:
                     if self.is_simulation:
