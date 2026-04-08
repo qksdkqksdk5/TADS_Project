@@ -221,7 +221,7 @@ export default function LandingPage() {
         <div style={styles.navInner}>
           <div style={styles.logo}>
             <div style={styles.logoDot} />
-            <span style={styles.logoText} onClick={() => navigate('/')}>TADS</span>
+            <span style={styles.logoText} onClick={() => navigate(0)}>TADS</span>
             <span style={styles.logoBadge}>v1.0</span>
           </div>
           <div style={styles.navLinks}>

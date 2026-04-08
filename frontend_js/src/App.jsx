@@ -43,8 +43,10 @@ function App() {
         }
       });
       newSocket.on("connect_error", () => {
-        toast.error("서버에 연결할 수 없습니다. 다시 로그인해 주세요.");
-        handleLogout();
+        if (sessionStorage.getItem('user')) { 
+          toast.error("서버에 연결할 수 없습니다. 다시 로그인해 주세요.");
+          handleLogout(); 
+        }
       });
       setSocket(newSocket);
       return () => { if (newSocket) newSocket.close(); };

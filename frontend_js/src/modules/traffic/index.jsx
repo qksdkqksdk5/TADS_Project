@@ -63,7 +63,7 @@ function TrafficDashboard({ socket, user, setUser, onLogout }) {
 
   const handleLogout = () => {
     if (onLogout) onLogout();
-    else { sessionStorage.removeItem('user'); setUser(null); window.location.href = "/"; }
+    else { sessionStorage.removeItem('user'); setUser(null); if (socket) {socket.disconnect();} window.location.replace = "/"; }
   };
 
   useEffect(() => {
