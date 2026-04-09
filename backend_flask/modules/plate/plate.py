@@ -129,7 +129,15 @@ def get_preprocess_methods():
     return jsonify({"methods": PREPROCESS_METHODS}), 200
 
 
-# modules/plate/plate.py
+@plate_bp.route('/init', methods=['GET'])  # ✅ 탭 진입 시 호출할 엔드포인트 추가
+def init():
+    """탭 진입 시 DB 복원만 수행 (영상 시작 안 함)"""
+    _restore_from_db()
+    with state_lock:
+        videos = sorted(set(
+            r.get('video', '') for r in state['all_results'] if r.get('video')
+        ))
+    return jsonify({"status": "ok", "restored": len(state['all_results']), "videos": videos}), 200
 
 @plate_bp.route('/start', methods=['POST'])
 def start():
@@ -146,6 +154,11 @@ def start():
     
     time.sleep(0.3)
 
+    # ✅ 큐 잔여 데이터 비우기
+    while not ocr_input_queue.empty():
+        try: ocr_input_queue.get_nowait()
+        except: break
+        
     # 2. 상태값 초기화
     with state_lock:
         state['plates'] = []

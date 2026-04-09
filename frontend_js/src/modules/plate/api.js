@@ -29,4 +29,8 @@ export const plateApi = (baseUrl) => ({
 
   reprocess: (id, preprocess) =>
     axios.post(`${baseUrl}/reprocess`, { id, preprocess }),
+
+  init: () => 
+    axios.get(`${baseUrl}/init`),
+
 });

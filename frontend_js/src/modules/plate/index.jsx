@@ -23,6 +23,18 @@ export default function PlateModule({ host }) {
   const pollRef = useRef(null);
 
   useEffect(() => {
+    if (!connected) return;
+    // DB → state 동기화 후 결과 로드
+    api.init()
+      .then(() => api.getResults())
+      .then(res => {
+        setAllResults(res.data.results || []);
+        setResultVideos(res.data.videos || []);
+      })
+      .catch(() => {});
+  }, [connected]);
+
+  useEffect(() => {
     api.health()
       .then(() => {
         setConnected(true);

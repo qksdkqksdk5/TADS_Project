@@ -1,6 +1,6 @@
 # 1. 최상단: gevent 패치 (SocketIO와 멀티스레딩 호환을 위해 필수)
 from gevent import monkey
-monkey.patch_all()
+monkey.patch_all(thread=False)
 
 import os
 import warnings

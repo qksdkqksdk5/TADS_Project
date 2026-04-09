@@ -41,7 +41,7 @@ def get_shared_alpr_model():
 
 
 def process_video():
-    
+
     print("🚀 영상 처리 스레드 시작")
     model = get_shared_alpr_model()
 
@@ -183,6 +183,8 @@ def process_video():
             time.sleep(max(0.01, frame_interval - (time.time() - t0)))
     finally:
         cap.release()
+        ocr_input_queue.put(None)
+        print("🏁 [plate] process_video 종료 → OCR 종료 신호 전송")
 
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                     video_filename, video_save_dir,
