@@ -103,14 +103,13 @@ def _restore_from_db():
 
 @plate_bp.route('/health', methods=['GET'])
 def health():
-    # 첫 health 체크 시 DB 복원 (한 번만)
-    with state_lock:
-        already_restored = state.get('_restored', False)
-    if not already_restored:
-        _restore_from_db()
-        with state_lock:
-            state['_restored'] = True
-    return jsonify({"status": "ok", "module": "plate"}), 200
+    # DB 연결 상태만 확인 (복원은 start에서만)
+    try:
+        from .db_manager import get_all_results
+        results = get_all_results()
+        return jsonify({"status": "ok", "module": "plate", "db_records": len(results)}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "module": "plate", "error": str(e)}), 500
 
 
 @plate_bp.route('/videos', methods=['GET'])
@@ -167,13 +166,20 @@ def start():
     # 주의: 데드락을 막기 위해 반드시 with state_lock 밖에서 호출해야 합니다.
     _restore_from_db()
 
-    # 4. 스레드 재시작
+    # 4. 스레드 재시작 (gevent 호환 방식)
     with plate_state.is_started_lock:
-        # OCR 워커와 분석 스레드 모두 재시작
-        threading.Thread(target=ocr_worker, daemon=True).start()
-        threading.Thread(target=process_video, daemon=True).start()
-        plate_state.is_started = True
-        print(f"🔄 [plate] 영상 교체 및 DB 동기화 완료: {video_filename}")
+        try:
+            from gevent import spawn
+            # gevent spawn을 사용하여 스레드 생성
+            spawn(ocr_worker)
+            spawn(process_video)
+            
+            plate_state.is_started = True
+            print(f"🔄 [plate] 영상 교체 및 DB 동기화 완료: {video_filename}")
+        except Exception as e:
+            print(f"❌ [plate] 스레드 시작 실패: {e}")
+            plate_state.is_started = False
+            return jsonify({"status": "error", "message": str(e)}), 500
 
     return jsonify({"status": "started"}), 200
 
