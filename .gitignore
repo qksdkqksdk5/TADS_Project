@@ -218,5 +218,7 @@ frontend_js/dist/
 frontend_js/build/
 .eslintcache
 
+!frontend_js/public/tunnel.jpg
+
 # Docker & DB Data
 mysql_data/
