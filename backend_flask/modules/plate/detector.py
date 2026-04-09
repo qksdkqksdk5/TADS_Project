@@ -3,10 +3,10 @@ import cv2
 import re
 import time
 import os
-from gevent import get_hub
 from datetime import datetime
 from collections import Counter
 from ultralytics import YOLO
+from gevent.threadpool import ThreadPoolExecutor as GThreadPoolExecutor
 
 from .state import (
     state, state_lock,
@@ -30,23 +30,36 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 _shared_alpr_model = None
 _alpr_model_lock = threading.Lock()
 
+# lambda 대신 모듈 레벨 executor + 순수 함수 사용
+_yolo_executor = GThreadPoolExecutor(max_workers=1)
+
+
 def get_shared_alpr_model():
     global _shared_alpr_model
     if _shared_alpr_model is None:
         with _alpr_model_lock:
             if _shared_alpr_model is None:
                 print(f"📦 [System] ALPR YOLO 모델 최초 1회 로드 중... ({MODEL_PATH})")
-                # task='detect'와 imgsz 등을 초기 로드 시 설정할 수 있습니다.
                 _shared_alpr_model = YOLO(MODEL_PATH, task='detect')
     return _shared_alpr_model
 
 
+def _yolo_track(model, frame, conf, img_size):
+    """
+    gevent threadpool에서 실행되는 순수 함수.
+    lambda 클로저를 쓰지 않아 Linux에서 _limbo KeyError가 발생하지 않음.
+    """
+    return model.track(
+        source=frame, conf=conf,
+        persist=True, verbose=False, imgsz=img_size
+    )
+
+
 def _run_yolo_in_native_thread(model, frame, conf, img_size):
-    """OpenVINO 추론을 네이티브 스레드에서 실행"""
-    hub = get_hub()
-    return hub.threadpool.spawn(
-        lambda: model.track(source=frame, conf=conf, persist=True, verbose=False, imgsz=img_size)
-    ).get()
+    """OpenVINO 추론을 gevent threadpool에서 실행 (Greenlet 블로킹 없이 대기)"""
+    future = _yolo_executor.submit(_yolo_track, model, frame, conf, img_size)
+    return future.result()
+
 
 def process_video():
 
@@ -66,7 +79,6 @@ def process_video():
     video_save_dir  = os.path.join(SAVE_DIR, video_subfolder)
     os.makedirs(video_save_dir, exist_ok=True)
 
-    # ✅ 영상 시작 시 기존 결과 초기화
     delete_by_video(video_filename)
     with state_lock:
         state['all_results'] = [
@@ -75,7 +87,6 @@ def process_video():
         ]
     print(f"🗑️ [{video_filename}] state 초기화 완료")
 
-    # 로컬 상태 관리 변수
     best_samples        = {}
     plate_history_ids   = []
     plate_history_imgs  = {}
@@ -85,15 +96,13 @@ def process_video():
     plate_img_urls      = {}
     saved_first         = set()
     saved_fixed         = set()
-    
-    # [추가] 분석 성능 및 신뢰도 추적용
-    plate_confs         = {} 
+    plate_confs         = {}
     start_times         = {}
 
     cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_interval = 1.0 / video_fps
-    
+
     frame_count = 0
     fps_buf     = []
     fps_start   = time.time()
@@ -123,7 +132,7 @@ def process_video():
                     is_fixed = best_samples.get(tid, {}).get('is_fixed', False)
                     color = (0, 255, 0) if is_fixed else (255, 165, 0)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                    
+
                     center_y = (y1 + y2) / 2
                     if int(h_f * ROI_TOP) < center_y < int(h_f * ROI_BOTTOM) and not is_fixed:
                         if tid not in queued_ids and not ocr_input_queue.full():
@@ -131,10 +140,9 @@ def process_video():
                             if crop.size > 0:
                                 ocr_input_queue.put((tid, crop.copy()))
                                 queued_ids.add(tid)
-                                start_times[tid] = time.time() # 분석 시작 시간 기록
-                                plate_confs[tid] = conf       # YOLO 탐지 신뢰도 기록
+                                start_times[tid] = time.time()
+                                plate_confs[tid] = conf
 
-            # OCR 결과 처리
             while not ocr_result_queue.empty():
                 try:
                     tid, p_img, p_text = ocr_result_queue.get_nowait()
@@ -147,8 +155,7 @@ def process_video():
 
                     voted_text, count = Counter(plate_votes[tid]).most_common(1)[0]
                     is_now_fixed = count >= VOTE_THRESHOLD
-                    
-                    # 데이터 수집
+
                     elapsed_ms = int((time.time() - start_times.get(tid, time.time())) * 1000)
                     current_conf = plate_confs.get(tid, 0.0)
 
@@ -159,7 +166,6 @@ def process_video():
                     plate_history_ids.insert(0, tid)
                     plate_history_imgs[tid] = cv2.resize(p_img, (400, 110))
 
-                    # [핵심] 저장 및 UI 동기화 함수 호출
                     img_url = _save_and_sync_ui(
                         tid, p_img, voted_text, is_now_fixed,
                         video_filename, video_save_dir,
@@ -173,7 +179,6 @@ def process_video():
                     for d in [plate_history_imgs, plate_history_texts, plate_votes, plate_img_urls]:
                         d.pop(old_id, None)
 
-            # 실시간 화면 업데이트
             resized = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
             with state_lock:
                 state['latest_frame'] = resized
@@ -193,6 +198,7 @@ def process_video():
         cap.release()
         ocr_input_queue.put(None)
         print("🏁 [plate] process_video 종료 → OCR 종료 신호 전송")
+
 
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                     video_filename, video_save_dir,
@@ -232,7 +238,6 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
     with state_lock:
         vid_name = os.path.basename(str(video_filename))
 
-        # 1. ID + 영상 둘 다 일치하는 것 먼저 검색
         existing_idx = next(
             (i for i, r in enumerate(state['all_results'])
              if os.path.basename(str(r.get('video', ''))) == vid_name
@@ -240,7 +245,6 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
             None
         )
 
-        # 2. ID로 못 찾으면 텍스트 + 영상으로 검색
         if existing_idx is None:
             existing_idx = next(
                 (i for i, r in enumerate(state['all_results'])
@@ -255,7 +259,6 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
             if existing.get('is_fixed') and not is_fixed:
                 return current_img_url
 
-            # ✅ ID 다른데 (다른 영상 아닌) 같은 영상 내 다른 track_id인 경우만 투표수 비교
             if existing['id'] != int(track_id):
                 if existing.get('vote_count', 0) >= vote_count:
                     return current_img_url
@@ -271,7 +274,6 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
             if len(state['all_results']) > 100:
                 state['all_results'].pop()
 
-    # CSV 저장
     save_result(
         plate_number=clean_text,
         video_filename=video_filename,
@@ -283,4 +285,3 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
     )
 
     return current_img_url
-

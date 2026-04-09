@@ -1,25 +1,24 @@
-# backend_flask/modules/plate/ocr_engine.py
-# YOLO 커스텀 모델 기반 문자 인식 전담 스레드
-
 import queue
 import re
 import os
 import threading
 from ultralytics import YOLO
-from gevent import get_hub
+from gevent.threadpool import ThreadPoolExecutor as GThreadPoolExecutor
 
-# --- [스레드 간 통신 큐] --- (detector.py와 인터페이스 동일 유지)
-ocr_input_queue = queue.Queue(maxsize=2)   # 레퍼런스: OCR_QUEUE_SIZE = 2
-ocr_result_queue = queue.Queue()           # OCR → 메인: (track_id, plate_img, text)
+ocr_input_queue = queue.Queue(maxsize=2)
+ocr_result_queue = queue.Queue()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OCR_MODEL_PATH = os.path.join(BASE_DIR, 'ocr_openvino_model')
 
 plate_pattern = re.compile(r'\d{2,3}[가-힣]\d{4}')
 
-# [추가] OCR 모델 공유를 위한 변수와 락
 _shared_ocr_model = None
 _ocr_model_lock = threading.Lock()
+
+# lambda 대신 모듈 레벨 executor + 순수 함수 사용
+_ocr_executor = GThreadPoolExecutor(max_workers=1)
+
 
 def get_shared_ocr_model():
     global _shared_ocr_model
@@ -27,9 +26,17 @@ def get_shared_ocr_model():
         with _ocr_model_lock:
             if _shared_ocr_model is None:
                 print(f"🔍 [System] YOLO-OCR 엔진 최초 1회 로드 중... ({OCR_MODEL_PATH})")
-                # OpenVINO 모델인 경우 task를 명시해주는 것이 좋습니다.
                 _shared_ocr_model = YOLO(OCR_MODEL_PATH, task='detect')
     return _shared_ocr_model
+
+
+def _ocr_predict(model, img):
+    """
+    gevent threadpool에서 실행되는 순수 함수.
+    lambda 클로저를 쓰지 않아 Linux에서 _limbo KeyError가 발생하지 않음.
+    """
+    return model.predict(img, conf=0.25, device='cpu', verbose=False)
+
 
 def _parse_ocr_result(results, model_names: dict) -> str:
     """
@@ -52,7 +59,6 @@ def _parse_ocr_result(results, model_names: dict) -> str:
     if not detected_chars:
         return ""
 
-    # Y 30px 묶음 → X 정렬 (레퍼런스 코드와 동일 로직)
     detected_chars.sort(key=lambda c: (c[1] // 30, c[0]))
     return "".join(c[2] for c in detected_chars)
 
@@ -74,17 +80,14 @@ def ocr_worker():
                 break
 
             ocr_model = get_shared_ocr_model()
-
             track_id, plate_img = item
 
-            hub = get_hub()
-            results = hub.threadpool.spawn(
-                lambda: ocr_model.predict(plate_img, conf=0.25, device='cpu', verbose=False)
-            ).get()
+            # lambda 없이 순수 함수 직접 전달
+            future = _ocr_executor.submit(_ocr_predict, ocr_model, plate_img)
+            results = future.result()
 
             detected_text = _parse_ocr_result(results, ocr_model.names)
 
-            # 4글자 미만은 노이즈로 간주 (레퍼런스 코드 기준 유지)
             if len(detected_text) < 7:
                 detected_text = "인식 중..."
 
