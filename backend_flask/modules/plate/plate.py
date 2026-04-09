@@ -158,7 +158,7 @@ def start():
     while not ocr_input_queue.empty():
         try: ocr_input_queue.get_nowait()
         except: break
-        
+
     # 2. 상태값 초기화
     with state_lock:
         state['plates'] = []
@@ -172,9 +172,6 @@ def start():
             state['current_video'] = os.path.join(TEST_DIR, video_filename)
         
         state['stop_thread'] = False # 다시 시작 가능하게 설정
-
-    # 3. DB 기록 복원 (all_results를 다시 채움)
-    _restore_from_db()
 
     # 4. 🔥 SocketIO 백그라운드 태스크로 전환
     try:

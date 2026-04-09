@@ -6,6 +6,7 @@ import re
 import os
 import threading
 from ultralytics import YOLO
+from gevent import get_hub
 
 # --- [스레드 간 통신 큐] --- (detector.py와 인터페이스 동일 유지)
 ocr_input_queue = queue.Queue(maxsize=2)   # 레퍼런스: OCR_QUEUE_SIZE = 2
@@ -76,12 +77,10 @@ def ocr_worker():
 
             track_id, plate_img = item
 
-            results = ocr_model.predict(
-                plate_img,
-                conf=0.25,
-                device='cpu',   # GPU 있으면 'cuda:0'으로 변경
-                verbose=False,
-            )
+            hub = get_hub()
+            results = hub.threadpool.spawn(
+                lambda: ocr_model.predict(plate_img, conf=0.25, device='cpu', verbose=False)
+            ).get()
 
             detected_text = _parse_ocr_result(results, ocr_model.names)
 

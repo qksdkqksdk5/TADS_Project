@@ -3,6 +3,7 @@ import cv2
 import re
 import time
 import os
+from gevent import get_hub
 from datetime import datetime
 from collections import Counter
 from ultralytics import YOLO
@@ -39,6 +40,13 @@ def get_shared_alpr_model():
                 _shared_alpr_model = YOLO(MODEL_PATH, task='detect')
     return _shared_alpr_model
 
+
+def _run_yolo_in_native_thread(model, frame, conf, img_size):
+    """OpenVINO 추론을 네이티브 스레드에서 실행"""
+    hub = get_hub()
+    return hub.threadpool.spawn(
+        lambda: model.track(source=frame, conf=conf, persist=True, verbose=False, imgsz=img_size)
+    ).get()
 
 def process_video():
 
@@ -102,7 +110,7 @@ def process_video():
             frame_count += 1
             t0          = time.time()
 
-            results = model.track(source=frame, conf=CONF, persist=True, verbose=False, imgsz=YOLO_IMG_SIZE)
+            results = _run_yolo_in_native_thread(model, frame, CONF, YOLO_IMG_SIZE)
             annotated = frame.copy()
 
             if results[0].boxes.id is not None:
