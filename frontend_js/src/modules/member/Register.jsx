@@ -17,10 +17,30 @@ function Register() {
   const handleRegister = async (e) => {
     e.preventDefault();
     setErrorMsg("");
+    
+    // ✅ 세션에 저장된 관리자 코드를 가져옵니다.
+    const adminCode = sessionStorage.getItem('verifiedAdminCode');
+    
+    if (!adminCode) {
+      Swal.fire({
+        icon: 'error',
+        title: '인증 만료',
+        text: '관리자 인증을 다시 진행해 주세요.',
+        background: '#1e293b', color: '#fff'
+      }).then(() => navigate('/login'));
+      return;
+    }
+
     try {
       const host = window.location.hostname;
-      const res  = await axios.post(`http://${host}:5000/api/member/register`, formData);
+      // ✅ formData에 admin_code를 추가해서 보냅니다.
+      const res = await axios.post(`http://${host}:5000/api/member/register`, {
+        ...formData,
+        admin_code: adminCode  // 이 부분이 추가되어야 백엔드 검증을 통과합니다.
+      });
+
       if (res.data.success) {
+        sessionStorage.removeItem('verifiedAdminCode'); // 가입 성공 후 코드 삭제
         Swal.fire({
           icon: 'success', title: '등록 완료', text: '관리자 등록이 승인되었습니다.',
           background: '#1e293b', color: '#fff', confirmButtonColor: '#3b82f6', confirmButtonText: '로그인하러 가기'
