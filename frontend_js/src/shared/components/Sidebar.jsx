@@ -1,16 +1,19 @@
 /* eslint-disable */
 import React, { useState } from 'react';
+import tunnelIcon from './tunnel.jpg';
 
 function Sidebar({ activeTab, onTabChange, user, onLogout, isMobile }) {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   const menuItems = [
-    { id: "cctv",   label: "CCTV 모니터링", icon: "📡" },
-    { id: "webcam", label: "웹캠 관제",      icon: "📷" },
-    { id: "stats",  label: "통계 데이터",    icon: "📊" },
-    { id: "plate",  label: "번호판 인식",          icon: "🔍" },
-    { id: "carbon", label: "탄소배출/정체",        icon: "🌿" },
-    { id: "raspi",  label: "라즈베리파이 CCTV",    icon: "🖥️" },
+    { id: "cctv",       label: "CCTV 모니터링", icon: "📡" },
+    { id: "monitoring", label: "교통 정체 흐름",   icon: "🚦" },
+    { id: "tunnel", label: "스마트 터널 시스템",
+      icon: ( <img src={tunnelIcon} alt="Tunnel Icon" style={{ width: '20px', height: '20px', verticalAlign: 'middle', marginLeft: '1px', marginRight: '3px'}} />)
+    },
+    { id: "plate",      label: "번호판 인식",      icon: "🔍" },
+    { id: "raspi",      label: "라즈베리파이 CCTV", icon: "🖥️" },
+    { id: "stats",      label: "통계 데이터",    icon: "📊" },
   ];
 
   const sidebarWidth = isMobile ? '100%' : (isCollapsed ? '80px' : '240px');

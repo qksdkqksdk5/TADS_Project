@@ -53,13 +53,15 @@ app.register_blueprint(streaming_bp)
 app.register_blueprint(simulation_bp)
 
 # ✅ 새 Blueprint
-from modules.plate.plate   import plate_bp
-from modules.tunnel.carbon import carbon_bp
-from modules.raspi.raspi   import raspi_bp
+from modules.plate.plate      import plate_bp
+from modules.tunnel.tunnel    import tunnel_bp
+from modules.monitoring.monitoring import monitoring_bp
+from modules.raspi.raspi      import raspi_bp
 
-app.register_blueprint(plate_bp,  url_prefix='/api/plate')
-app.register_blueprint(carbon_bp, url_prefix='/api/carbon')
-app.register_blueprint(raspi_bp,  url_prefix='/api/raspi')
+app.register_blueprint(plate_bp,       url_prefix='/api/plate')
+app.register_blueprint(tunnel_bp,      url_prefix='/api/tunnel')
+app.register_blueprint(monitoring_bp,  url_prefix='/api/monitoring')
+app.register_blueprint(raspi_bp,       url_prefix='/api/raspi')
 
 # ✅ DB 매니저 초기화 (백그라운드 스레드에서 DB 접근 가능하도록)
 from modules.plate import db_manager

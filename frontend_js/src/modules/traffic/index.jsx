@@ -8,9 +8,10 @@ import Sidebar       from '../../shared/components/Sidebar';
 import StatsModule   from '../stats';
 
 // ✅ 새 탭 import
-import PlateModule   from '../plate';
-import CarbonModule  from '../carbon';
-import RaspiModule   from '../raspi';
+import PlateModule       from '../plate';
+import MonitoringModule  from '../monitoring';
+import TunnelModule      from '../tunnel';
+import RaspiModule       from '../raspi';
 
 import { fetchCctvUrl, startSimulation } from './api';
 
@@ -41,7 +42,7 @@ function TrafficDashboard({ socket, user, setUser, onLogout }) {
   }, []);
 
   // ✅ 독립 모듈 탭 목록 (관제 영상/지도 불필요한 탭들)
-  const MODULE_TABS = ["stats", "plate", "carbon", "raspi"];
+  const MODULE_TABS = ["stats", "plate", "monitoring", "tunnel", "raspi"];
   const isModuleTab = MODULE_TABS.includes(activeTab);
 
   useEffect(() => {
@@ -124,9 +125,15 @@ function TrafficDashboard({ socket, user, setUser, onLogout }) {
             </div>
           )}
 
-          {activeTab === "carbon" && (
+          {activeTab === "monitoring" && (
             <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
-              <CarbonModule isMobile={isMobile} host={host} />
+              <MonitoringModule isMobile={isMobile} host={host} />
+            </div>
+          )}
+
+          {activeTab === "tunnel" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%', overflowY: 'auto', flexDirection: 'column' }}>
+              <TunnelModule isMobile={isMobile} host={host} />
             </div>
           )}
 
