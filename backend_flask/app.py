@@ -61,6 +61,10 @@ app.register_blueprint(plate_bp,  url_prefix='/api/plate')
 app.register_blueprint(carbon_bp, url_prefix='/api/carbon')
 app.register_blueprint(raspi_bp,  url_prefix='/api/raspi')
 
+# ✅ DB 매니저 초기화 (백그라운드 스레드에서 DB 접근 가능하도록)
+from modules.plate import db_manager
+db_manager.init_app(app)
+
 def shutdown_detectors():
     print("🛑 [System] 서버 종료 감지: 모든 분석 스레드를 정지합니다...")
     detector_manager.stop_all()
