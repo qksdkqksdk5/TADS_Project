@@ -41,6 +41,7 @@ def get_shared_alpr_model():
 
 
 def process_video():
+    
     print("🚀 영상 처리 스레드 시작")
     model = get_shared_alpr_model()
 
@@ -89,98 +90,99 @@ def process_video():
     fps_buf     = []
     fps_start   = time.time()
 
-    while True:
-        with state_lock:
-            if state.get('stop_thread', False): break
+    try:
+        while True:
+            with state_lock:
+                if state.get('stop_thread', False): break
 
-        ret, frame = cap.read()
-        if not ret: break
+            ret, frame = cap.read()
+            if not ret: break
 
-        h_f, w_f    = frame.shape[:2]
-        frame_count += 1
-        t0          = time.time()
+            h_f, w_f    = frame.shape[:2]
+            frame_count += 1
+            t0          = time.time()
 
-        results = model.track(source=frame, conf=CONF, persist=True, verbose=False, imgsz=YOLO_IMG_SIZE)
-        annotated = frame.copy()
+            results = model.track(source=frame, conf=CONF, persist=True, verbose=False, imgsz=YOLO_IMG_SIZE)
+            annotated = frame.copy()
 
-        if results[0].boxes.id is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-            ids   = results[0].boxes.id.cpu().numpy().astype(int)
-            confs = results[0].boxes.conf.cpu().numpy()
+            if results[0].boxes.id is not None:
+                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+                ids   = results[0].boxes.id.cpu().numpy().astype(int)
+                confs = results[0].boxes.conf.cpu().numpy()
 
-            for box, tid, conf in zip(boxes, ids, confs):
-                x1, y1, x2, y2 = box
-                is_fixed = best_samples.get(tid, {}).get('is_fixed', False)
-                color = (0, 255, 0) if is_fixed else (255, 165, 0)
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                
-                center_y = (y1 + y2) / 2
-                if int(h_f * ROI_TOP) < center_y < int(h_f * ROI_BOTTOM) and not is_fixed:
-                    if tid not in queued_ids and not ocr_input_queue.full():
-                        crop = frame[max(0,y1-PAD):min(h_f,y2+PAD), max(0,x1-PAD):min(w_f,x2+PAD)]
-                        if crop.size > 0:
-                            ocr_input_queue.put((tid, crop.copy()))
-                            queued_ids.add(tid)
-                            start_times[tid] = time.time() # 분석 시작 시간 기록
-                            plate_confs[tid] = conf       # YOLO 탐지 신뢰도 기록
+                for box, tid, conf in zip(boxes, ids, confs):
+                    x1, y1, x2, y2 = box
+                    is_fixed = best_samples.get(tid, {}).get('is_fixed', False)
+                    color = (0, 255, 0) if is_fixed else (255, 165, 0)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                    
+                    center_y = (y1 + y2) / 2
+                    if int(h_f * ROI_TOP) < center_y < int(h_f * ROI_BOTTOM) and not is_fixed:
+                        if tid not in queued_ids and not ocr_input_queue.full():
+                            crop = frame[max(0,y1-PAD):min(h_f,y2+PAD), max(0,x1-PAD):min(w_f,x2+PAD)]
+                            if crop.size > 0:
+                                ocr_input_queue.put((tid, crop.copy()))
+                                queued_ids.add(tid)
+                                start_times[tid] = time.time() # 분석 시작 시간 기록
+                                plate_confs[tid] = conf       # YOLO 탐지 신뢰도 기록
 
-        # OCR 결과 처리
-        while not ocr_result_queue.empty():
-            try:
-                tid, p_img, p_text = ocr_result_queue.get_nowait()
-                queued_ids.discard(tid)
-            except: break
+            # OCR 결과 처리
+            while not ocr_result_queue.empty():
+                try:
+                    tid, p_img, p_text = ocr_result_queue.get_nowait()
+                    queued_ids.discard(tid)
+                except: break
 
-            if plate_pattern.search(p_text):
-                if tid not in plate_votes: plate_votes[tid] = []
-                plate_votes[tid].append(p_text)
+                if plate_pattern.search(p_text):
+                    if tid not in plate_votes: plate_votes[tid] = []
+                    plate_votes[tid].append(p_text)
 
-                voted_text, count = Counter(plate_votes[tid]).most_common(1)[0]
-                is_now_fixed = count >= VOTE_THRESHOLD
-                
-                # 데이터 수집
-                elapsed_ms = int((time.time() - start_times.get(tid, time.time())) * 1000)
-                current_conf = plate_confs.get(tid, 0.0)
+                    voted_text, count = Counter(plate_votes[tid]).most_common(1)[0]
+                    is_now_fixed = count >= VOTE_THRESHOLD
+                    
+                    # 데이터 수집
+                    elapsed_ms = int((time.time() - start_times.get(tid, time.time())) * 1000)
+                    current_conf = plate_confs.get(tid, 0.0)
 
-                best_samples[tid] = {'is_fixed': is_now_fixed}
-                plate_history_texts[tid] = voted_text
+                    best_samples[tid] = {'is_fixed': is_now_fixed}
+                    plate_history_texts[tid] = voted_text
 
-                if tid in plate_history_ids: plate_history_ids.remove(tid)
-                plate_history_ids.insert(0, tid)
-                plate_history_imgs[tid] = cv2.resize(p_img, (400, 110))
+                    if tid in plate_history_ids: plate_history_ids.remove(tid)
+                    plate_history_ids.insert(0, tid)
+                    plate_history_imgs[tid] = cv2.resize(p_img, (400, 110))
 
-                # [핵심] 저장 및 UI 동기화 함수 호출
-                img_url = _save_and_sync_ui(
-                    tid, p_img, voted_text, is_now_fixed,
-                    video_filename, video_save_dir,
-                    saved_first, saved_fixed,
-                    conf=current_conf, vote_count=count, elapsed=elapsed_ms
-                )
-                if img_url: plate_img_urls[tid] = img_url
+                    # [핵심] 저장 및 UI 동기화 함수 호출
+                    img_url = _save_and_sync_ui(
+                        tid, p_img, voted_text, is_now_fixed,
+                        video_filename, video_save_dir,
+                        saved_first, saved_fixed,
+                        conf=current_conf, vote_count=count, elapsed=elapsed_ms
+                    )
+                    if img_url: plate_img_urls[tid] = img_url
 
-            if len(plate_history_ids) > HISTORY_MAX:
-                old_id = plate_history_ids.pop()
-                for d in [plate_history_imgs, plate_history_texts, plate_votes, plate_img_urls]:
-                    d.pop(old_id, None)
+                if len(plate_history_ids) > HISTORY_MAX:
+                    old_id = plate_history_ids.pop()
+                    for d in [plate_history_imgs, plate_history_texts, plate_votes, plate_img_urls]:
+                        d.pop(old_id, None)
 
-        # 실시간 화면 업데이트
-        resized = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
-        with state_lock:
-            state['latest_frame'] = resized
-            state['plates'] = [
-                {
-                    'id': int(t_id),
-                    'text': plate_history_texts.get(t_id, '인식 중...'),
-                    'is_fixed': best_samples.get(t_id, {}).get('is_fixed', False),
-                    'vote_count': len(plate_votes.get(t_id, [])),
-                    'img_url': plate_img_urls.get(t_id),
-                } for t_id in plate_history_ids[:5]
-            ]
+            # 실시간 화면 업데이트
+            resized = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
+            with state_lock:
+                state['latest_frame'] = resized
+                state['plates'] = [
+                    {
+                        'id': int(t_id),
+                        'text': plate_history_texts.get(t_id, '인식 중...'),
+                        'is_fixed': best_samples.get(t_id, {}).get('is_fixed', False),
+                        'vote_count': len(plate_votes.get(t_id, [])),
+                        'img_url': plate_img_urls.get(t_id),
+                    } for t_id in plate_history_ids[:5]
+                ]
 
-        fps_buf.append(time.time() - t0)
-        time.sleep(max(0.01, frame_interval - (time.time() - t0)))
-
-    cap.release()
+            fps_buf.append(time.time() - t0)
+            time.sleep(max(0.01, frame_interval - (time.time() - t0)))
+    finally:
+        cap.release()
 
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                     video_filename, video_save_dir,

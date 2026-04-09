@@ -79,7 +79,7 @@ def _restore_from_db():
 
         ans = answered.get(plate, {})
         restored.insert(0, {
-            'id':                int(abs(hash(f"{plate}_{vid}")) % 100000),
+            'id':                r.get('id'),
             'text':              plate,
             'is_fixed':          r.get('확정여부') == '확정',
             'detected_at':       r.get('인식시각', '').split(' ')[-1],
@@ -133,53 +133,55 @@ def get_preprocess_methods():
 
 @plate_bp.route('/start', methods=['POST'])
 def start():
-    """탭 진입 시 호출 — 영상 선택 후 스레드 시작"""
-    global is_started
+    """탭 진입 시 호출 — 영상 선택 후 백그라운드 태스크 시작"""
+    from flask import current_app
     import modules.plate.state as plate_state
 
     data = request.get_json() or {}
     video_filename = data.get('video')
 
-    # 1. 기존 스레드 중지
+    # 1. 기존 루프 정지 (정지 신호를 보내고 잠시 대기)
     with state_lock:
         state['stop_thread'] = True
     
     time.sleep(0.3)
 
-    # 2. 임시 데이터 및 전체 기록 리스트 완전 초기화
+    # 2. 상태값 초기화
     with state_lock:
         state['plates'] = []
         state['plate_history_ids'] = []
         state['plate_history_texts'] = {}
         state['plate_votes'] = {}
         state['latest_frame'] = None
-        
-        # 이전 영상 찌꺼기가 남지 않게 무조건 비웁니다.
-        state['all_results'] = [] 
+        state['all_results'] = []  # 이전 영상 기록 비우기
         
         if video_filename:
             state['current_video'] = os.path.join(TEST_DIR, video_filename)
         
-        state['stop_thread'] = False
+        state['stop_thread'] = False # 다시 시작 가능하게 설정
 
-    # 3. 🔥 핵심: 텅 빈 state['all_results']에 DB의 진짜 기록만 채워 넣습니다.
-    # 주의: 데드락을 막기 위해 반드시 with state_lock 밖에서 호출해야 합니다.
+    # 3. DB 기록 복원 (all_results를 다시 채움)
     _restore_from_db()
 
-    # 4. 스레드 재시작 (gevent 호환 방식)
-    with plate_state.is_started_lock:
-        try:
-            from gevent import spawn
-            # gevent spawn을 사용하여 스레드 생성
-            spawn(ocr_worker)
-            spawn(process_video)
-            
+    # 4. 🔥 SocketIO 백그라운드 태스크로 전환
+    try:
+        # Flask Context 내에서 socketio 객체 추출
+        sio = current_app.extensions['socketio']
+        
+        # gevent.spawn 대신 socketio의 태스크 관리자 사용
+        sio.start_background_task(ocr_worker)
+        sio.start_background_task(process_video)
+        
+        with plate_state.is_started_lock:
             plate_state.is_started = True
-            print(f"🔄 [plate] 영상 교체 및 DB 동기화 완료: {video_filename}")
-        except Exception as e:
-            print(f"❌ [plate] 스레드 시작 실패: {e}")
+        
+        print(f"🚀 [plate] SocketIO 백그라운드 태스크 시작: {video_filename}")
+        
+    except Exception as e:
+        print(f"❌ [plate] 태스크 시작 실패: {e}")
+        with plate_state.is_started_lock:
             plate_state.is_started = False
-            return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
     return jsonify({"status": "started"}), 200
 
