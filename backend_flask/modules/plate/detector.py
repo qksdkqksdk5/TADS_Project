@@ -15,7 +15,7 @@ from .state import (
     VOTE_THRESHOLD,
     PAD, CONF, HISTORY_MAX,
 )
-from .csv_manager import delete_by_video, save_result, update_result
+from .db_manager import delete_by_video, save_result, update_result
 from .state import OCR_ENGINE
 
 if OCR_ENGINE == 'yolo':

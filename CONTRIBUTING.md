@@ -70,4 +70,13 @@ docs/ : 문서 수정 (README 등)
 
 refactor/ : 코드 리팩토링 (기능 변화 없이 구조 개선)
 
+5. 배포 성공 시 백업
+
+git checkout main
+git pull origin main
+
+git tag v1.0.1 : 태그 생성 (버전 이름은 자유롭게)
+
+git push origin v1.0.1 : 태그를 원격 저장소에 올리기
+
 Happy Coding!

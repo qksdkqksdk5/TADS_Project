@@ -3,7 +3,7 @@
 # plate.py의 /analytics 라우트에서 호출
 
 import os
-from .csv_manager import get_all_results
+from .db_manager import get_all_results
 
 
 def get_analytics(video_filter='', status_filter='', search=''):

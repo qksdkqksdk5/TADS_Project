@@ -12,7 +12,7 @@ import os
 from .state import state, state_lock, is_started, is_started_lock, TEST_DIR, SAVE_DIR
 from .detector import process_video
 from .preprocessor import apply as preprocess_apply, PREPROCESS_METHODS
-from .csv_manager import save_result, get_all_results, update_result, add_preprocess_result
+from .db_manager import save_result, get_all_results, update_result, add_preprocess_result
 from .state import OCR_ENGINE
 
 if OCR_ENGINE == 'yolo':
@@ -22,9 +22,9 @@ else:
 
 plate_bp = Blueprint('plate', __name__)
 
-# 서버 시작 시 CSV에서 전체기록 복원
-def _restore_from_csv():
-    """서버 재시작 시 CSV 데이터를 all_results에 복원"""
+# 서버 시작 시 DB에서 전체기록 복원
+def _restore_from_db():
+    """서버 재시작 시 DB 데이터를 all_results에 복원"""
     rows = get_all_results()
     if not rows:
         return
@@ -94,7 +94,7 @@ def _restore_from_csv():
 
     with state_lock:
         state['all_results'] = restored
-    print(f"📂 [plate] CSV에서 {len(restored)}건 복원 완료")
+    print(f"📂 [plate] DB에서 {len(restored)}건 복원 완료")
 
 
 # =====================
@@ -103,11 +103,11 @@ def _restore_from_csv():
 
 @plate_bp.route('/health', methods=['GET'])
 def health():
-    # 첫 health 체크 시 CSV 복원 (한 번만)
+    # 첫 health 체크 시 DB 복원 (한 번만)
     with state_lock:
         already_restored = state.get('_restored', False)
     if not already_restored:
-        _restore_from_csv()
+        _restore_from_db()
         with state_lock:
             state['_restored'] = True
     return jsonify({"status": "ok", "module": "plate"}), 200
@@ -163,9 +163,9 @@ def start():
         
         state['stop_thread'] = False
 
-    # 3. 🔥 핵심: 텅 빈 state['all_results']에 CSV의 진짜 기록만 채워 넣습니다.
+    # 3. 🔥 핵심: 텅 빈 state['all_results']에 DB의 진짜 기록만 채워 넣습니다.
     # 주의: 데드락을 막기 위해 반드시 with state_lock 밖에서 호출해야 합니다.
-    _restore_from_csv()
+    _restore_from_db()
 
     # 4. 스레드 재시작
     with plate_state.is_started_lock:
@@ -173,7 +173,7 @@ def start():
         threading.Thread(target=ocr_worker, daemon=True).start()
         threading.Thread(target=process_video, daemon=True).start()
         plate_state.is_started = True
-        print(f"🔄 [plate] 영상 교체 및 CSV 동기화 완료: {video_filename}")
+        print(f"🔄 [plate] 영상 교체 및 DB 동기화 완료: {video_filename}")
 
     return jsonify({"status": "started"}), 200
 
