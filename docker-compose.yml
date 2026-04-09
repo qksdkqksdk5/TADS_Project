@@ -35,8 +35,6 @@ services:
       - "80:80"
     depends_on:
       - backend
-    volumes:
-      - ./frontend_js/public/assets:/usr/share/nginx/html/assets
     networks:
       - tads-network
     logging:
