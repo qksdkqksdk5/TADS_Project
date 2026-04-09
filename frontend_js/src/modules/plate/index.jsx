@@ -64,15 +64,6 @@ export default function PlateModule({ host }) {
     return () => clearInterval(pollRef.current);
   }, [started, videoFilter]);
 
-  // 연결되면 즉시 전체기록 로드 (CSV 복원)
-  useEffect(() => {
-    if (!connected) return;
-    api.getResults().then(res => {
-      setAllResults(res.data.results || []);
-      setResultVideos(res.data.videos || []);
-    }).catch(() => {});
-  }, [connected]);
-
   const handleStart = async (video) => {
     await api.start(video);
     setStarted(true);
