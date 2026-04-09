@@ -5,12 +5,11 @@ from flask import Blueprint, Response, request, jsonify, current_app
 from models import db, DetectionResult, ManualResult
 from modules.traffic.detectors.manager import detector_manager
 from modules.traffic.detectors.fire_detector import FireDetector
-from modules.traffic.detectors.reverse_detector import ReverseDetector
 import shared.state as shared
 
 streaming_bp = Blueprint('streaming', __name__)
 
-# ✅ YOLO 모델 로드 완전 제거 — FireDetector/ReverseDetector가 자체 보유
+# ✅ YOLO 모델 로드 완전 제거 — FireDetector가 자체 보유
 
 
 def _get_detector(video_type, socketio, app):
@@ -18,7 +17,6 @@ def _get_detector(video_type, socketio, app):
     video_type → detector 매핑
     - 'webcam' : FireDetector(url=0, is_simulation=False, video_origin='webcam')
     - 'fire'   : FireDetector(url=mp4, is_simulation=True,  video_origin='fire')
-    - 'reverse': ReverseDetector(url=mp4, is_simulation=True, video_origin='reverse')
     ITS CCTV는 its.py에서 직접 생성하므로 여기선 처리하지 않음
     """
     from models import db as db_inst, DetectionResult
@@ -47,22 +45,6 @@ def _get_detector(video_type, socketio, app):
             lat=shared.sim_coords["lat"], lng=shared.sim_coords["lng"],
             is_simulation=True,         # ✅ 시뮬레이션
             video_origin='fire',
-            **common
-        )
-
-    elif video_type == 'reverse':
-        file_name  = shared.current_video_file.get('reverse', 'reverse.mp4')
-        video_path = os.path.join(os.getcwd(), "assets", file_name)
-        real_its_url = shared.CCTV_URLS.get('reverse', "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
-
-        return detector_manager.get_or_create(
-            'sim_reverse',
-            ReverseDetector,
-            url=video_path,             # ✅ mp4 파일
-            realtime_url=real_its_url,
-            lat=shared.sim_coords["lat"], lng=shared.sim_coords["lng"],
-            is_simulation=True,         # ✅ 시뮬레이션
-            video_origin='reverse',
             **common
         )
 

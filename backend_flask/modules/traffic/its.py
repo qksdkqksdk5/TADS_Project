@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from flask import Blueprint, jsonify, Response, request, current_app
 from modules.traffic.detectors.manager import detector_manager
 from modules.traffic.detectors.fire_detector import FireDetector
-from modules.traffic.detectors.reverse_detector import ReverseDetector
 import shared.state as shared
 
 load_dotenv()
@@ -90,26 +89,13 @@ def start_detection():
     name     = data.get('name', 'default')
     lat      = float(data.get('lat', 37.5))
     lng      = float(data.get('lng', 127.0))
-    det_type = data.get('type', 'reverse')  # 'reverse' or 'fire'
+    det_type = data.get('type', 'fire')  # 'fire' only
 
     socketio = current_app.extensions['socketio']
     app_obj  = current_app._get_current_object()
-    from models import db as db_inst, DetectionResult, ReverseResult
+    from models import db as db_inst, DetectionResult
 
-    if det_type == 'reverse':
-        unique_name = f"{name}_reverse"
-        detector_manager.get_or_create(
-            unique_name, ReverseDetector,
-            url=url, lat=lat, lng=lng,
-            video_origin="realtime_its",
-            socketio=socketio, db=db_inst,
-            ResultModel=DetectionResult,
-            ReverseModel=ReverseResult,
-            app=app_obj
-        )
-        print(f"🔴 [{unique_name}] 역주행 감지 시작")
-
-    elif det_type == 'fire':
+    if det_type == 'fire':
         unique_name = f"{name}_fire"
         detector_manager.get_or_create(
             unique_name, FireDetector,
@@ -119,6 +105,8 @@ def start_detection():
             app=app_obj
         )
         print(f"🔥 [{unique_name}] 화재 감지 시작")
+    else:
+        return jsonify({"status": "error", "message": "reverse detection disabled"}), 400
 
     return jsonify({"status": "ok"}), 200
 
@@ -128,7 +116,7 @@ def start_detection():
 # def stop_detection():
 #     data     = request.get_json()
 #     name     = data.get('name', '')
-#     det_type = data.get('type', 'reverse')
+#     det_type = data.get('type', 'fire')
 #     key      = f"{name}_{det_type}"
 
 #     with detector_manager._lock:
@@ -145,7 +133,7 @@ def start_detection():
 def stop_detection():
     data = request.get_json()
     name = data.get('name', '')
-    det_type = data.get('type', 'reverse')
+    det_type = data.get('type', 'fire')
     key = f"{name}_{det_type}"
 
     with detector_manager._lock:
@@ -175,27 +163,7 @@ def detection_status():
 # 기존 스트리밍 라우트 유지 (하위 호환)
 @its_bp.route('/video_feed')
 def video_feed():
-    url      = request.args.get('url')
-    name     = request.args.get('name', 'default')
-    lat      = float(request.args.get('lat', 37.5))
-    lng      = float(request.args.get('lng', 127.0))
-    conf_val = float(request.args.get('conf', 0.66))
-
-    unique_name = f"{name}_reverse"
-    socketio    = current_app.extensions['socketio']
-    app_obj     = current_app._get_current_object()
-    from models import db as db_inst, DetectionResult, ReverseResult
-
-    detector = detector_manager.get_or_create(
-        unique_name, ReverseDetector,
-        url=url, lat=lat, lng=lng,
-        video_origin="realtime_its",
-        socketio=socketio, db=db_inst,
-        ResultModel=DetectionResult,
-        ReverseModel=ReverseResult,
-        conf=conf_val, app=app_obj
-    )
-    return Response(detector.generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return jsonify({"status": "error", "message": "reverse video feed disabled"}), 400
 
 
 @its_bp.route('/fire_feed')
