@@ -47,7 +47,7 @@ export default function ControlBox({ connected, videos, onStart, onAnalytics }) 
           onClick={onAnalytics}
           style={s.analyticsBtn}
         >
-          분석하기
+          분석
         </button>
       </div>
     </div>
