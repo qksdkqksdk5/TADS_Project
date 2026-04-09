@@ -54,7 +54,7 @@ app.register_blueprint(simulation_bp)
 
 # ✅ 새 Blueprint
 from modules.plate.plate   import plate_bp
-from modules.carbon.carbon import carbon_bp
+from modules.tunnel.carbon import carbon_bp
 from modules.raspi.raspi   import raspi_bp
 
 app.register_blueprint(plate_bp,  url_prefix='/api/plate')
