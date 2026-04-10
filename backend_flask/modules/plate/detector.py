@@ -24,7 +24,7 @@ if OCR_ENGINE == 'yolo':
 else:
     from .ocr_engine import ocr_input_queue, ocr_result_queue
 
-plate_pattern = re.compile(r'^\d{2,3}[가-힣]\d{4}$')
+plate_pattern = re.compile(r'^([가-힣]{1,2})?\d{2,3}[가-힣]\d{4}$')
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 _shared_alpr_model = None
@@ -155,9 +155,12 @@ def process_video():
                 if plate_pattern.match(p_text):
                     if tid not in plate_votes: plate_votes[tid] = []
                     plate_votes[tid].append(p_text)
-
+                    
+                    vote_counter = Counter(plate_votes[tid])
                     voted_text, count = Counter(plate_votes[tid]).most_common(1)[0]
                     is_now_fixed = count >= VOTE_THRESHOLD
+
+                    candidates = [{'text': k, 'count': v} for k, v in vote_counter.most_common()]
 
                     elapsed_ms = int((time.time() - start_times.get(tid, time.time())) * 1000)
                     current_conf = plate_confs.get(tid, 0.0)
@@ -174,7 +177,8 @@ def process_video():
                         video_filename, video_save_dir,
                         saved_first, saved_fixed,
                         conf=current_conf, vote_count=count, elapsed=elapsed_ms,
-                        operator_name=state.get('operator_name')
+                        operator_name=state.get('operator_name'),
+                        candidates=candidates
                     )
                     if img_url: plate_img_urls[tid] = img_url
 
@@ -202,12 +206,11 @@ def process_video():
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                     video_filename, video_save_dir,
                     saved_first: set, saved_fixed: set,
-                    conf, vote_count, elapsed, operator_name=None) -> str | None:
+                    conf, vote_count, elapsed, operator_name=None, candidates=None) -> str | None:
 
     video_subfolder = os.path.basename(video_save_dir)
-
-    if len(clean_text) > 8:
-        is_fixed = False
+    # 지역명 포함 시 길이를 10자까지 허용
+    if len(clean_text) > 10: is_fixed = False
 
     suffix = "fixed" if is_fixed else "first"
     img_filename = f"id_{track_id}_{suffix}.jpg"
@@ -219,69 +222,80 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
     cv2.imwrite(img_path, plate_img)
 
     data_payload = {
-        'id':          int(track_id),
-        'text':        clean_text,
-        'is_fixed':    is_fixed,
+        'id': int(track_id),
+        'text': clean_text,
+        'is_fixed': is_fixed,
         'detected_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'img_url':     current_img_url,
+        'img_url': current_img_url,
         'img_filename': rel_img_path,
-        'video':       video_filename,
-        'conf':        round(float(conf), 4),
-        'vote_count':  vote_count,
-        'elapsed_ms':  elapsed,
-        'ground_truth': None,
-        'is_correct':   None,
+        'video': video_filename,
+        'conf': round(float(conf), 4),
+        'vote_count': vote_count,
+        'elapsed_ms': elapsed,
         'preprocess_results': {},
     }
 
     with state_lock:
         vid_name = os.path.basename(str(video_filename))
+        norm_text = clean_text.replace(" ", "")  # 비교용 공백 제거
 
+        # 1. 기존 데이터가 있는지 검색 (텍스트 우선 -> 그 다음 ID)
+        # ID가 7에서 8로 바뀌었어도 텍스트가 '경기92바8588'로 같으면 기존 7번 인덱스를 찾습니다.
         existing_idx = next(
             (i for i, r in enumerate(state['all_results'])
              if os.path.basename(str(r.get('video', ''))) == vid_name
-             and r['id'] == int(track_id)),
+             and r['text'].replace(" ", "") == norm_text),
             None
         )
 
         if existing_idx is None:
+            # 텍스트로 못 찾았다면 같은 ID가 있는지 확인
             existing_idx = next(
                 (i for i, r in enumerate(state['all_results'])
                  if os.path.basename(str(r.get('video', ''))) == vid_name
-                 and r['text'].replace(" ", "") == clean_text.replace(" ", "")),
+                 and r['id'] == int(track_id)),
                 None
             )
 
         if existing_idx is not None:
+            # --- [업데이트 모드] ---
             existing = state['all_results'][existing_idx]
-
+            
+            # 이미 '확정'된 좋은 데이터를 '미확정' 데이터가 덮어쓰지 못하게 방어
             if existing.get('is_fixed') and not is_fixed:
                 return current_img_url
 
-            if existing['id'] != int(track_id):
-                if existing.get('vote_count', 0) >= vote_count:
-                    return current_img_url
-
-            data_payload['ground_truth']       = existing.get('ground_truth')
-            data_payload['is_correct']         = existing.get('is_correct')
-            data_payload['preprocess_results'] = existing.get('preprocess_results', {})
+            # 메모리(State) 업데이트
             state['all_results'][existing_idx].update(data_payload)
-
+            
+            # 🔥 [DB 수정] 무조건 save_result를 호출하지 않고 update_result를 호출합니다.
+            # update_result 내부에서 번호판 텍스트나 ID를 기준으로 WHERE 쿼리가 돌아야 합니다.
+            update_result(
+                plate_number=clean_text, 
+                video_filename=video_filename,
+                conf=conf,
+                vote_count=vote_count,
+                is_fixed=is_fixed,
+                img_path=current_img_url
+            )
         else:
+            # --- [신규 저장 모드] ---
+            # 텍스트도 처음 보고 ID도 처음 보는 경우에만 새로 추가합니다.
             state['all_results'].insert(0, data_payload)
             saved_first.add(track_id)
+            
+            save_result(
+                plate_number=clean_text,
+                video_filename=video_filename,
+                conf=conf,
+                vote_count=vote_count,
+                is_fixed=is_fixed,
+                img_path=current_img_url,
+                elapsed_ms=elapsed,
+                operator_name=operator_name
+            )
+
             if len(state['all_results']) > 100:
                 state['all_results'].pop()
-
-    save_result(
-        plate_number=clean_text,
-        video_filename=video_filename,
-        conf=conf,
-        vote_count=vote_count,
-        is_fixed=is_fixed,
-        img_path=current_img_url,
-        elapsed_ms=elapsed,
-        operator_name=operator_name
-    )
 
     return current_img_url

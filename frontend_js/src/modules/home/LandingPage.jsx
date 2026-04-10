@@ -251,8 +251,8 @@ export default function LandingPage() {
           </div>
 
           <h1 className="fade-up fade-up-2" style={styles.heroTitle}>
-            지능형 교통<br />
-            <span style={styles.heroTitleAccent}>관제 시스템</span>
+            TRAFFIC ANOMALY<br />
+            <span style={styles.heroTitleAccent}>DETECTION SYSTEM</span>
           </h1>
 
           <p className="fade-up fade-up-3" style={styles.heroDesc}>
@@ -476,7 +476,7 @@ const styles = {
   heroBadgeDot: { width: '6px', height: '6px', borderRadius: '50%', background: '#6366f1', animation: 'pulse-dot 1.5s infinite' },
   heroTitle: {
     fontFamily: 'Space Grotesk, sans-serif',
-    fontSize: 'clamp(40px, 7vw, 80px)',
+    fontSize: 'clamp(50px, 7vw, 90px)',
     fontWeight: '800',
     lineHeight: '1.1',
     letterSpacing: '-2px',
