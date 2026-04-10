@@ -115,7 +115,6 @@ def _restore_from_db():
         state['all_results'] = restored
     print(f"📂 [plate] DB에서 {len(restored)}건 복원 완료")
 
-
 # =====================
 #      API 라우트
 # =====================
@@ -130,7 +129,6 @@ def health():
     except Exception as e:
         return jsonify({"status": "error", "module": "plate", "error": str(e)}), 500
 
-
 @plate_bp.route('/videos', methods=['GET'])
 def get_videos():
     """test 폴더의 영상 파일 목록 반환"""
@@ -141,12 +139,10 @@ def get_videos():
     except Exception as e:
         return jsonify({"videos": [], "error": str(e)}), 200
 
-
 @plate_bp.route('/preprocess_methods', methods=['GET'])
 def get_preprocess_methods():
     """지원하는 전처리 방법 목록 반환"""
     return jsonify({"methods": PREPROCESS_METHODS}), 200
-
 
 @plate_bp.route('/init', methods=['GET'])  # ✅ 탭 진입 시 호출할 엔드포인트 추가
 def init():
@@ -219,6 +215,13 @@ def start():
 
     return jsonify({"status": "started"}), 200
 
+@plate_bp.route('/stop', methods=['POST'])
+def stop_plate_processing():
+    with state_lock:
+        state['stop_thread'] = True  # process_video의 while 루프를 깨뜨림
+    
+    print("🛑 [API] 사용자의 요청으로 번호판 인식 중지를 명령했습니다.")
+    return jsonify({"success": True, "message": "Stopping processing..."})
 
 @plate_bp.route('/stream')
 def stream():
@@ -237,13 +240,11 @@ def stream():
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
 @plate_bp.route('/plates', methods=['GET'])
 def get_plates():
     """현재 화면 번호판 (최근 5개)"""
     with state_lock:
         return jsonify(state['plates']), 200
-
 
 @plate_bp.route('/results', methods=['GET'])
 def get_results():
@@ -260,12 +261,10 @@ def get_results():
             results = [r for r in results if r.get('video') == video_filter]
     return jsonify({"results": results, "videos": videos}), 200
 
-
 @plate_bp.route('/image/<path:filename>', methods=['GET'])
 def plate_image(filename):
     """저장된 번호판 캡처 이미지 제공 (서브폴더 경로 지원)"""
     return send_from_directory(SAVE_DIR, filename)
-
 
 @plate_bp.route('/verify', methods=['POST'])
 def verify():
@@ -308,7 +307,6 @@ def verify():
         "recognized": recognized,
         "ground_truth": ground_truth
     }), 200
-
 
 @plate_bp.route('/reprocess', methods=['POST'])
 def reprocess():
@@ -385,7 +383,6 @@ def reprocess():
         "preprocess_results": result.get('preprocess_results', {}),
     }), 200
 
-
 def _compare_chars(recognized: str, ground_truth: str) -> list:
     """글자별 정오 비교 결과 생성"""
     max_len = max(len(recognized), len(ground_truth))
@@ -398,7 +395,6 @@ def _compare_chars(recognized: str, ground_truth: str) -> list:
         }
         for i in range(max_len)
     ]
-
 
 @plate_bp.route('/analytics', methods=['GET'])
 def analytics():

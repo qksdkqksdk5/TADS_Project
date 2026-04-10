@@ -93,6 +93,20 @@ export default function PlateModule({ host }) {
     ));
   };
 
+  // ✅ 탭 이탈(언마운트) 시 번호판 인식 중지 명령
+  useEffect(() => {
+    return () => {
+      // 컴포넌트가 사라질 때(탭 변경 등) 서버에 중지 신호를 보냄
+      if (connected) {
+        api.stop()
+          .then(() => {
+            setStarted(false);
+          })
+          .catch(err => console.error("중지 명령 실패:", err));
+      }
+    };
+  }, [connected]);
+
   return (
     <div style={s.container}>
       <div style={s.body}>

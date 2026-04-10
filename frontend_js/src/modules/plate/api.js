@@ -33,4 +33,6 @@ export const plateApi = (baseUrl) => ({
   init: () => 
     axios.get(`${baseUrl}/init`),
 
+  stop: () => 
+    axios.post(`${baseUrl}/stop`), // 중지 API
 });
