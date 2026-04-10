@@ -123,9 +123,10 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
 
     const handleForceStart = (data) => {
       setActiveTab("sim");
-      const syncUrl = `http://${host}:5000/api/video_feed?type=${data.type}&v=${Date.now()}`;
-      setVideoUrl(syncUrl);
-      // if (data.lat && mapRef.current) mapRef.current.panTo(new window.kakao.maps.LatLng(data.lat, data.lng));
+      setTimeout(() => {
+        const syncUrl = `http://${host}:5000/api/video_feed?type=${data.type}&v=${Date.now()}`;
+        setVideoUrl(syncUrl);
+      }, 1500);
     };
 
     const handleAnomaly = (data) => {

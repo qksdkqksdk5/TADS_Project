@@ -64,16 +64,35 @@ def _restore_from_db():
         preps = [p for p in preprocess_rows
                  if p.get('인식번호판') == plate
                  and os.path.basename(p.get('영상파일', '')) == vid]
-        preprocess_results = {
-            p.get('전처리방법'): {
+        # preprocess_results = {
+        #     p.get('전처리방법'): {
+        #         'text':       p.get('보정후번호판', ''),
+        #         'img_url':    f"/api/plate/image/{os.path.splitext(vid)[0]}/id_{p.get('전처리방법')}.jpg",
+        #         'elapsed_ms': p.get('처리시간(ms)', ''),
+        #         'correct':    bool(p.get('정답번호판') and
+        #                            p.get('보정후번호판') == p.get('정답번호판')),
+        #     }
+        #     for p in preps if p.get('전처리방법')
+        # }
+        # 원본 행과 전처리 행 분리
+        base_rows = [r for r in rows if not r.get('전처리방법')]
+        preprocess_rows = [r for r in rows if r.get('전처리방법')]
+
+        # ✅ result_id 기반 인덱싱 (기존: 번호판+영상 문자열 매칭 → 불안정)
+        preprocess_by_result_id = {}
+        for p in preprocess_rows:
+            rid = p.get('result_id')  # ← get_all_results()에서 result_id 추가 필요
+            if rid not in preprocess_by_result_id:
+                preprocess_by_result_id[rid] = {}
+            method = p.get('전처리방법')
+            preprocess_by_result_id[rid][method] = {
                 'text':       p.get('보정후번호판', ''),
-                'img_url':    f"/api/plate/image/{os.path.splitext(vid)[0]}/id_{p.get('전처리방법')}.jpg",
+                'img_url':    p.get('이미지경로', ''),
                 'elapsed_ms': p.get('처리시간(ms)', ''),
-                'correct':    bool(p.get('정답번호판') and
-                                   p.get('보정후번호판') == p.get('정답번호판')),
+                'correct':    p.get('정오여부') == '정답',
             }
-            for p in preps if p.get('전처리방법')
-        }
+        
+        preprocess_results = preprocess_by_result_id.get(r.get('id'), {})
 
         img_filename = '/'.join(img_path.split('/')[-2:]) if img_path else ''
 
@@ -144,7 +163,7 @@ def start():
     """탭 진입 시 호출 — 영상 선택 후 백그라운드 태스크 시작"""
     from flask import current_app
     import modules.plate.state as plate_state
-
+    
     data = request.get_json() or {}
     video_filename = data.get('video')
 
@@ -166,12 +185,17 @@ def start():
         state['plate_history_texts'] = {}
         state['plate_votes'] = {}
         state['latest_frame'] = None
-        state['all_results'] = []  # 이전 영상 기록 비우기
         
         if video_filename:
+            vid = os.path.basename(video_filename)
+            # ✅ 현재 선택한 영상 결과만 제거
+            state['all_results'] = [
+                r for r in state['all_results']
+                if os.path.basename(str(r.get('video', ''))) != vid
+            ]
             state['current_video'] = os.path.join(TEST_DIR, video_filename)
         
-        state['stop_thread'] = False # 다시 시작 가능하게 설정
+        state['stop_thread'] = False
 
     # 4. 🔥 SocketIO 백그라운드 태스크로 전환
     try:
@@ -275,6 +299,7 @@ def verify():
         video_filename=video_filename,
         ground_truth=ground_truth,
         is_correct=is_correct,
+        img_path=result.get('img_url', ''),
     )
 
     return jsonify({
@@ -344,7 +369,7 @@ def reprocess():
         plate_number=result['text'],
         video_filename=video_filename,
         preprocess=preprocess,
-        retried_text=retried_text,
+        corrected_text=retried_text,
         elapsed_ms=elapsed_ms,
         ground_truth=ground_truth,
         is_correct=retry_correct,

@@ -276,6 +276,7 @@ def get_all_results():
                 # 원본 결과
                 result_dict = {
                     'id': plate_result.id,
+                    'result_id': plate_result.id,
                     '인식번호판': plate_result.plate_number,
                     '정답번호판': plate_result.ground_truth or '',
                     '정오여부': (

@@ -5,10 +5,10 @@ import { io } from "socket.io-client";
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
-import Login        from './modules/member/Login';
-import Register     from './modules/member/Register';
-import TrafficDashboard from './modules/traffic';
-import LandingPage  from './modules/home/LandingPage';  // ✅ 추가
+import Login       from './modules/member/Login';
+import Register    from './modules/member/Register';
+import Dashboard   from './modules/dashboard';
+import LandingPage from './modules/home/LandingPage';
 
 function App() {
   const [user, setUser] = useState(() => {
@@ -43,9 +43,9 @@ function App() {
         }
       });
       newSocket.on("connect_error", () => {
-        if (sessionStorage.getItem('user')) { 
+        if (sessionStorage.getItem('user')) {
           toast.error("서버에 연결할 수 없습니다. 다시 로그인해 주세요.");
-          handleLogout(); 
+          handleLogout();
         }
       });
       setSocket(newSocket);
@@ -77,20 +77,17 @@ function App() {
 
       <div style={{ minHeight: '100dvh', background: '#020617' }}>
         <Routes>
-          {/* ✅ 루트: 랜딩페이지 (비로그인) / 대시보드 (로그인) */}
-          <Route
-            path="/"
-            element={user
-              ? <Navigate to="/dashboard" />
-              : <LandingPage />}
-          />
+          <Route path="/" element={user ? <Navigate to="/dashboard" /> : <LandingPage />} />
 
-          {/* ✅ 대시보드 (로그인 필요) */}
+          <Route
+            path="/dashboard/:tab"
+            element={user
+              ? <Dashboard socket={socket} user={user} setUser={setUser} onLogout={handleLogout} />
+              : <Navigate to="/" />}
+          />
           <Route
             path="/dashboard"
-            element={user
-              ? <TrafficDashboard socket={socket} user={user} setUser={setUser} onLogout={handleLogout} />
-              : <Navigate to="/" />}
+            element={user ? <Navigate to="/dashboard/cctv" replace /> : <Navigate to="/" />}
           />
 
           <Route

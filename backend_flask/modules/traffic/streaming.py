@@ -38,6 +38,9 @@ def _get_detector(video_type, socketio, app):
         # start_simulation 호출 시마다 새 영상 파일 + 좌표가 shared에 세팅됨
         file_name  = shared.current_video_file.get('fire', 'fire.mp4')
         video_path = os.path.join(os.getcwd(), "assets", file_name)
+
+        detector_manager.stop('sim_fire')
+
         return detector_manager.get_or_create(
             'sim_fire',
             FireDetector,
@@ -50,6 +53,11 @@ def _get_detector(video_type, socketio, app):
 
     return None
 
+@streaming_bp.route('/api/stop_simulation', methods=['POST'])
+def stop_simulation():
+    detector_manager.stop('sim_fire')
+    print("🛑 [시뮬] 탭 이탈로 인한 detector 정지")
+    return jsonify({"status": "stopped"}), 200
 
 @streaming_bp.route('/api/video_feed')
 def video_feed():

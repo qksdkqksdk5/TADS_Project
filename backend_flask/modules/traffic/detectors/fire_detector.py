@@ -190,8 +190,10 @@ class FireDetector(BaseDetector):
             success, frame = self.cap.read()
             if not success:
                 if self.is_simulation:
+                    print(f"🏁 [{self.cctv_name}] 시뮬레이션 영상 종료")
                     time.sleep(1)
-                    continue
+                    self.stop()
+                    break  # ← continue 대신 break
                 else:
                     reconnected = self.reconnect(delay=3, max_retries=5)
                     if not reconnected:

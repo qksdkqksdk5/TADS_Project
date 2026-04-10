@@ -53,6 +53,17 @@ class DetectionManager:
             self.threads[name] = t
             return instance
 
+    def stop(self, name):
+        """특정 detector 정지 및 제거"""
+        with self._lock:
+            if name not in self.active_detectors:
+                return
+            print(f"🛑 [Manager] {name} 분석기 정지")
+            self.active_detectors[name].stop()
+            self.threads[name].join(timeout=2.0)
+            del self.active_detectors[name]
+            del self.threads[name]
+
     def stop_all(self):
         """종료 시 안전하게 모든 스레드 회수"""
         with self._lock:

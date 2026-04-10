@@ -79,3 +79,7 @@ export const stopDetection = (host, { name, type }) =>
 // ✅ 감지 상태 확인
 export const getDetectionStatus = (host) =>
   axios.get(`http://${host}:5000/api/its/detection_status`);
+
+// ✅ 시뮬레이션 중지 요청 추가
+export const stopSimulation = (host) =>
+  axios.post(`http://${host}:5000/api/stop_simulation`).catch(() => {});

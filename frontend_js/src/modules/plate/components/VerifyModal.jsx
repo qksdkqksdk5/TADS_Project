@@ -7,12 +7,20 @@ import { useState } from 'react';
 export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerify, onReprocess, onClose }) {
   const [gtInput, setGtInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false); // ✅ 재입력 모드
 
   const handleVerify = async () => {
     if (!gtInput.trim()) return;
     setLoading(true);
     await onVerify(plate.id, gtInput.trim());
     setLoading(false);
+    setIsEditing(false); // ✅ 재입력 완료 후 편집 모드 종료
+    setGtInput('');
+  };
+
+  const handleEditStart = () => {
+    setGtInput(plate.ground_truth || ''); // ✅ 기존 정답으로 input 초기화
+    setIsEditing(true);
   };
 
   const handleReprocess = async (method) => {
@@ -21,8 +29,10 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
     setLoading(false);
   };
 
+  // 정답 입력 영역: 미입력 or 재입력 모드면 input, 아니면 결과 표시
+  const isInputMode = plate.is_correct === null || plate.is_correct === undefined || isEditing;
+
   return (
-    // 배경 오버레이
     <div style={s.overlay} onClick={onClose}>
       <div style={s.modal} onClick={e => e.stopPropagation()}>
 
@@ -105,7 +115,9 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
         {/* 정답 입력 */}
         <div style={s.section}>
           <div style={s.sectionLabel}>정답 입력</div>
-          {plate.is_correct === null || plate.is_correct === undefined ? (
+
+          {isInputMode ? (
+            // ✅ 입력 모드 (최초 입력 or 재입력)
             <div style={{ display: 'flex', gap: '8px' }}>
               <input
                 value={gtInput}
@@ -113,6 +125,7 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
                 onKeyDown={e => e.key === 'Enter' && handleVerify()}
                 placeholder="예: 38조4129"
                 style={s.input}
+                autoFocus
               />
               <button
                 onClick={handleVerify}
@@ -125,14 +138,28 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
               >
                 {loading ? '확인 중...' : '확인'}
               </button>
+              {/* ✅ 재입력 모드일 때만 취소 버튼 표시 */}
+              {isEditing && (
+                <button
+                  onClick={() => { setIsEditing(false); setGtInput(''); }}
+                  style={s.cancelBtn}
+                >
+                  취소
+                </button>
+              )}
             </div>
           ) : (
+            // ✅ 결과 표시 모드 + 수정 버튼
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '13px', color: '#94a3b8' }}>{plate.ground_truth}</span>
               {plate.is_correct
                 ? <span style={{ color: '#4ade80', fontWeight: 700 }}>✔ 정답</span>
                 : <span style={{ color: '#f87171', fontWeight: 700 }}>✗ 오답</span>
               }
+              {/* ✅ 재입력 버튼 */}
+              <button onClick={handleEditStart} style={s.editBtn}>
+                ✏️ 수정
+              </button>
             </div>
           )}
         </div>
@@ -142,7 +169,6 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
           <div style={s.section}>
             <div style={s.sectionLabel}>🔧 전처리 재인식 비교</div>
 
-            {/* 전처리 버튼 */}
             <div style={s.preprocessGrid}>
               {preprocessMethods.map(m => {
                 const done = plate.preprocess_results?.[m.key];
@@ -167,7 +193,6 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
               })}
             </div>
 
-            {/* 누적 결과 비교 테이블 */}
             {plate.preprocess_results && Object.keys(plate.preprocess_results).length > 0 && (
               <div style={{ marginTop: '12px' }}>
                 <div style={{ fontSize: '11px', color: '#475569', marginBottom: '6px' }}>
@@ -183,7 +208,6 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
                     </tr>
                   </thead>
                   <tbody>
-                    {/* 원본 */}
                     <tr>
                       <td style={s.td}>원본</td>
                       <td style={{ ...s.td, fontWeight: 700, color: '#00d7ff' }}>{plate.text}</td>
@@ -194,7 +218,6 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
                       </td>
                       <td style={{ ...s.td, color: '#475569' }}>—</td>
                     </tr>
-                    {/* 전처리 결과들 */}
                     {Object.entries(plate.preprocess_results).map(([method, r]) => (
                       <tr key={method}>
                         <td style={s.td}>
@@ -220,7 +243,6 @@ export default function VerifyModal({ plate, baseUrl, preprocessMethods, onVerif
                   </tbody>
                 </table>
 
-                {/* 이미지 비교 */}
                 <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   {Object.entries(plate.preprocess_results).map(([method, r]) => (
                     <div key={method} style={{ flex: '1 1 45%' }}>
@@ -317,6 +339,28 @@ const s = {
     padding: '8px 16px',
     fontSize: '13px',
     fontWeight: 600,
+    flexShrink: 0,
+  },
+  // ✅ 수정 버튼
+  editBtn: {
+    background: 'none',
+    border: '1px solid #334155',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    color: '#64748b',
+    fontSize: '12px',
+    cursor: 'pointer',
+    marginLeft: 'auto',
+  },
+  // ✅ 취소 버튼
+  cancelBtn: {
+    background: 'none',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    padding: '8px 12px',
+    color: '#64748b',
+    fontSize: '13px',
+    cursor: 'pointer',
     flexShrink: 0,
   },
   preprocessGrid: {
