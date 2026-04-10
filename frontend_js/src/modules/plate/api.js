@@ -15,8 +15,8 @@ export const plateApi = (baseUrl) => ({
   getPreprocessMethods: () =>
     axios.get(`${baseUrl}/preprocess_methods`),
 
-  start: (video) =>
-    axios.post(`${baseUrl}/start`, { video }),
+  start: (video, operatorName) =>
+    axios.post(`${baseUrl}/start`, { video, operator_name: operatorName }),
 
   getPlates: () =>
     axios.get(`${baseUrl}/plates`),

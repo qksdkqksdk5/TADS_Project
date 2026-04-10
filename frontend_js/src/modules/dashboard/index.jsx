@@ -88,7 +88,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "plate" && (
             <div style={moduleWrapper}>
-              <PlateModule isMobile={isMobile} host={host} />
+              <PlateModule isMobile={isMobile} host={host} user={user} />
             </div>
           )}
           {activeTab === "monitoring" && (

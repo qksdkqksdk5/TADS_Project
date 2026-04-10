@@ -1,5 +1,4 @@
 /* eslint-disable */
-// src/modules/plate/index.jsx
 import { useState, useEffect, useRef } from 'react';
 import { plateApi } from './api';
 import ControlBox      from './components/ControlBox';
@@ -7,7 +6,7 @@ import VideoStream     from './components/VideoStream';
 import PlateList       from './components/PlateList';
 import AnalyticsModal  from './components/AnalyticsModal';
 
-export default function PlateModule({ host }) {
+export default function PlateModule({ host, user }) {  // ✅ user prop 추가
   const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
   const api = plateApi(BASE_URL);
 
@@ -24,7 +23,6 @@ export default function PlateModule({ host }) {
 
   useEffect(() => {
     if (!connected) return;
-    // DB → state 동기화 후 결과 로드
     api.init()
       .then(() => api.getResults())
       .then(res => {
@@ -47,7 +45,6 @@ export default function PlateModule({ host }) {
       .catch(() => setConnected(false));
   }, []);
 
-  // 폴링 — started 이후
   useEffect(() => {
     if (!started) return;
     pollRef.current = setInterval(async () => {
@@ -65,11 +62,11 @@ export default function PlateModule({ host }) {
   }, [started, videoFilter]);
 
   const handleStart = async (video) => {
-    await api.start(video);
+    // ✅ operator_name(user.name) 함께 전달
+    await api.start(video, user?.name);
     setStarted(true);
   };
 
-  // 필터 변경 시 즉시 API 호출
   const handleVideoFilter = async (video) => {
     setVideoFilter(video);
     try {
@@ -93,16 +90,10 @@ export default function PlateModule({ host }) {
     ));
   };
 
-  // ✅ 탭 이탈(언마운트) 시 번호판 인식 중지 명령
   useEffect(() => {
     return () => {
-      // 컴포넌트가 사라질 때(탭 변경 등) 서버에 중지 신호를 보냄
       if (connected) {
-        api.stop()
-          .then(() => {
-            setStarted(false);
-          })
-          .catch(err => console.error("중지 명령 실패:", err));
+        api.stop().then(() => setStarted(false)).catch(() => {});
       }
     };
   }, [connected]);

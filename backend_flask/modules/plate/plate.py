@@ -156,24 +156,23 @@ def init():
 
 @plate_bp.route('/start', methods=['POST'])
 def start():
-    """탭 진입 시 호출 — 영상 선택 후 백그라운드 태스크 시작"""
     from flask import current_app
     import modules.plate.state as plate_state
     
-    data = request.get_json() or {}
+    data           = request.get_json() or {}
     video_filename = data.get('video')
-
-    # 1. 기존 루프 정지 (정지 신호를 보내고 잠시 대기)
+    operator_name  = data.get('operator_name')  # ✅ 추가: 관리자 이름
+ 
+    # 1. 기존 루프 정지
     with state_lock:
         state['stop_thread'] = True
-    
     time.sleep(0.3)
-
-    # ✅ 큐 잔여 데이터 비우기
+ 
+    # 큐 잔여 데이터 비우기
     while not ocr_input_queue.empty():
         try: ocr_input_queue.get_nowait()
         except: break
-
+ 
     # 2. 상태값 초기화
     with state_lock:
         state['plates'] = []
@@ -181,10 +180,10 @@ def start():
         state['plate_history_texts'] = {}
         state['plate_votes'] = {}
         state['latest_frame'] = None
-        
+        state['operator_name'] = operator_name  # ✅ 추가: 관리자 이름 저장
+ 
         if video_filename:
             vid = os.path.basename(video_filename)
-            # ✅ 현재 선택한 영상 결과만 제거
             state['all_results'] = [
                 r for r in state['all_results']
                 if os.path.basename(str(r.get('video', ''))) != vid
@@ -192,27 +191,24 @@ def start():
             state['current_video'] = os.path.join(TEST_DIR, video_filename)
         
         state['stop_thread'] = False
-
-    # 4. 🔥 SocketIO 백그라운드 태스크로 전환
+ 
+    # 3. SocketIO 백그라운드 태스크
     try:
-        # Flask Context 내에서 socketio 객체 추출
         sio = current_app.extensions['socketio']
-        
-        # gevent.spawn 대신 socketio의 태스크 관리자 사용
         sio.start_background_task(ocr_worker)
         sio.start_background_task(process_video)
         
         with plate_state.is_started_lock:
             plate_state.is_started = True
         
-        print(f"🚀 [plate] SocketIO 백그라운드 태스크 시작: {video_filename}")
+        print(f"🚀 [plate] 태스크 시작: {video_filename} | 관리자: {operator_name}")
         
     except Exception as e:
         print(f"❌ [plate] 태스크 시작 실패: {e}")
         with plate_state.is_started_lock:
             plate_state.is_started = False
         return jsonify({"status": "error", "message": str(e)}), 500
-
+ 
     return jsonify({"status": "started"}), 200
 
 @plate_bp.route('/stop', methods=['POST'])

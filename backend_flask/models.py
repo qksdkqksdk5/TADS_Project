@@ -87,34 +87,37 @@ class ManualResult(db.Model):
 
 
 class PlateResult(db.Model):
-    """번호판 인식 결과 저장"""
     __tablename__ = 'plate_results'
     
     id = db.Column(db.Integer, primary_key=True)
     
     # 원본 인식 데이터
-    plate_number = db.Column(db.String(50), nullable=False)  # 인식번호판
-    ground_truth = db.Column(db.String(50), nullable=True)   # 정답번호판
-    is_correct = db.Column(db.Boolean, nullable=True)        # 정오여부 (True: 정답, False: 오답, None: 미입력)
+    plate_number = db.Column(db.String(50), nullable=False)
+    ground_truth = db.Column(db.String(50), nullable=True)
+    is_correct   = db.Column(db.Boolean, nullable=True)
     
     # 신뢰도/투표
-    confidence = db.Column(db.Float, nullable=True)          # 신뢰도
-    vote_count = db.Column(db.Integer, nullable=True)        # 투표수
-    is_fixed = db.Column(db.Boolean, default=False)          # 확정여부
+    confidence = db.Column(db.Float, nullable=True)
+    vote_count = db.Column(db.Integer, nullable=True)
+    is_fixed   = db.Column(db.Boolean, default=False)
     
     # 파일 관련
-    img_path = db.Column(db.String(255), nullable=True)      # 이미지경로
-    video_filename = db.Column(db.String(255), nullable=True)  # 영상파일
+    img_path       = db.Column(db.String(255), nullable=True)
+    video_filename = db.Column(db.String(255), nullable=True)
+    
+    # ✅ 추가: 인식을 실행한 관리자 정보
+    operator_name = db.Column(db.String(50), db.ForeignKey('users.name'), nullable=True)
+    operator      = db.relationship('User', backref='plate_results')
     
     # 시간
-    detected_at = db.Column(db.DateTime, default=datetime.now)  # 인식시각
-    created_at = db.Column(db.DateTime, default=datetime.now)
-    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+    detected_at = db.Column(db.DateTime, default=datetime.now)
+    created_at  = db.Column(db.DateTime, default=datetime.now)
+    updated_at  = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
     
     # 관계
     preprocess_results = db.relationship(
-        'PlatePreprocessResult', 
-        backref='original_result', 
+        'PlatePreprocessResult',
+        backref='original_result',
         cascade="all, delete-orphan"
     )
 

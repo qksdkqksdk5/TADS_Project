@@ -52,62 +52,48 @@ def delete_by_video(video_filename: str):
 def save_result(plate_number, img_path, conf=None, vote_count=None,
                 is_fixed=False, ground_truth=None, is_correct=None,
                 preprocess=None, retried_text=None, elapsed_ms=None,
-                video_filename=None):
-    """
-    번호판 인식 결과 저장 또는 업데이트
-    
-    같은 ID 숫자 + 영상 파일명, 또는 같은 번호판 + 영상 파일명이면 업데이트
-    """
+                video_filename=None, operator_name=None):  # ✅ operator_name 추가
     try:
         with _get_app_context():
             vid = os.path.basename(str(video_filename)) if video_filename else ''
             
-            # 이미지 경로에서 ID 숫자 추출 (예: id_0_img.jpg → 0)
             match = re.search(r'id_(\d+)_', img_path)
             current_id_num = match.group(1) if match else None
             clean_target_text = plate_number.replace(" ", "")
             
-            # 기존 원본 결과(전처리 아님) 찾기
             existing = None
             
-            # 1. ID 숫자 + 영상 파일명으로 찾기
             if current_id_num:
                 for result in PlateResult.query.filter_by(video_filename=vid).all():
-                    if not result.preprocess_results:  # 원본만 (전처리 결과가 부모인 경우는 제외)
+                    if not result.preprocess_results:
                         match = re.search(r'id_(\d+)_', result.img_path or '')
                         if match and match.group(1) == current_id_num:
                             existing = result
                             break
             
-            # 2. 번호판 + 영상 파일명으로 찾기
             if not existing:
                 for result in PlateResult.query.filter_by(video_filename=vid).all():
-                    if not result.preprocess_results:  # 원본만
+                    if not result.preprocess_results:
                         if result.plate_number.replace(" ", "") == clean_target_text:
                             existing = result
                             break
             
-            # 기존 결과가 있으면 업데이트
             if existing:
                 was_fixed = existing.is_fixed
                 existing_votes = existing.vote_count or 0
                 new_votes = vote_count if vote_count is not None else 0
                 
-                # 다른 ID인데 확정된 결과면 업데이트 안 함
                 if current_id_num:
                     match = re.search(r'id_(\d+)_', existing.img_path or '')
                     existing_id = match.group(1) if match else None
                     if current_id_num != existing_id and was_fixed:
                         db.session.commit()
                         return
-                    
-                    # 다른 ID인데 미확정이고, 새로운 투표수가 적으면 업데이트 안 함
                     if current_id_num != existing_id and not was_fixed and not is_fixed:
                         if existing_votes >= new_votes:
                             db.session.commit()
                             return
                 
-                # 업데이트
                 existing.plate_number = plate_number
                 existing.is_fixed = is_fixed or was_fixed
                 if conf is not None:
@@ -117,18 +103,21 @@ def save_result(plate_number, img_path, conf=None, vote_count=None,
                 existing.detected_at = datetime.now()
                 if is_fixed or not existing.img_path:
                     existing.img_path = img_path
+                # ✅ operator_name 업데이트 (없던 경우 채워주기)
+                if operator_name and not existing.operator_name:
+                    existing.operator_name = operator_name
             else:
-                # 새로운 결과 생성
                 new_result = PlateResult(
-                    plate_number=plate_number,
-                    ground_truth=ground_truth or None,
-                    is_correct=is_correct,
-                    confidence=round(conf, 4) if conf is not None else None,
-                    vote_count=vote_count,
-                    is_fixed=is_fixed,
-                    img_path=img_path,
-                    video_filename=vid,
-                    detected_at=datetime.now()
+                    plate_number  = plate_number,
+                    ground_truth  = ground_truth or None,
+                    is_correct    = is_correct,
+                    confidence    = round(conf, 4) if conf is not None else None,
+                    vote_count    = vote_count,
+                    is_fixed      = is_fixed,
+                    img_path      = img_path,
+                    video_filename= vid,
+                    detected_at   = datetime.now(),
+                    operator_name = operator_name,  # ✅ 추가
                 )
                 db.session.add(new_result)
             

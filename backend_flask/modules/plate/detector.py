@@ -81,6 +81,7 @@ def process_video():
 
     delete_by_video(video_filename)
     with state_lock:
+        state['plates'] = []
         state['all_results'] = [
             r for r in state['all_results']
             if os.path.basename(str(r.get('video', ''))) != video_filename
@@ -149,7 +150,9 @@ def process_video():
                     queued_ids.discard(tid)
                 except: break
 
-                if plate_pattern.search(p_text):
+                if p_text is None or p_img is None:
+                    continue
+                if plate_pattern.match(p_text):
                     if tid not in plate_votes: plate_votes[tid] = []
                     plate_votes[tid].append(p_text)
 
@@ -170,14 +173,10 @@ def process_video():
                         tid, p_img, voted_text, is_now_fixed,
                         video_filename, video_save_dir,
                         saved_first, saved_fixed,
-                        conf=current_conf, vote_count=count, elapsed=elapsed_ms
+                        conf=current_conf, vote_count=count, elapsed=elapsed_ms,
+                        operator_name=state.get('operator_name')
                     )
                     if img_url: plate_img_urls[tid] = img_url
-
-                if len(plate_history_ids) > HISTORY_MAX:
-                    old_id = plate_history_ids.pop()
-                    for d in [plate_history_imgs, plate_history_texts, plate_votes, plate_img_urls]:
-                        d.pop(old_id, None)
 
             resized = cv2.resize(annotated, (DISPLAY_W, DISPLAY_H))
             with state_lock:
@@ -189,7 +188,7 @@ def process_video():
                         'is_fixed': best_samples.get(t_id, {}).get('is_fixed', False),
                         'vote_count': len(plate_votes.get(t_id, [])),
                         'img_url': plate_img_urls.get(t_id),
-                    } for t_id in plate_history_ids[:5]
+                    } for t_id in plate_history_ids
                 ]
 
             fps_buf.append(time.time() - t0)
@@ -203,7 +202,7 @@ def process_video():
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                     video_filename, video_save_dir,
                     saved_first: set, saved_fixed: set,
-                    conf, vote_count, elapsed) -> str | None:
+                    conf, vote_count, elapsed, operator_name=None) -> str | None:
 
     video_subfolder = os.path.basename(video_save_dir)
 
@@ -281,7 +280,8 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
         vote_count=vote_count,
         is_fixed=is_fixed,
         img_path=current_img_url,
-        elapsed_ms=elapsed
+        elapsed_ms=elapsed,
+        operator_name=operator_name
     )
 
     return current_img_url
