@@ -53,7 +53,7 @@ def detect_plate_color(plate_img):
     return "yellow" if yellow_ratio > 20 else "white"
 
 def _ocr_predict(model, img):
-    return model.predict(img, conf=0.25, device='cpu', verbose=False)
+    return model.predict(img, conf=0.7, device='cpu', verbose=False)
 
 def _parse_ocr_result(results, model_names: dict) -> str:
     chars_data = []
