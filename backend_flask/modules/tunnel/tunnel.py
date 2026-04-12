@@ -1,9 +1,8 @@
-# backend_flask/modules/tunnel/carbon.py
+# backend_flask/modules/tunnel/tunnel.py
 # 담당자: tunnel 기능 개발
 
-from flask import Blueprint, jsonify
-
-tunnel_bp = Blueprint('tunnel', __name__)
+from flask import jsonify  # Blueprint
+from .routes import tunnel_bp
 
 @tunnel_bp.route('/health', methods=['GET'])
 def health():
