@@ -2,6 +2,7 @@ import queue
 import re
 import os
 import threading
+import time
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -85,13 +86,14 @@ def _parse_ocr_result(results, model_names: dict) -> str:
 def ocr_worker():
     """ 백그라운드 OCR 전담 스레드 (프로젝트 통합 버전) """
     print("🔍 YOLO-OCR 스레드 준비 완료 [색상인식 + 지능형 필터 모드]")
+    ocr_model = get_shared_ocr_model()
 
     while True:
         try:
             item = ocr_input_queue.get(timeout=1)
             if item is None: break
 
-            ocr_model = get_shared_ocr_model()
+            
             track_id, plate_img = item
 
             # 🔥 1. 색상 먼저 파악
@@ -103,6 +105,13 @@ def ocr_worker():
             # raw_text = _parse_ocr_result(results, ocr_model.names)
 
             results = ocr_model.predict(plate_img, conf=0.66, imgsz=640, verbose=False)
+
+            if len(results) > 0 and len(results[0].boxes) > 0:
+                conf_scores = results[0].boxes.conf.cpu().numpy() # 각 글자의 점수들
+                avg_conf = conf_scores.mean() # 전체 글자의 평균 점수
+                min_conf = conf_scores.min()  # 가장 낮은 점수의 글자 점수
+                print(f" 🔍 [OCR Score] ID:{track_id} | 평균: {avg_conf:.4f} | 최저: {min_conf:.4f}")
+
             raw_text = _parse_ocr_result(results, ocr_model.names)
 
             # 3. 텍스트 정제 (한글·숫자만)
@@ -149,6 +158,7 @@ def ocr_worker():
                     print(f"   ㄴ ❌ [필터 탈락] ID:{track_id} -> '{clean_text}' (사유: 패턴불일치)")
                 ocr_result_queue.put((track_id, None, None))
 
+            time.sleep(0.001)
             ocr_input_queue.task_done()
 
         except Exception as e:
