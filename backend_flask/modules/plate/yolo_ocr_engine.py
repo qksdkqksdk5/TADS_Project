@@ -98,8 +98,11 @@ def ocr_worker():
             color_type = detect_plate_color(plate_img)
 
             # 2. OCR 예측
-            future = _ocr_executor.submit(_ocr_predict, ocr_model, plate_img)
-            results = future.result()
+            # future = _ocr_executor.submit(_ocr_predict, ocr_model, plate_img)
+            # results = future.result()
+            # raw_text = _parse_ocr_result(results, ocr_model.names)
+
+            results = ocr_model.predict(plate_img, conf=0.65, imgsz=640, verbose=False)
             raw_text = _parse_ocr_result(results, ocr_model.names)
 
             # 3. 텍스트 정제 (한글·숫자만)
