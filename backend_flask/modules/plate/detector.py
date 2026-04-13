@@ -120,6 +120,9 @@ def process_video():
             frame_count += 1
             t0          = time.time()
 
+            # if frame_count % 2 != 0:
+            #     continue
+
             results = _run_yolo_in_native_thread(model, frame, CONF, YOLO_IMG_SIZE)
             annotated = frame.copy()
 
@@ -196,7 +199,8 @@ def process_video():
                 ]
 
             fps_buf.append(time.time() - t0)
-            time.sleep(max(0.01, frame_interval - (time.time() - t0)))
+            # time.sleep(max(0.01, frame_interval - (time.time() - t0)))
+            time.sleep(0.005)
     finally:
         cap.release()
         ocr_input_queue.put(None)
