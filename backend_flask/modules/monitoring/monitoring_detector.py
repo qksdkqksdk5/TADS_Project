@@ -28,18 +28,18 @@ for _p in (_BASE_DIR, _MODULES_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from config          import DetectorConfig
-from state           import DetectorState
-from flow_map        import FlowMap
-from tracker         import YoloTracker
-from judge           import WrongWayJudge
-from id_manager      import IDManager
-from camera_switch   import CameraSwitchDetector
-from traffic_analyzer import TrafficAnalyzer, CongestionPredictor
+from detector_modules.config          import DetectorConfig
+from detector_modules.state           import DetectorState
+from detector_modules.flow_map        import FlowMap
+from detector_modules.tracker         import YoloTracker
+from detector_modules.judge           import WrongWayJudge
+from detector_modules.id_manager      import IDManager
+from detector_modules.camera_switch   import CameraSwitchDetector
+from detector_modules.traffic_analyzer import TrafficAnalyzer, CongestionPredictor
 
 # GRU: PyTorch 없는 환경에서도 동작하도록 try/except
 try:
-    from gru_module import GRUModule
+    from detector_modules.gru_module import GRUModule
     _GRU_AVAILABLE = True
 except ImportError:
     _GRU_AVAILABLE = False
