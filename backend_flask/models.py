@@ -86,6 +86,16 @@ class ManualResult(db.Model):
     memo      = db.Column(db.Text, nullable=True)
 
 
+class MonitoringAction(db.Model):
+    """교통 모니터링 팀 — 관제사 대응 조치 기록"""
+    __tablename__ = 'monitoring_actions'
+    id          = db.Column(db.Integer, primary_key=True)
+    camera_id   = db.Column(db.String(64),  nullable=False)
+    action_type = db.Column(db.String(64),  nullable=False)   # VSL_DOWN, VMS_SLOW 등
+    action_at   = db.Column(db.DateTime,    default=datetime.utcnow)
+    acted_by    = db.Column(db.String(64),  nullable=True)    # 관리자 이름
+
+
 class PlateResult(db.Model):
     """번호판 인식 결과 저장"""
     __tablename__ = 'plate_results'
