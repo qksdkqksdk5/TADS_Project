@@ -42,7 +42,7 @@ export function useSoundAlert(soundOn) {
   const playAlert = useCallback((level) => {
     if (level === 'SLOW') {
       playBeep(440, 0.4);
-    } else if (level === 'CONGESTED') {
+    } else if (level === 'CONGESTED' || level === 'JAM') {
       playBeep(880, 0.3);
       setTimeout(() => playBeep(880, 0.3), 420);
     }

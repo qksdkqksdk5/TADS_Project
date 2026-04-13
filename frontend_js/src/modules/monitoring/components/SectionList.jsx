@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchItsCctv, startSegment, stopSegment } from '../api';
 
-const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444' };
-const LEVEL_LABEL = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체' };
+const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
+const LEVEL_LABEL = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체', JAM: '정체' };
 
 const ROADS = [
   { key: 'gyeongbu',  label: '경부' },
@@ -86,7 +86,7 @@ export default function SectionList({ host, cameras, selectedId, onSelect, onVie
 
   // 현재 모니터링 중인 카메라 목록 (cameras prop에서 필터)
   const monitoringList = Object.values(cameras).sort((a, b) => {
-    const order = { CONGESTED: 0, SLOW: 1, SMOOTH: 2 };
+    const order = { CONGESTED: 0, JAM: 0, SLOW: 1, SMOOTH: 2 };
     return (order[a.level] ?? 3) - (order[b.level] ?? 3);
   });
 
@@ -278,7 +278,14 @@ function MonitoringItem({ cam, selected, onSelect }) {
 function ItsCctvItem({ cam, isMonitoring, monData, onView }) {
   let statusEl = null;
   if (isMonitoring && monData) {
-    if (monData.is_learning || monData.relearning) {
+    if (monData.waiting_stable) {
+      statusEl = (
+        <div style={{ fontSize: '9px', color: '#f97316', marginTop: '1px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+          <span style={{ display: 'inline-block', animation: 'spin 1.2s linear infinite' }}>⟳</span>
+          안정 대기중...
+        </div>
+      );
+    } else if (monData.is_learning || monData.relearning) {
       const prog = monData.learning_progress ?? 0;
       const tot  = monData.learning_total    ?? 0;
       statusEl = (
