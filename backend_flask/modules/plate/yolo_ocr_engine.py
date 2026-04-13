@@ -102,7 +102,7 @@ def ocr_worker():
             # results = future.result()
             # raw_text = _parse_ocr_result(results, ocr_model.names)
 
-            results = ocr_model.predict(plate_img, conf=0.65, imgsz=640, verbose=False)
+            results = ocr_model.predict(plate_img, conf=0.66, imgsz=640, verbose=False)
             raw_text = _parse_ocr_result(results, ocr_model.names)
 
             # 3. 텍스트 정제 (한글·숫자만)
