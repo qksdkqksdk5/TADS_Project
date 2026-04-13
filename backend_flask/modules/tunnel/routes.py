@@ -60,7 +60,7 @@ def get_status():
 BASE_DIR = os.path.dirname(__file__)
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-API_KEY = os.getenv("ITS_API_KEY")
+ITS_API_KEY = os.getenv('ITS_API_KEY', '8fc75e2a3b1c413f8111579275a4a6fa')
 
 
 def get_cctv_list():
@@ -115,7 +115,7 @@ model = YOLO(MODEL_PATH)
 def generate_frames():
 
     # CCTV주소 직접 입력 (광암터널 퇴계원 2 )
-    CCTV_URL = "http://cctvsec.ktict.co.kr/8558/f8nJL8ttCeYmCrlxBWHslAMilT4VP5bxaW/27sHCtQavlUnIWSaL1ONOyUk0mo51kSnjVSr4rxcH4N9Q/VMl+c5TtJ4AZuXNtp9SBqIeLlU="
+    CCTV_URL = "http://cctvsec.ktict.co.kr/8558/KSrxjYDGHtixpy78e4wH21YWQk9pwDzl+1Cqx0QFYpnj/hzM834Ncc4Rm7qddnFA8ACGV1yrCyOq6sNHw5I52ik2p7kq06C8XbjOh4f9lc4="
     print("🎥 CCTV 연결:", CCTV_URL)
 
     cap = cv2.VideoCapture(CCTV_URL)
