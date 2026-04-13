@@ -1,50 +1,75 @@
 /* eslint-disable */
 // src/modules/tunnel/index.jsx
-import { useState } from 'react';
-import axios from 'axios';
+// 역할: 터널 탭 UI + 상태 모니터링 + 이벤트 로그
+// 탭 라우팅/사이드바는 dashboard/index.jsx가 담당
+
+/* eslint-disable */
+// src/modules/tunnel/index.jsx
+
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+import VideoPanel from "./components/VideoPanel";
+import StatusPanel from "./components/StatusPanel";
+import EventLog from "./components/EventLog";
+import SpeedChart from "./components/SpeedChart";
+import DwellChart from "./components/DwellChart";
 
 export default function TunnelModule({ host }) {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const BASE = `http://${host || window.location.hostname}:5000/api/tunnel`;
 
-  const checkHealth = async () => {
-    setLoading(true);
-    setStatus(null);
-    try {
-      const res = await axios.get(`http://${host || window.location.hostname}:5000/api/tunnel/health`);
-      setStatus(res.data.status === 'ok' ? 'ok' : 'error');
-    } catch {
-      setStatus('error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [data, setData] = useState({
+    state: "NORMAL",
+    avg_speed: 0,
+    vehicles: [],
+    dwell_times: {},
+    vehicle_count: 0,
+    events: []
+  });
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await axios.get(`${BASE}/status`);
+        setData(res.data);
+      } catch (e) {
+        console.log(e);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div style={{ flex: 1, padding: '32px', background: '#0f0f1a', minHeight: '100vh', color: '#e0e0ff' }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto', border: '1px dashed #2d4d3d', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌉</div>
-        <h1 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '8px', color: '#fff' }}>스마트 터널 시스템</h1>
-        <p style={{ color: '#406050', fontSize: '14px', marginBottom: '32px' }}>이 영역을 개발해주세요</p>
+    <div style={{ padding: 20, background: "#0f0f1a", minHeight: "100vh", color: "#fff" }}>
+      
+      <h2>🚇 스마트 터널 시스템</h2>
 
-        <div style={{ marginBottom: '32px' }}>
-          <button onClick={checkHealth} disabled={loading} style={{ background: loading ? '#2a2a4a' : '#22c55e22', border: '1px solid #22c55e', color: loading ? '#6060a0' : '#22c55e', padding: '10px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer' }}>
-            {loading ? '확인 중...' : '🔌 백엔드 연결 확인'}
-          </button>
-          {status === 'ok'    && <div style={{ marginTop: '12px', color: '#22c55e', fontSize: '13px', fontWeight: 600 }}>✅ 연결 성공! <code style={{ color: '#86efac' }}>/api/tunnel/health</code> 응답 OK</div>}
-          {status === 'error' && <div style={{ marginTop: '12px', color: '#f87171', fontSize: '13px', fontWeight: 600 }}>❌ 연결 실패 — 백엔드 서버가 실행 중인지 확인하세요</div>}
+      {/* 🔥 메인 GRID */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "2fr 1fr",
+        gridTemplateRows: "auto 300px",
+        gap: 20
+      }}>
+
+        {/* 📺 CCTV */}
+        <div style={{ gridRow: "1 / 2" }}>
+          <VideoPanel host={host} />
         </div>
 
-        <div style={{ background: '#1a1a2e', borderRadius: '8px', padding: '24px', textAlign: 'left', fontSize: '13px', color: '#8080b0' }}>
-          <p style={{ marginBottom: '8px', color: '#a0a0d0', fontWeight: 600 }}>📌 개발 가이드</p>
-          <ul style={{ paddingLeft: '20px', lineHeight: '2' }}>
-            <li>백엔드: <code>backend_flask/modules/tunnel/</code> 폴더에 라우트 추가</li>
-            <li>프론트: 이 파일(<code>src/modules/tunnel/index.jsx</code>)에 UI 개발</li>
-            <li>API 연동: <code>src/modules/tunnel/api.js</code> 파일 생성 후 axios 호출</li>
-            <li>사이드바: <code>src/shared/components/Sidebar.jsx</code> — 이미 등록됨 ✅</li>
-            <li>라우팅: <code>src/modules/traffic/index.jsx</code> — 이미 등록됨 ✅</li>
-          </ul>
+        {/* 🚦 상태 + 로그 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <StatusPanel state={data.state} avgSpeed={data.avg_speed} />
+          <EventLog events={data.events} />
         </div>
+
+        {/* 📊 하단 그래프 */}
+        <div style={{ gridColumn: "1 / 3", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <SpeedChart vehicles={data.vehicles} count={data.vehicle_count} />
+          <DwellChart dwell={data.dwell_times} />
+        </div>
+
       </div>
     </div>
   );
