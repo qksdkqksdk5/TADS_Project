@@ -6,8 +6,8 @@ import axios from 'axios';
 const POLL_MS      = 500;
 const NORMAL_COLOR = '#22c55e';
 const WRONG_COLOR  = '#ef4444';
-const LEVEL_LABEL  = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체' };
-const LEVEL_COLOR  = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444' };
+const LEVEL_LABEL  = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체', JAM: '정체' };
+const LEVEL_COLOR  = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
 export default function CctvPlayer({ host, cameraId, cameraData, itsCctv }) {
@@ -152,7 +152,7 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  const { is_learning, relearning, learning_progress, learning_total, level, jam_score } =
+  const { is_learning, relearning, waiting_stable, learning_progress, learning_total, level, jam_score } =
     cameraData || {};
 
   return (
@@ -175,7 +175,7 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
       )}
       {!imgError && (
         <StatusOverlay
-          is_learning={is_learning} relearning={relearning}
+          is_learning={is_learning} relearning={relearning} waiting_stable={waiting_stable}
           learning_progress={learning_progress} learning_total={learning_total}
           level={level} jam_score={jam_score}
         />
@@ -185,7 +185,10 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
 }
 
 // ── 상태 오버레이 ─────────────────────────────────────────────
-function StatusOverlay({ is_learning, relearning, learning_progress, learning_total, level, jam_score }) {
+function StatusOverlay({ is_learning, relearning, waiting_stable, learning_progress, learning_total, level, jam_score }) {
+  if (waiting_stable) {
+    return <div style={overlayBase}><span style={{ fontSize: '11px', color: '#f97316', fontWeight: 600 }}>안정 대기중...</span></div>;
+  }
   if (is_learning) {
     const pct = learning_total
       ? Math.min(Math.round((learning_progress / learning_total) * 100), 100) : 0;

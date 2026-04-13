@@ -62,7 +62,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
       ]);
       setUnresolvedCounts(prev => ({
         ...prev,
-        congested: data.level === 'CONGESTED' ? prev.congested + 1 : prev.congested,
+        congested: (data.level === 'CONGESTED' || data.level === 'JAM') ? prev.congested + 1 : prev.congested,
         slow:      data.level === 'SLOW'      ? prev.slow      + 1 : prev.slow,
       }));
       callbackRef.current?.onAnomalyAlert?.(data);
@@ -93,7 +93,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
       });
       setUnresolvedCounts(prev => ({
         ...prev,
-        congested: Math.max(0, prev.congested - (data.level === 'CONGESTED' ? 1 : 0)),
+        congested: Math.max(0, prev.congested - ((data.level === 'CONGESTED' || data.level === 'JAM') ? 1 : 0)),
         slow:      Math.max(0, prev.slow      - (data.level === 'SLOW'      ? 1 : 0)),
       }));
       callbackRef.current?.onResolved?.(data);

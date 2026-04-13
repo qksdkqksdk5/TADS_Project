@@ -105,7 +105,8 @@ class MonitoringDetector(BaseDetector):
         self.state  = DetectorState()
         self.flow   = FlowMap(self.cfg.grid_size, self.cfg.alpha, self.cfg.min_samples)
         self.tracker = YoloTracker(
-            self.cfg.model_path, self.cfg.conf, self.cfg.target_classes
+            self.cfg.model_path, self.cfg.conf, self.cfg.target_classes,
+            night_enhance=getattr(self.cfg, 'night_enhance', True)
         )
         # ── YOLO 가중치 공유 ────────────────────────────────────────────────
         global _SHARED_YOLO_WEIGHTS, _SHARED_YOLO_LOCK
@@ -244,7 +245,7 @@ class MonitoringDetector(BaseDetector):
         """두 방향 중 더 나쁜 레벨을 반환한다."""
         if not self.traffic_analyzer_a or not self.traffic_analyzer_b:
             return "SMOOTH"
-        order = {"SMOOTH": 0, "SLOW": 1, "CONGESTED": 2}
+        order = {"SMOOTH": 0, "SLOW": 1, "JAM": 2}
         la = self.traffic_analyzer_a.get_congestion_level()
         lb = self.traffic_analyzer_b.get_congestion_level()
         return la if order.get(la, 0) >= order.get(lb, 0) else lb
@@ -271,6 +272,8 @@ class MonitoringDetector(BaseDetector):
             elapsed  = st.frame_num - st.relearn_start_frame
             progress = min(elapsed, cfg.relearn_frames)
             total    = cfg.relearn_frames
+        elif st.waiting_stable:
+            progress = total = 0   # 안정 대기 중은 progress 없음
         else:
             progress = total = 0
 
@@ -305,6 +308,7 @@ class MonitoringDetector(BaseDetector):
             ), 1),
             "is_learning":       st.is_learning,
             "relearning":        st.relearning,
+            "waiting_stable":    st.waiting_stable,
             "learning_progress": progress,
             "learning_total":    total,
         }
@@ -319,7 +323,7 @@ class MonitoringDetector(BaseDetector):
                 "jam_score":  payload["jam_score"],
                 "timestamp":  datetime.utcnow().isoformat(),
             })
-            if level in ("SLOW", "CONGESTED"):
+            if level in ("SLOW", "JAM"):
                 self.socketio.emit('anomaly_alert', {
                     "camera_id":   self.camera_id,
                     "event_type":  "CONGESTION",
@@ -338,6 +342,7 @@ class MonitoringDetector(BaseDetector):
             "is_running":        self.is_running,
             "is_learning":       st.is_learning,
             "relearning":        st.relearning,
+            "waiting_stable":    st.waiting_stable,
             "learning_progress": f"{progress} / {total}" if total else "완료",
             "frame_num":         st.frame_num,
             "jam_score_a":       round(jam_a, 3),
@@ -421,6 +426,13 @@ class MonitoringDetector(BaseDetector):
         _relearn_smooth_80 = False
         _relearn_smooth_95 = False
 
+        # ── 프레임 스킵 감지 변수 ────────────────────────────────────────
+        _proc_fps_samples = []
+        _proc_fps_win     = 30
+        _last_frame_time  = time.time()
+        _base_jump_px     = getattr(cfg, 'frame_skip_jump_px', 80.0)
+        _jump_thr_dynamic = _base_jump_px
+
         print(f"📚 [{self.camera_id}] 학습 모드 시작 (목표: {cfg.learning_frames}프레임 ≈ {cfg.learning_frames/fps:.0f}초)")
 
         # ── 메인 루프 ────────────────────────────────────────────────
@@ -436,6 +448,18 @@ class MonitoringDetector(BaseDetector):
 
             st.frame_num += 1
 
+            # ── 실제 처리 fps 측정 및 jump 임계값 동적 갱신 ────────────
+            _now = time.time()
+            _proc_fps_samples.append(_now - _last_frame_time)
+            _last_frame_time = _now
+            if len(_proc_fps_samples) > _proc_fps_win:
+                _proc_fps_samples.pop(0)
+            if len(_proc_fps_samples) >= 5:
+                _avg_interval = sum(_proc_fps_samples) / len(_proc_fps_samples)
+                _proc_fps = 1.0 / max(_avg_interval, 0.01)
+                _scale = max(1.0, fps / max(_proc_fps, 1.0))
+                _jump_thr_dynamic = _base_jump_px * min(_scale, 5.0)
+
             # YOLO+ByteTrack: 추론도 C 익스텐션 블로킹 → OS 스레드로 실행
             tracks = _FRAME_POOL.apply(self.tracker.track, (frame,))
             active_ids = {t["id"] for t in tracks}
@@ -444,21 +468,92 @@ class MonitoringDetector(BaseDetector):
                 if t["id"] not in st.first_seen_frame:
                     st.first_seen_frame[t["id"]] = st.frame_num
 
-            # ── 카메라 전환 감지 ──
-            if not st.is_learning and not st.relearning:
-                if self.switch.check(frame, st.frame_num, st.cooldown_until):
-                    st.reset_for_relearn()
-                    self.flow.reset()
-                    self.traffic_analyzer_a.congestion_judge.reset()
-                    self.traffic_analyzer_b.congestion_judge.reset()
-                    if self.gru_module_a:
-                        self.gru_module_a.reset()
-                    if self.gru_module_b:
-                        self.gru_module_b.reset()
-                    self._ref_direction = None
-                    self._track_direction.clear()
-                    _relearn_smooth_80 = _relearn_smooth_95 = False
-                    print(f"🔄 [{self.camera_id}] 카메라 전환 감지 → 재학습 시작")
+            # ── 프레임 스킵(신호 끊김) 감지 ──────────────────────────────
+            # HLS 스트림 끊김 시 모든 차량이 동시에 큰 변위를 가짐
+            # → 절반 이상이 jump_px 초과 시 해당 프레임의 궤적·학습·판정 전부 스킵
+            _jump_thr   = _jump_thr_dynamic
+            _jump_ratio = getattr(cfg, 'frame_skip_ratio', 0.5)
+            _jump_count = 0
+            _jump_total = 0
+            for _t in tracks:
+                _tid = _t["id"]
+                _traj = st.trajectories.get(_tid)
+                if _traj:
+                    _dx = _t["cx"] - _traj[-1][0]
+                    _dy = _t["cy"] - _traj[-1][1]
+                    _dist = (_dx**2 + _dy**2) ** 0.5
+                    _jump_total += 1
+                    if _dist > _jump_thr:
+                        _jump_count += 1
+            _is_frame_skip = (
+                _jump_total >= 2
+                and _jump_count / _jump_total >= _jump_ratio
+            )
+            if _is_frame_skip:
+                print(f"[{self.camera_id}] ⚠️ 프레임 스킵 감지 ({_jump_count}/{_jump_total}대 jump) → 스킵")
+                for _t in tracks:
+                    _tid = _t["id"]
+                    if st.trajectories[_tid]:
+                        _cur_pos = (_t["cx"], _t["cy"])
+                        st.trajectories[_tid] = [_cur_pos] * len(st.trajectories[_tid])
+                    st.last_velocity.pop(_tid, None)
+                    st.wrong_way_count[_tid] = 0
+                    st.direction_change_frame[_tid] = st.frame_num
+                    st.wrong_way_ids.discard(_tid)
+
+            # ── 카메라 전환 감지 (3-state 상태 머신) ──────────────────────
+            # 탐지 중 → (전환 감지) → waiting_stable → (안정 확인) → 재학습 → 탐지 중
+            # 재학습 중 또 흔들리면 → waiting_stable 복귀 (잘못된 흐름 학습 방지)
+            _stability_required_frames = int(getattr(cfg, 'stability_required_sec', 4.0) * fps)
+            _stability_thr = getattr(cfg, 'stability_diff_threshold', 8.0)
+            _relearn_abort = getattr(cfg, 'relearn_abort_diff', 15.0)
+
+            if not st.is_learning:
+                # (A) 탐지 중: 전환 감지 → waiting_stable 진입
+                if not st.relearning and not st.waiting_stable:
+                    if self.switch.check(frame, st.frame_num, st.cooldown_until):
+                        print(f"📷 [{self.camera_id}] 카메라 전환 감지 → 화면 안정 대기 중...")
+                        st.waiting_stable = True
+                        st.stable_since_frame = st.frame_num
+                        if self.gru_module_a:
+                            self.gru_module_a.reset()
+                        if self.gru_module_b:
+                            self.gru_module_b.reset()
+                        self._track_direction.clear()
+
+                # (B) 안정 대기 중: diff 모니터링 → 안정되면 재학습 시작
+                elif st.waiting_stable:
+                    self.switch.check(frame, st.frame_num, st.cooldown_until)
+                    _cur_diff = self.switch.last_adj_diff
+                    if _cur_diff > _stability_thr:
+                        st.stable_since_frame = st.frame_num   # 아직 불안정 → 타이머 리셋
+                    else:
+                        stable_frames = st.frame_num - st.stable_since_frame
+                        if stable_frames >= _stability_required_frames:
+                            print(f"✅ [{self.camera_id}] 화면 안정 확인 ({stable_frames}프레임) → 재학습 시작")
+                            st.waiting_stable = False
+                            st.reset_for_relearn()
+                            self.flow.reset()
+                            self.traffic_analyzer_a.congestion_judge.reset()
+                            self.traffic_analyzer_b.congestion_judge.reset()
+                            self._ref_direction = None
+                            _relearn_smooth_80 = _relearn_smooth_95 = False
+
+                # (C) 재학습 중: 또 흔들리면 중단 → 대기 복귀
+                elif st.relearning:
+                    self.switch.check(frame, st.frame_num, st.cooldown_until)
+                    _cur_diff = self.switch.last_adj_diff
+                    if _cur_diff > _relearn_abort:
+                        print(f"⚠️ [{self.camera_id}] 재학습 중 화면 불안정 (diff={_cur_diff:.1f}) → 중단, 안정 대기 복귀")
+                        st.relearning = False
+                        st.waiting_stable = True
+                        st.stable_since_frame = st.frame_num
+                        self.flow.reset()
+                        _relearn_smooth_80 = _relearn_smooth_95 = False
+                        if self.gru_module_a:
+                            self.gru_module_a.reset()
+                        if self.gru_module_b:
+                            self.gru_module_b.reset()
 
             # ── 초기 학습 완료 처리 ──
             if st.is_learning:
@@ -516,7 +611,7 @@ class MonitoringDetector(BaseDetector):
                 last_footpoints[tid] = (fx, fy)
 
                 # 방향 분류 (학습 완료 후, flow_map 기반 fallback)
-                if (not st.is_learning and not st.relearning
+                if (not st.is_learning and not st.relearning and not st.waiting_stable
                         and self._ref_direction is not None):
                     traj_cur = st.trajectories[tid]
                     win      = min(cfg.velocity_window, len(traj_cur))
@@ -536,12 +631,26 @@ class MonitoringDetector(BaseDetector):
                         self._track_direction[tid] = self._classify_direction(fx, fy)
 
                 # ID 재매칭 (탐지 모드에서만)
-                if not st.is_learning and not st.relearning:
+                if not st.is_learning and not st.relearning and not st.waiting_stable:
                     self.idm.check_reappear(tid, cx, cy)
 
-                # 궤적 갱신 (3프레임 이상 된 트랙만, EMA 스무딩 적용)
+                # ── 개별 차량 단독 jump 체크 (프레임 스킵 미감지 시에도 1대가 튀는 경우) ──
+                _solo_jump = False
+                if st.trajectories[tid]:
+                    _prev_fx, _prev_fy = st.trajectories[tid][-1]
+                    _solo_dist = ((fx - _prev_fx)**2 + (fy - _prev_fy)**2) ** 0.5
+                    if _solo_dist > _jump_thr * 1.5:   # 단독 jump는 더 엄격한 기준
+                        _solo_jump = True
+                        _cur_pos = (fx, fy)
+                        st.trajectories[tid] = [_cur_pos] * len(st.trajectories[tid])
+                        st.last_velocity.pop(tid, None)
+                        st.wrong_way_count[tid] = 0
+                        st.direction_change_frame[tid] = st.frame_num
+                        st.wrong_way_ids.discard(tid)
+
+                # 궤적 갱신 (3프레임 이상 된 트랙만, EMA 스무딩 적용, 스킵 시 건너뜀)
                 age = st.frame_num - st.first_seen_frame.get(tid, st.frame_num)
-                if age >= 3:
+                if age >= 3 and not _is_frame_skip and not _solo_jump:
                     traj_hist = st.trajectories[tid]
                     if traj_hist:
                         px, py = traj_hist[-1]
@@ -580,7 +689,9 @@ class MonitoringDetector(BaseDetector):
                         speed    = mag
                         speeds[tid] = speed
 
-                        if st.is_learning or st.relearning:
+                        if _is_frame_skip or _solo_jump:
+                            pass   # 프레임 스킵·단독 jump → 학습/판정 스킵
+                        elif st.is_learning or st.relearning:
                             # FlowMap 학습
                             learn_min_mag = max(1.0, bh * cfg.norm_learn_threshold)
                             self.flow.learn_step(
@@ -588,8 +699,8 @@ class MonitoringDetector(BaseDetector):
                                 traj[-cfg.velocity_window][1],
                                 fx, fy, learn_min_mag
                             )
-                        else:
-                            # 역주행 판정
+                        elif not st.waiting_stable:
+                            # 역주행 판정 (탐지 모드, 안정 대기 중이 아닐 때만)
                             bbox_h = max(y2 - y1, 1)
                             is_wrong, _, _ = self.judge.check(
                                 tid, traj, ndx, ndy, mag, cy, bbox_h
@@ -637,7 +748,7 @@ class MonitoringDetector(BaseDetector):
 
             # ── 방향별 TrafficAnalyzer 업데이트 (탐지 모드에서만) ──
             if (self.traffic_analyzer_a is not None
-                    and not st.is_learning and not st.relearning):
+                    and not st.is_learning and not st.relearning and not st.waiting_stable):
                 tracks_a, speeds_a = [], {}
                 tracks_b, speeds_b = [], {}
                 for t in tracks:
@@ -674,6 +785,11 @@ class MonitoringDetector(BaseDetector):
                     elapsed = st.frame_num - st.relearn_start_frame
                     print(f"[{self.camera_id}] f={st.frame_num} | "
                           f"재보정중({elapsed}/{cfg.relearn_frames}) | "
+                          f"차량:{len(tracks)}대")
+                elif st.waiting_stable:
+                    stable_elapsed = st.frame_num - st.stable_since_frame
+                    print(f"[{self.camera_id}] f={st.frame_num} | "
+                          f"안정대기중(diff={self.switch.last_adj_diff:.1f}, {stable_elapsed}f) | "
                           f"차량:{len(tracks)}대")
                 else:
                     ja = self.traffic_analyzer_a.get_jam_score()
