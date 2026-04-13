@@ -64,7 +64,7 @@ export default function MonitoringModule({ host, isMobile }) {
     useMonitoringSocket(host, {
       onAnomalyAlert: useCallback((data) => {
         playAlert(data.level);
-        if (data.level === 'CONGESTED') {
+        if (data.level === 'CONGESTED' || data.level === 'JAM') {
           setFlashActive(true);
           setTimeout(() => setFlashActive(false), 2500);
         }
@@ -83,7 +83,7 @@ export default function MonitoringModule({ host, isMobile }) {
   // ── CONGESTED 5분+ → 30초 반복 경보 ──────────────────────
   useEffect(() => {
     const hasProlonged = Object.values(cameras).some(
-      c => c.level === 'CONGESTED' && (c.duration_sec ?? 0) > 300
+      c => (c.level === 'CONGESTED' || c.level === 'JAM') && (c.duration_sec ?? 0) > 300
     );
     if (hasProlonged) startCongestionRepeat();
     else              stopCongestionRepeat();
