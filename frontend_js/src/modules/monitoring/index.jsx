@@ -1,51 +1,275 @@
 /* eslint-disable */
 // src/modules/monitoring/index.jsx
-import { useState } from 'react';
-import axios from 'axios';
+import { useState, useEffect, useCallback } from 'react';
+import { useMonitoringSocket } from './hooks/useMonitoringSocket';
+import { useSoundAlert }       from './hooks/useSoundAlert';
+import SectionList   from './components/SectionList';
+import MetricsPanel  from './components/MetricsPanel';
+import MonitoringMap from './components/MonitoringMap';
+import CctvPlayer    from './components/CctvPlayer';
+import EventLog      from './components/EventLog';
+import ActionPanel   from './components/ActionPanel';
+import { fetchItsCctv } from './api';
 
-export default function MonitoringModule({ host }) {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const checkHealth = async () => {
-    setLoading(true);
-    setStatus(null);
-    try {
-      const res = await axios.get(`http://${host || window.location.hostname}:5000/api/monitoring/health`);
-      setStatus(res.data.status === 'ok' ? 'ok' : 'error');
-    } catch {
-      setStatus('error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+// ── 시계 ─────────────────────────────────────────────────────
+function Clock() {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
   return (
-    <div style={{ flex: 1, padding: '32px', background: '#0f0f1a', minHeight: '100vh', color: '#e0e0ff' }}>
-      <div style={{ maxWidth: '900px', margin: '0 auto', border: '1px dashed #2d4d3d', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚦</div>
-        <h1 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '8px', color: '#fff' }}>교통 정체 흐름</h1>
-        <p style={{ color: '#406050', fontSize: '14px', marginBottom: '32px' }}>이 영역을 개발해주세요</p>
+    <span>
+      {time.toLocaleTimeString('ko-KR', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      })}
+    </span>
+  );
+}
 
-        <div style={{ marginBottom: '32px' }}>
-          <button onClick={checkHealth} disabled={loading} style={{ background: loading ? '#2a2a4a' : '#22c55e22', border: '1px solid #22c55e', color: loading ? '#6060a0' : '#22c55e', padding: '10px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer' }}>
-            {loading ? '확인 중...' : '🔌 백엔드 연결 확인'}
-          </button>
-          {status === 'ok'    && <div style={{ marginTop: '12px', color: '#22c55e', fontSize: '13px', fontWeight: 600 }}>✅ 연결 성공! <code style={{ color: '#86efac' }}>/api/monitoring/health</code> 응답 OK</div>}
-          {status === 'error' && <div style={{ marginTop: '12px', color: '#f87171', fontSize: '13px', fontWeight: 600 }}>❌ 연결 실패 — 백엔드 서버가 실행 중인지 확인하세요</div>}
-        </div>
-
-        <div style={{ background: '#1a1a2e', borderRadius: '8px', padding: '24px', textAlign: 'left', fontSize: '13px', color: '#8080b0' }}>
-          <p style={{ marginBottom: '8px', color: '#a0a0d0', fontWeight: 600 }}>📌 개발 가이드</p>
-          <ul style={{ paddingLeft: '20px', lineHeight: '2' }}>
-            <li>백엔드: <code>backend_flask/modules/monitoring/</code> 폴더에 라우트 추가</li>
-            <li>프론트: 이 파일(<code>src/modules/monitoring/index.jsx</code>)에 UI 개발</li>
-            <li>API 연동: <code>src/modules/monitoring/api.js</code> 파일 생성 후 axios 호출</li>
-            <li>사이드바: <code>src/shared/components/Sidebar.jsx</code> — 이미 등록됨 ✅</li>
-            <li>라우팅: <code>src/modules/traffic/index.jsx</code> — 이미 등록됨 ✅</li>
-          </ul>
-        </div>
-      </div>
+// ── LIVE 점 ───────────────────────────────────────────────────
+function LiveDot({ connected }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+      <span style={{
+        width: '7px', height: '7px', borderRadius: '50%',
+        background: connected ? '#22c55e' : '#475569',
+        display: 'inline-block',
+        animation: connected ? 'pulse-dot 1.5s infinite' : 'none',
+      }} />
+      <span style={{ fontSize: '11px', fontWeight: 600, color: connected ? '#22c55e' : '#475569' }}>
+        {connected ? 'LIVE' : 'OFFLINE'}
+      </span>
     </div>
   );
 }
+
+// ── 메인 컴포넌트 ─────────────────────────────────────────────
+export default function MonitoringModule({ host, isMobile }) {
+  const [selectedId,    setSelectedId]    = useState(null);
+  const [soundOn,       setSoundOn]       = useState(true);
+  const [flashActive,   setFlashActive]   = useState(false);
+  const [selectedItsCctv, setSelectedItsCctv] = useState(null);  // ITS 보기 전용 CCTV
+  const [itsCctvList,   setItsCctvList]   = useState([]);         // 지도에 표시할 ITS 마커 목록
+
+  // ── 사운드 훅 ─────────────────────────────────────────────
+  const {
+    playAlert, playResolved,
+    startWrongwayAlarm, stopWrongwayAlarm,
+    startCongestionRepeat, stopCongestionRepeat,
+  } = useSoundAlert(soundOn);
+
+  // ── 소켓 훅 (콜백 연결) ───────────────────────────────────
+  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent } =
+    useMonitoringSocket(host, {
+      onAnomalyAlert: useCallback((data) => {
+        playAlert(data.level);
+        if (data.level === 'CONGESTED') {
+          setFlashActive(true);
+          setTimeout(() => setFlashActive(false), 2500);
+        }
+      }, [playAlert]),
+
+      onWrongwayAlert: useCallback(() => {
+        startWrongwayAlarm();
+      }, [startWrongwayAlarm]),
+
+      onResolved: useCallback(() => {
+        playResolved();
+        stopCongestionRepeat();
+      }, [playResolved, stopCongestionRepeat]),
+    });
+
+  // ── CONGESTED 5분+ → 30초 반복 경보 ──────────────────────
+  useEffect(() => {
+    const hasProlonged = Object.values(cameras).some(
+      c => c.level === 'CONGESTED' && (c.duration_sec ?? 0) > 300
+    );
+    if (hasProlonged) startCongestionRepeat();
+    else              stopCongestionRepeat();
+  }, [cameras, startCongestionRepeat, stopCongestionRepeat]);
+
+  // ── ITS CCTV 보기 핸들러 ─────────────────────────────────
+  const handleViewItsCctv = useCallback((cam) => {
+    setSelectedItsCctv(cam);
+    setSelectedId(null);   // 모니터링 카메라 선택 해제
+  }, []);
+
+  // ITS CCTV 탭 변경 시 지도 마커 목록 갱신
+  const handleItsCctvListChange = useCallback((list) => {
+    setItsCctvList(list);
+  }, []);
+
+  // ── 카메라 선택 ───────────────────────────────────────────
+  const handleSelect = (camera_id) => {
+    setSelectedId(camera_id);
+    setSelectedItsCctv(null);  // 모니터링 카메라 선택 시 ITS 보기 해제
+    emitSelectCamera(camera_id);
+  };
+
+  // 첫 카메라 수신 시 자동 선택
+  useEffect(() => {
+    if (!selectedId && Object.keys(cameras).length > 0) {
+      setSelectedId(Object.keys(cameras)[0]);
+    }
+  }, [cameras, selectedId]);
+
+  // ── 역주행 경보 해제 ──────────────────────────────────────
+  const handleDismissWrongway = useCallback((eventId) => {
+    stopWrongwayAlarm();
+    resolveEvent(eventId);
+    setUnresolvedCounts_wrongway(); // 카운트 감소는 resolveEvent로 처리됨
+  }, [stopWrongwayAlarm, resolveEvent]);
+
+  // unresolvedCounts.wrongway 감소 처리
+  const [wrongwayAdj, setWrongwayAdj] = useState(0);
+  const handleDismissWrongwayFull = useCallback((eventId) => {
+    stopWrongwayAlarm();
+    resolveEvent(eventId);
+    setWrongwayAdj(v => v + 1);
+  }, [stopWrongwayAlarm, resolveEvent]);
+
+  const selectedData = selectedId ? cameras[selectedId] : null;
+
+  const displayCounts = {
+    congested: unresolvedCounts.congested,
+    slow:      unresolvedCounts.slow,
+    wrongway:  Math.max(0, unresolvedCounts.wrongway - wrongwayAdj),
+  };
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      height: '100%', background: '#020617', overflow: 'hidden',
+      // CONGESTED 감지 시 테두리 빨강 flash
+      boxShadow: flashActive ? 'inset 0 0 0 3px #ef4444' : 'inset 0 0 0 3px transparent',
+      transition: 'box-shadow 0.3s ease',
+    }}>
+
+      {/* ── 헤더 바 ─────────────────────────────────────────── */}
+      <div style={styles.header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontWeight: 700, fontSize: '14px', color: '#fff' }}>
+            🚦 교통 정체 흐름
+          </span>
+          <LiveDot connected={connected} />
+          <span style={{ fontSize: '12px', color: '#475569' }}><Clock /></span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px' }}>
+            <span style={{ color: '#ef4444' }}>🔴 {displayCounts.congested}건</span>
+            <span style={{ color: '#eab308' }}>🟡 {displayCounts.slow}건</span>
+            <span style={{ color: '#f97316' }}>⚠️ {displayCounts.wrongway}건</span>
+          </div>
+          <button
+            onClick={() => setSoundOn(v => !v)}
+            style={{
+              background: 'transparent',
+              border: `1px solid ${soundOn ? '#22c55e55' : '#33415588'}`,
+              color: soundOn ? '#22c55e' : '#475569',
+              padding: '3px 10px', borderRadius: '6px',
+              fontSize: '12px', cursor: 'pointer',
+            }}
+          >
+            {soundOn ? '🔔 ON' : '🔕 OFF'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── 바디 (3단 레이아웃) ──────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', gap: '8px', padding: '8px', minHeight: 0 }}>
+
+        {/* LEFT — 구간 목록 */}
+        <div style={{ ...styles.panel, width: isMobile ? '150px' : '200px', flexShrink: 0 }}>
+          <SectionList
+            host={host}
+            cameras={cameras}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+            onViewItsCctv={handleViewItsCctv}
+            onCctvListChange={handleItsCctvListChange}
+          />
+        </div>
+
+        {/* CENTER — 지도 + CCTV */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <MonitoringMap
+              host={host}
+              cameras={cameras}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              onViewItsCctv={handleViewItsCctv}
+              itsCctvList={itsCctvList}
+              selectedItsId={selectedItsCctv?.camera_id}
+            />
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CctvPlayer
+              host={host}
+              cameraId={selectedId}
+              cameraData={selectedData}
+              itsCctv={selectedItsCctv}
+            />
+          </div>
+        </div>
+
+        {/* RIGHT — 지표 패널 + 대응 패널 자리 */}
+        <div style={{ width: isMobile ? '190px' : '250px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <MetricsPanel data={selectedData} />
+          </div>
+          <div style={{ height: '220px', flexShrink: 0 }}>
+            <ActionPanel host={host} cameraId={selectedId} cameraData={selectedData} />
+          </div>
+        </div>
+      </div>
+
+      {/* ── 이벤트 로그 (하단) ──────────────────────────────── */}
+      <div style={{
+        height: '130px', margin: '0 8px 8px',
+        background: '#0f172a', borderRadius: '12px',
+        border: '1px solid #1e293b',
+        display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', flexShrink: 0,
+      }}>
+        <EventLog
+          eventLogs={eventLogs}
+          onSelectCamera={handleSelect}
+          onDismissWrongway={handleDismissWrongwayFull}
+        />
+      </div>
+
+      <style>{`
+        @keyframes pulse-dot {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.3; }
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+const styles = {
+  header: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '10px 14px', background: '#0f172a',
+    borderBottom: '1px solid #1e293b', flexShrink: 0,
+  },
+  panel: {
+    background: '#0f172a', borderRadius: '12px',
+    border: '1px solid #1e293b', overflow: 'hidden',
+    display: 'flex', flexDirection: 'column',
+  },
+  placeholder: {
+    background: '#0f172a', borderRadius: '12px',
+    border: '1px dashed #1e293b',
+    display: 'flex', alignItems: 'center',
+    justifyContent: 'center', flexDirection: 'column', gap: '8px',
+  },
+  placeholderText: { fontSize: '12px', color: '#1e293b' },
+};

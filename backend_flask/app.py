@@ -36,7 +36,8 @@ migrate = Migrate(app, db)
 
 os.makedirs(os.path.join(app.root_path, "static", "captures"), exist_ok=True)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent',
+                    ping_timeout=60, ping_interval=25)
 app.extensions['socketio'] = socketio
 
 # 기존 Blueprint
