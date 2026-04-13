@@ -16,9 +16,15 @@ from datetime import datetime
 from pathlib import Path
 
 # ── final_pj 모듈 경로 등록 ──────────────────────────────────────────────
-_FINAL_PJ_ROOT = r'C:\final_pj'
-_FINAL_PJ_SRC  = r'C:\final_pj\src'
-for _p in (_FINAL_PJ_ROOT, _FINAL_PJ_SRC):
+# _FINAL_PJ_ROOT = r'C:\final_pj'
+# _FINAL_PJ_SRC  = r'C:\final_pj\src'
+
+# monitoring_detector.py 기준: monitoring/
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# detector_modules/
+_MODULES_DIR = os.path.join(_BASE_DIR, 'detector_modules')
+
+for _p in (_BASE_DIR, _MODULES_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -41,7 +47,8 @@ except ImportError:
 from modules.traffic.detectors.base_detector import BaseDetector
 
 # ── 상수 ────────────────────────────────────────────────────────────────
-_YOLO_MODEL    = r'C:\final_pj\runs\yolo11n_v2\weights\best.pt'
+# _YOLO_MODEL    = r'C:\final_pj\runs\yolo11n_v2\weights\best.pt'
+_YOLO_MODEL = os.path.join(_BASE_DIR, 'best.pt')
 _EMIT_INTERVAL = 30   # 30프레임마다 traffic_update emit (약 1초@30fps)
 
 # ── gevent 호환 OS 스레드 풀 ──────────────────────────────────────────────

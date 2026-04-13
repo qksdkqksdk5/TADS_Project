@@ -30,9 +30,6 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 _shared_alpr_model = None
 _alpr_model_lock = threading.Lock()
 
-# lambda 대신 모듈 레벨 executor + 순수 함수 사용
-_yolo_executor = GThreadPoolExecutor(max_workers=1)
-
 
 def get_shared_alpr_model():
     global _shared_alpr_model
@@ -53,12 +50,6 @@ def _yolo_track(model, frame, conf, img_size):
         source=frame, conf=conf,
         persist=True, verbose=False, imgsz=img_size
     )
-
-
-def _run_yolo_in_native_thread(model, frame, conf, img_size):
-    """OpenVINO 추론을 gevent threadpool에서 실행 (Greenlet 블로킹 없이 대기)"""
-    future = _yolo_executor.submit(_yolo_track, model, frame, conf, img_size)
-    return future.result()
 
 
 def process_video():
@@ -123,8 +114,7 @@ def process_video():
             # if frame_count % 2 != 0:
             #     continue
 
-            # results = _run_yolo_in_native_thread(model, frame, CONF, YOLO_IMG_SIZE)
-            results = model.track(frame, conf=CONF, imgsz=YOLO_IMG_SIZE, persist=True, verbose=False)
+            results = model.track(frame, conf=CONF, imgsz=YOLO_IMG_SIZE, persist=True, verbose=False, device='cpu')
             annotated = frame.copy()
 
             if results[0].boxes.id is not None:

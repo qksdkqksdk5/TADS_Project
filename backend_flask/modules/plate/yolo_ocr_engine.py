@@ -25,9 +25,6 @@ RE_WHITE_NORMAL = re.compile(r'(\d{2,3}[가-힣]\d{4})')
 _shared_ocr_model = None
 _ocr_model_lock = threading.Lock()
 
-# gevent 환경용 스레드풀
-_ocr_executor = GThreadPoolExecutor(max_workers=1)
-
 # ── 지역명 메모리 (ID별로 발견된 지역 저장) ──────────────────────────────────
 _region_seen: dict[int, str] = {}
 _region_lock = threading.Lock()
@@ -52,9 +49,6 @@ def detect_plate_color(plate_img):
     mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
     yellow_ratio = (cv2.countNonZero(mask) / (plate_img.shape[0] * plate_img.shape[1])) * 100
     return "yellow" if yellow_ratio > 20 else "white"
-
-def _ocr_predict(model, img):
-    return model.predict(img, conf=0.7, device='cpu', verbose=False)
 
 def _parse_ocr_result(results, model_names: dict) -> str:
     chars_data = []
@@ -100,11 +94,7 @@ def ocr_worker():
             color_type = detect_plate_color(plate_img)
 
             # 2. OCR 예측
-            # future = _ocr_executor.submit(_ocr_predict, ocr_model, plate_img)
-            # results = future.result()
-            # raw_text = _parse_ocr_result(results, ocr_model.names)
-
-            results = ocr_model.predict(plate_img, conf=0.66, imgsz=640, verbose=False)
+            results = ocr_model.predict(plate_img, conf=0.66, imgsz=640, verbose=False, device='cpu')
 
             if len(results) > 0 and len(results[0].boxes) > 0:
                 conf_scores = results[0].boxes.conf.cpu().numpy() # 각 글자의 점수들

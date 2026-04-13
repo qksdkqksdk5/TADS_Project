@@ -7,7 +7,7 @@ import requests
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
 
-ITS_API_KEY = os.getenv('ITS_API_KEY', '22f088a782aa49f6a441b24c2b36d4ec')
+ITS_API_KEY = os.getenv('ITS_API_KEY', '8fc75e2a3b1c413f8111579275a4a6fa')
 ITS_CCTV_URL = 'https://openapi.its.go.kr:9443/cctvInfo'
 OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 
