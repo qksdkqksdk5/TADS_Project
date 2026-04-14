@@ -15,14 +15,21 @@ const ACTION_BUTTONS = {
     { id: 'RAMP_METERING',  label: '램프 미터링 권고' },
     { id: 'PATROL_REQUEST', label: '순찰대 출동 요청' },
   ],
+  JAM: [
+    { id: 'VMS_DETOUR',     label: 'VMS 우회 안내 발령' },
+    { id: 'VSL_DOWN_80_60', label: 'VSL 하향 (80→60 km/h)' },
+    { id: 'RAMP_METERING',  label: '램프 미터링 권고' },
+    { id: 'PATROL_REQUEST', label: '순찰대 출동 요청' },
+  ],
 };
 
 const REFERENCES = {
   SLOW:      'Papageorgiou 2006 / MDPI 2024 — 속도 분산 -12~20%, 정체 지속 -25%',
   CONGESTED: 'ALINEA 1991 / FHWA CHART — 골든타임 10분 이내 대응 시 처리시간 -11분',
+  JAM:       'ALINEA 1991 / FHWA CHART — 골든타임 10분 이내 대응 시 처리시간 -11분',
 };
 
-const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444' };
+const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
 export default function ActionPanel({ host, cameraId, cameraData }) {
   const [sentActions, setSentActions] = useState({});  // { action_id: 'HH:MM' }

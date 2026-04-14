@@ -6,12 +6,12 @@ function Sidebar({ activeTab, onTabChange, user, onLogout, isMobile }) {
 
   const menuItems = [
     { id: "cctv",       label: "CCTV 모니터링", icon: "📡" },
-    { id: "monitoring", label: "교통 정체 흐름",   icon: "🚦" },
-    { id: "tunnel", label: "스마트 터널 시스템",
+    { id: "monitoring", label: "교통 흐름 모니터링",   icon: "🚦" },
+    { id: "tunnel", label: "스마트 터널 모니터링",
       icon: ( <img src="/tunnel.jpg" alt="Tunnel Icon" style={{ width: '20px', height: '20px', verticalAlign: 'middle', marginLeft: '1px', marginRight: '3px'}} />)
     },
-    { id: "plate",      label: "번호판 인식",      icon: "🔍" },
     { id: "raspi",      label: "라즈베리파이 CCTV", icon: "🖥️" },
+    { id: "plate",      label: "번호판 인식",      icon: "🔍" },
     { id: "stats",      label: "통계 데이터",    icon: "📊" },
   ];
 

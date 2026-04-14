@@ -23,46 +23,46 @@ export default function LandingPage() {
 
   const features = [
     {
-      icon: '🚗',
-      title: '역주행 감지',
-      desc: '차량 궤적 흐름장(Flow Map) 학습을 통해 역주행 차량을 실시간으로 식별하고 즉각 알람을 발송합니다.',
-      tags: ['ByteTrack', 'FlowMap', 'YOLOv8'],
+      icon: '📡',
+      title: 'CCTV Anomaly Detection',
+      desc: '역주행 감지는 YOLOv11과 ByteTrack, FlowMap을 활용하여 차량의 이동 궤적을 분석하여 역주행 여부를 판단합니다. 화재 감지는 YOLOv8로 연속 프레임 검증을 통해 오탐 없는 알람을 생성합니다.',
+      tags: ['YOLOv11', 'ByteTrack', 'FlowMap', 'Judge', 'Logger','YOLOv8'],
       color: '#ef4444',
     },
     {
-      icon: '🔥',
-      title: '화재/연기 감지',
-      desc: '클래스별 임계값을 적용한 커스텀 화재 모델로 연속 프레임 검증 후 오탐 없는 알람을 생성합니다.',
-      tags: ['OpenVINO', 'PaddleOCR', 'GPU/CPU'],
+      icon: '🚦',
+      title: 'Traffic Flow Monitoring',
+      desc: '도로의 속도와 밀도를 집계하여 실시간 교통 흐름을 분석합니다. 혼잡 구간과 시간대를 시각화하여 관제 센터에서 효율적인 교통 관리와 사고 예방에 활용할 수 있습니다.',
+      tags: ['YOLOv11', 'ByteTrack', 'FlowMap', 'Judge', 'Logger', 'Traffic Analyzer'],
       color: '#f97316',
     },
     {
-      icon: '📊',
-      title: '통계 & 리포트',
-      desc: '감지 이벤트를 DB에 누적하여 시간대별 통계, 정오 비율, 조치 현황 등 운영 리포트를 자동 생성합니다.',
-      tags: ['MySQL', 'Chart.js', 'Flask'],
-      color: '#3b82f6',
-    },
-    {
-      icon: '🌿',
-      title: '탄소배출 분석',
-      desc: '차종별 탄소배출량 기반 정체 현황 분석으로 도로 환경 영향을 정량화합니다.',
+      icon: ( <img src="/tunnel.jpg" alt="Tunnel Icon" style={{ width: '20px', height: '20px', verticalAlign: 'middle'}} />),
+      title: 'Smart Tunnel System',
+      desc: 'AI 기술을 활용하여 터널 내 정체, 급정거, 사고를 탐지하고, 차량 밀집도 및 체류시간 분석을 통해 터널 내 교통 상황을 실시간으로 모니터링하는 시스템입니다.',
       tags: ['분석', 'AI', 'Dashboard'],
       color: '#10b981',
     },
     {
       icon: '🖥️',
-      title: '라즈베리파이 CCTV',
-      desc: '열화상 센서 데이터와 RGB 영상을 동시에 분석하여 Pan/Tilt 자동 추적 및 화재 위협을 감지합니다.',
-      tags: ['AMG8833', 'Socket', 'G-code'],
+      title: 'Raspberry Pi CCTV',
+      desc: 'Raspberry Pi와 3D Printer로 제작한 저비용 DIY CCTV로, 침입자 및 화재를 실시간으로 자동 추적(Pan/Tilt)하고 녹화하는 시스템입니다.',
+      tags: ['Raspberry Pi', '3D Printing', 'Pan/Tilt', 'Auto-Tracking'],
       color: '#22c55e',
     },
     {
       icon: '🔍',
-      title: '번호판 인식',
-      desc: 'YOLO OCR 기반 글자 단위 검출과 투표(Vote) 알고리즘으로 정확한 번호판 인식 및 이력 관리를 제공합니다.',
-      tags: ['YOLO-OCR', 'Vote', 'CSV'],
+      title: 'Auto License Plate Recognition',
+      desc: 'YOLOv11으로 번호판을 탐지한 후, Custom-OCR 모델로 글자를 인식합니다. Vote 알고리즘으로 여러 프레임의 결과를 종합하여 최종 번호판을 결정하여 오인식률을 대폭 줄였습니다.',
+      tags: ['YOLOv11','Custom-OCR', 'Vote', 'preprocessing'],
       color: '#6366f1',
+    },
+    {
+      icon: '📊',
+      title: 'Statistics & Reports',
+      desc: '교통 이상 징후 이벤트를 실시간으로 집계하여 대시보드에 시각화합니다. 시간대별, 위치별 분석을 통해 관제 센터에서 데이터 기반 의사결정을 지원하는 통계 모듈입니다.',
+      tags: ['Data Aggregation', 'Chart.js', 'Dashboard', 'Report Generation'],
+      color: '#3b82f6',
     },
   ];
 
@@ -260,14 +260,14 @@ export default function LandingPage() {
             열화상 CCTV까지 통합된 교통 안전 관제 플랫폼입니다.
           </p>
 
-          <div className="fade-up fade-up-4" style={{display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap'}}>
+          {/* <div className="fade-up fade-up-4" style={{display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap'}}>
             <button className="btn-primary" onClick={() => navigate('/login')}>
               관제 센터 입장
             </button>
             <button className="btn-ghost" onClick={() => document.getElementById('features')?.scrollIntoView({behavior:'smooth'})}>
               기능 살펴보기
             </button>
-          </div>
+          </div> */}
 
           {/* 스탯 카드 */}
           <div className="fade-up fade-up-4" style={styles.statsRow}>
@@ -343,10 +343,10 @@ export default function LandingPage() {
               도커 기반 배포까지 전 과정을 구현했습니다.
             </p>
             <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
-              <button className="btn-primary" onClick={() => navigate('/login')}>
+              {/* <button className="btn-primary" onClick={() => navigate('/login')}>
                 데모 체험하기
-              </button>
-              <a href="https://github.com/qksdkqksdk5/TADS_Project.git" target="_blank" rel="noreferrer">
+              </button> */}
+              <a href="https://github.com/qksdkqksdk5/TADS_Project" target="_blank" rel="noreferrer">
                 <button className="btn-ghost">GitHub →</button>
               </a>
             </div>
@@ -354,7 +354,7 @@ export default function LandingPage() {
           <div style={styles.aboutRight}>
             {[
               { label: '역주행 감지 모델', value: 'YOLOv11 + ByteTrack + FlowMap' },
-              { label: '화재 감지 모델', value: 'YOLOv8 + OpenVINO (CPU/GPU)' },
+              { label: '화재 감지 모델', value: 'YOLOv8 (OpenVINO 경량화)' },
               { label: '번호판 OCR', value: 'Custom YOLO-OCR + Vote 알고리즘' },
               { label: '실시간 통신', value: 'Flask-SocketIO + Gevent' },
               { label: '배포 환경', value: 'Docker + AWS EC2 + RDS' },
@@ -373,10 +373,11 @@ export default function LandingPage() {
         <div style={styles.ctaBg} />
         <div style={{position:'relative', zIndex:1, textAlign:'center'}}>
           <h2 style={{fontFamily:'Space Grotesk, sans-serif', fontSize:'clamp(28px,4vw,48px)', fontWeight:'800', color:'#fff', marginBottom:'16px', letterSpacing:'-1px'}}>
-            지금 바로 관제 센터에 접속하세요
+            관제 센터 접속
           </h2>
           <p style={{color:'rgba(255,255,255,0.4)', fontSize:'16px', marginBottom:'32px'}}>
-            관리자 계정으로 로그인하여 실시간 교통 관제 대시보드를 경험해보세요.
+            본 시스템은 인가된 관리자만 접근할 수 있습니다.<br />
+            관리자 코드를 발급받은 후 로그인하세요.
           </p>
           <button className="btn-primary" onClick={() => navigate('/login')} style={{padding:'16px 48px', fontSize:'16px'}}>
             관제 센터 입장 →
@@ -392,7 +393,7 @@ export default function LandingPage() {
             <span style={{fontFamily:'Space Grotesk, sans-serif', fontWeight:'700', fontSize:'16px', color:'rgba(255,255,255,0.8)'}}>TADS</span>
           </div>
           <div style={{fontSize:'12px', color:'rgba(255,255,255,0.25)', fontFamily:'IBM Plex Mono, monospace'}}>
-            © 2025 TADS Project. Traffic Anomaly Detection System.
+            © 2026 TADS Project. Traffic Anomaly Detection System.
           </div>
           <div style={{display:'flex', gap:'20px'}}>
           </div>

@@ -5,8 +5,8 @@ import { loadKakaoMapSDK } from '../../traffic/loadKakaoMap';
 import { fetchRoadGeo } from '../api';
 
 // ── 상수 ──────────────────────────────────────────────────────
-const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444' };
-const LEVEL_LABEL = { SMOOTH: '원활',    SLOW: '서행',    CONGESTED: '정체'    };
+const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
+const LEVEL_LABEL = { SMOOTH: '원활',    SLOW: '서행',    CONGESTED: '정체',    JAM: '정체'    };
 const ROAD_LINE_GRAY = '#334155';
 
 function fmtDuration(sec) {
@@ -22,7 +22,7 @@ function makeMarkerContent(cam, isSelected) {
   const showLearning = is_learning || relearning;
   const color  = showLearning ? '#6b7280' : (LEVEL_COLOR[level] || '#6b7280');
   const emoji  = showLearning ? '⟳'
-               : level === 'CONGESTED' ? '🔴'
+               : (level === 'CONGESTED' || level === 'JAM') ? '🔴'
                : level === 'SLOW'      ? '🟡'
                : '🟢';
   const border  = isSelected ? '3px solid #38bdf8' : `2px solid ${color}`;

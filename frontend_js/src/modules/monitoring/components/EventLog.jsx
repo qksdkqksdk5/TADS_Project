@@ -27,7 +27,7 @@ function fmtElapsed(sec) {
 function EventItem({ event, onSelect, onDismissWrongway }) {
   const elapsed    = useElapsed(event.detected_at);
   const isWrongway = event.event_type === 'wrongway';
-  const isCongested = event.level === 'CONGESTED';
+  const isCongested = event.level === 'CONGESTED' || event.level === 'JAM';
 
   const accentColor = isWrongway ? '#f97316' : isCongested ? '#ef4444' : '#eab308';
   const icon        = isWrongway ? '⚠️' : isCongested ? '🔴' : '🟡';
