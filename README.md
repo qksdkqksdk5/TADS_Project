@@ -5,6 +5,13 @@
 
 ---
 
+## 📚 Additional Documents
+
+- 📘 [사용 가이드](./GUIDE.md)
+- 🤝 [기여 가이드](./CONTRIBUTING.md)
+
+---
+
 ## 🌐 Live Demo
 
 * 🔗 http://tads.n-e.kr/
@@ -339,3 +346,5 @@ TADS는 이를 해결하기 위해:
 ## 🧑‍💻 Author
 
 * Traffic Anomaly Detection System (TADS)
+
+
