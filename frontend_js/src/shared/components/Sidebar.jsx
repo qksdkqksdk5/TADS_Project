@@ -5,14 +5,14 @@ function Sidebar({ activeTab, onTabChange, user, onLogout, isMobile }) {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   const menuItems = [
-    { id: "cctv",       label: "CCTV Anomaly Detection", icon: "📡" },
-    { id: "monitoring", label: "Traffic Flow Monitoring",   icon: "🚦" },
-    { id: "tunnel", label: "Smart Tunnel System",
+    { id: "cctv",       label: "CCTV 모니터링", icon: "📡" },
+    { id: "monitoring", label: "교통 흐름 모니터링",   icon: "🚦" },
+    { id: "tunnel", label: "스마트 터널 모니터링",
       icon: ( <img src="/tunnel.jpg" alt="Tunnel Icon" style={{ width: '20px', height: '20px', verticalAlign: 'middle', marginLeft: '1px', marginRight: '3px'}} />)
     },
-    { id: "raspi",      label: "Raspberry Pi CCTV", icon: "🖥️" },
-    { id: "plate",      label: "Auto License Plate Recognition",      icon: "🔍" },
-    { id: "stats",      label: "Statistics & Reports",    icon: "📊" },
+    { id: "raspi",      label: "라즈베리파이 CCTV", icon: "🖥️" },
+    { id: "plate",      label: "번호판 인식",      icon: "🔍" },
+    { id: "stats",      label: "통계 데이터",    icon: "📊" },
   ];
 
   const sidebarWidth = isMobile ? '100%' : (isCollapsed ? '80px' : '240px');
