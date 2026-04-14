@@ -8,7 +8,6 @@
 ## 📚 Additional Documents
 
 - 📘 [사용 가이드](./GUIDE.md)
-- 🤝 [기여 가이드](./CONTRIBUTING.md)
 
 ---
 
