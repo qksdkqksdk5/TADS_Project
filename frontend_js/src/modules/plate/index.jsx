@@ -6,9 +6,23 @@ import VideoStream     from './components/VideoStream';
 import PlateList       from './components/PlateList';
 import AnalyticsModal  from './components/AnalyticsModal';
 
-export default function PlateModule({ host, user }) {  // ✅ user prop 추가
+// ✅ 모바일 감지 훅 (768px 이하)
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth <= breakpoint : false
+  );
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
+export default function PlateModule({ host, user }) {
   const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
   const api = plateApi(BASE_URL);
+  const isMobile = useIsMobile(); // ✅
 
   const [connected, setConnected]                 = useState(false);
   const [started, setStarted]                     = useState(false);
@@ -62,7 +76,6 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
   }, [started, videoFilter]);
 
   const handleStart = async (video) => {
-    // ✅ operator_name(user.name) 함께 전달
     await api.start(video, user?.name);
     setStarted(true);
   };
@@ -100,8 +113,9 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
 
   return (
     <div style={s.container}>
-      <div style={s.body}>
-        <div style={s.left}>
+      <div style={isMobile ? s.bodyMobile : s.body}>
+        {/* ✅ 모바일: 세로 배치 / 데스크톱: 가로 배치 */}
+        <div style={isMobile ? s.leftMobile : s.left}>
           <ControlBox
             connected={connected}
             videos={videos}
@@ -138,10 +152,43 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
 
 const s = {
   container: {
-    flex: 1, height: '100%', background: '#0f0f1a',
-    color: '#e0e0ff', display: 'flex', flexDirection: 'column',
-    padding: '15px', boxSizing: 'border-box', overflow: 'hidden',
+    flex: 1,
+    height: '100%',
+    background: '#0f0f1a',
+    color: '#e0e0ff',
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '15px',
+    boxSizing: 'border-box',
+    overflow: 'auto', // ✅ hidden → auto: 모바일 스크롤 허용
   },
-  body: { display: 'flex', gap: '20px', flex: 1, minHeight: 0 },
-  left: { flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
+
+  // ── 데스크톱 (기존 유지) ──
+  body: {
+    display: 'flex',
+    gap: '20px',
+    flex: 1,
+    minHeight: 0,
+  },
+  left: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    minHeight: 0,
+  },
+
+  // ── 모바일 ──
+  bodyMobile: {
+    display: 'flex',
+    flexDirection: 'column', // ✅ 세로 정렬
+    gap: '12px',
+    flex: 1,
+  },
+  leftMobile: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    // ✅ flex: 1 제거 → 콘텐츠 높이만큼만 차지
+  },
 };

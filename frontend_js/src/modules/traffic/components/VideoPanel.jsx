@@ -136,7 +136,6 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
                 finalUrl = `http://${host}:5000/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
                 isHls    = false;
               }
-              console.log(`idx:${idx} fireOn:${fireOn} finalUrl:${finalUrl}`);
               const displayName = isReverse
                 ? `🔴 ${item.name}`
                 : isFire
