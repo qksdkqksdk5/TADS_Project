@@ -246,7 +246,7 @@ class FireDetector(BaseDetector):
             with self.frame_lock:
                 self.latest_frame = frame
 
-            time.sleep(0.08)
+            time.sleep(0.05)
 
     def stop(self):
         super().stop()

@@ -46,7 +46,7 @@ export default function LandingPage() {
     {
       icon: '🖥️',
       title: 'Raspberry Pi CCTV',
-      desc: 'raspberry pi와 3D printer로 제작한 저비용 DIY CCTV로, 칩입자 및 화재를 실시간으로 자동 추적(Pan/Tilt)하고 녹화하는 시스템입니다.',
+      desc: 'Raspberry Pi와 3D Printer로 제작한 저비용 DIY CCTV로, 침입자 및 화재를 실시간으로 자동 추적(Pan/Tilt)하고 녹화하는 시스템입니다.',
       tags: ['Raspberry Pi', '3D Printing', 'Pan/Tilt', 'Auto-Tracking'],
       color: '#22c55e',
     },
@@ -260,14 +260,14 @@ export default function LandingPage() {
             열화상 CCTV까지 통합된 교통 안전 관제 플랫폼입니다.
           </p>
 
-          <div className="fade-up fade-up-4" style={{display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap'}}>
+          {/* <div className="fade-up fade-up-4" style={{display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap'}}>
             <button className="btn-primary" onClick={() => navigate('/login')}>
               관제 센터 입장
             </button>
             <button className="btn-ghost" onClick={() => document.getElementById('features')?.scrollIntoView({behavior:'smooth'})}>
               기능 살펴보기
             </button>
-          </div>
+          </div> */}
 
           {/* 스탯 카드 */}
           <div className="fade-up fade-up-4" style={styles.statsRow}>
@@ -343,10 +343,10 @@ export default function LandingPage() {
               도커 기반 배포까지 전 과정을 구현했습니다.
             </p>
             <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
-              <button className="btn-primary" onClick={() => navigate('/login')}>
+              {/* <button className="btn-primary" onClick={() => navigate('/login')}>
                 데모 체험하기
-              </button>
-              <a href="https://github.com/qksdkqksdk5/TADS_Project.git" target="_blank" rel="noreferrer">
+              </button> */}
+              <a href="https://github.com/qksdkqksdk5/TADS_Project" target="_blank" rel="noreferrer">
                 <button className="btn-ghost">GitHub →</button>
               </a>
             </div>
@@ -354,7 +354,7 @@ export default function LandingPage() {
           <div style={styles.aboutRight}>
             {[
               { label: '역주행 감지 모델', value: 'YOLOv11 + ByteTrack + FlowMap' },
-              { label: '화재 감지 모델', value: 'YOLOv8 + OpenVINO (CPU/GPU)' },
+              { label: '화재 감지 모델', value: 'YOLOv8 (OpenVINO 경량화)' },
               { label: '번호판 OCR', value: 'Custom YOLO-OCR + Vote 알고리즘' },
               { label: '실시간 통신', value: 'Flask-SocketIO + Gevent' },
               { label: '배포 환경', value: 'Docker + AWS EC2 + RDS' },
@@ -373,10 +373,11 @@ export default function LandingPage() {
         <div style={styles.ctaBg} />
         <div style={{position:'relative', zIndex:1, textAlign:'center'}}>
           <h2 style={{fontFamily:'Space Grotesk, sans-serif', fontSize:'clamp(28px,4vw,48px)', fontWeight:'800', color:'#fff', marginBottom:'16px', letterSpacing:'-1px'}}>
-            지금 바로 관제 센터에 접속하세요
+            관제 센터 접속
           </h2>
           <p style={{color:'rgba(255,255,255,0.4)', fontSize:'16px', marginBottom:'32px'}}>
-            관리자 계정으로 로그인하여 실시간 교통 관제 대시보드를 경험해보세요.
+            본 시스템은 인가된 관리자만 접근할 수 있습니다.<br />
+            관리자 코드를 발급받은 후 로그인하세요.
           </p>
           <button className="btn-primary" onClick={() => navigate('/login')} style={{padding:'16px 48px', fontSize:'16px'}}>
             관제 센터 입장 →
@@ -392,7 +393,7 @@ export default function LandingPage() {
             <span style={{fontFamily:'Space Grotesk, sans-serif', fontWeight:'700', fontSize:'16px', color:'rgba(255,255,255,0.8)'}}>TADS</span>
           </div>
           <div style={{fontSize:'12px', color:'rgba(255,255,255,0.25)', fontFamily:'IBM Plex Mono, monospace'}}>
-            © 2025 TADS Project. Traffic Anomaly Detection System.
+            © 2026 TADS Project. Traffic Anomaly Detection System.
           </div>
           <div style={{display:'flex', gap:'20px'}}>
           </div>
