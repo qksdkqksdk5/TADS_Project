@@ -1,28 +1,15 @@
 /* eslint-disable */
 import { useState, useEffect, useRef } from 'react';
 import { plateApi } from './api';
-import ControlBox      from './components/ControlBox';
-import VideoStream     from './components/VideoStream';
-import PlateList       from './components/PlateList';
-import AnalyticsModal  from './components/AnalyticsModal';
+import ControlBox     from './components/ControlBox';
+import VideoStream    from './components/VideoStream';
+import PlateList      from './components/PlateList';
+import AnalyticsModal from './components/AnalyticsModal';
 
-// ✅ 모바일 감지 훅 (768px 이하)
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== 'undefined' ? window.innerWidth <= breakpoint : false
-  );
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, [breakpoint]);
-  return isMobile;
-}
-
-export default function PlateModule({ host, user }) {
+// ✅ isMobile은 Dashboard에서 prop으로 받아서 사용 (내부 훅 제거)
+export default function PlateModule({ host, user, isMobile }) {
   const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
   const api = plateApi(BASE_URL);
-  const isMobile = useIsMobile(); // ✅
 
   const [connected, setConnected]                 = useState(false);
   const [started, setStarted]                     = useState(false);
@@ -112,9 +99,8 @@ export default function PlateModule({ host, user }) {
   }, [connected]);
 
   return (
-    <div style={s.container}>
+    <div style={isMobile ? s.containerMobile : s.container}>
       <div style={isMobile ? s.bodyMobile : s.body}>
-        {/* ✅ 모바일: 세로 배치 / 데스크톱: 가로 배치 */}
         <div style={isMobile ? s.leftMobile : s.left}>
           <ControlBox
             connected={connected}
@@ -151,6 +137,7 @@ export default function PlateModule({ host, user }) {
 }
 
 const s = {
+  // ── 데스크톱: 부모 높이 채우기 ──
   container: {
     flex: 1,
     height: '100%',
@@ -160,10 +147,22 @@ const s = {
     flexDirection: 'column',
     padding: '15px',
     boxSizing: 'border-box',
-    overflow: 'auto', // ✅ hidden → auto: 모바일 스크롤 허용
+    overflow: 'hidden',
   },
 
-  // ── 데스크톱 (기존 유지) ──
+  // ── 모바일: 높이 고정 해제, 스크롤 허용 ──
+  containerMobile: {
+    flex: 1,
+    background: '#0f0f1a',
+    color: '#e0e0ff',
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '10px',
+    boxSizing: 'border-box',
+    overflowY: 'auto',
+  },
+
+  // ── 데스크톱 body ──
   body: {
     display: 'flex',
     gap: '20px',
@@ -178,17 +177,15 @@ const s = {
     minHeight: 0,
   },
 
-  // ── 모바일 ──
+  // ── 모바일 body ──
   bodyMobile: {
     display: 'flex',
-    flexDirection: 'column', // ✅ 세로 정렬
+    flexDirection: 'column',
     gap: '12px',
-    flex: 1,
   },
   leftMobile: {
     display: 'flex',
     flexDirection: 'column',
     gap: '10px',
-    // ✅ flex: 1 제거 → 콘텐츠 높이만큼만 차지
   },
 };
