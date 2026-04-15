@@ -9,7 +9,6 @@ import os
 import cv2
 import numpy as np
 import time
-import threading
 import gevent
 from gevent.threadpool import ThreadPool as _GeventThreadPool
 from datetime import datetime
@@ -28,15 +27,14 @@ for _p in (_BASE_DIR, _MODULES_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from detector_modules.config          import DetectorConfig
-from detector_modules.state           import DetectorState
-from detector_modules.flow_map        import FlowMap
-from detector_modules.tracker         import YoloTracker
-from detector_modules.judge           import WrongWayJudge
-from detector_modules.id_manager      import IDManager
-from detector_modules.camera_switch   import CameraSwitchDetector
+from detector_modules.config           import DetectorConfig
+from detector_modules.state            import DetectorState
+from detector_modules.flow_map         import FlowMap
+from detector_modules.tracker          import YoloTracker
+from detector_modules.judge            import WrongWayJudge
+from detector_modules.id_manager       import IDManager
+from detector_modules.camera_switch    import CameraSwitchDetector
 from detector_modules.traffic_analyzer import TrafficAnalyzer, CongestionPredictor
-
 # GRU: PyTorch 없는 환경에서도 동작하도록 try/except
 try:
     from detector_modules.gru_module import GRUModule
@@ -47,22 +45,17 @@ except ImportError:
 from modules.traffic.detectors.base_detector import BaseDetector
 
 # ── 상수 ────────────────────────────────────────────────────────────────
-# _YOLO_MODEL    = r'C:\final_pj\runs\yolo11n_v2\weights\best.pt'
-_YOLO_MODEL = os.path.join(_BASE_DIR, 'best.pt')
-_EMIT_INTERVAL = 30   # 30프레임마다 traffic_update emit (약 1초@30fps)
+# _YOLO_MODEL    = r'C:\final_pj\runs\yolo11n_v6\weights\best.pt'
+_YOLO_MODEL      = os.path.join(_BASE_DIR, 'best.pt')
+_EMIT_INTERVAL   = 30    # 30프레임마다 traffic_update emit (약 1초@30fps) — Socket.IO 주기는 유지
+_LOG_INTERVAL    = 300   # 콘솔 상태 출력 주기 (약 10초@30fps) — 터미널 노이즈 억제
+_SKIP_LOG_COOL   = 300   # 프레임 스킵 로그 쿨타임 (같은 카메라 300프레임 이내 중복 출력 방지)
 
 # ── gevent 호환 OS 스레드 풀 ──────────────────────────────────────────────
 # cap.read() / tracker.track() 등 C 익스텐션 블로킹 호출을 실제 OS 스레드에서
 # 실행하여 gevent 이벤트 루프를 차단하지 않도록 한다.
 # (카메라 수 × 2 작업 여유치로 8 설정)
-_FRAME_POOL = _GeventThreadPool(maxsize=8)
-
-# ── 공유 YOLO 가중치 ─────────────────────────────────────────────────────
-# 여러 MonitoringDetector 인스턴스가 동일한 nn.Module(가중치)을 공유한다.
-# YOLO 모델 가중치(~30MB)를 최초 1회만 로드하고, 이후 인스턴스는 참조만 복사.
-# ByteTrack 상태(model.predictor.trackers)는 YOLO 인스턴스별로 독립 유지된다.
-_SHARED_YOLO_WEIGHTS = None
-_SHARED_YOLO_LOCK    = threading.Lock()
+_FRAME_POOL = _GeventThreadPool(maxsize=16)
 
 
 class MonitoringDetector(BaseDetector):
@@ -108,15 +101,7 @@ class MonitoringDetector(BaseDetector):
             self.cfg.model_path, self.cfg.conf, self.cfg.target_classes,
             night_enhance=getattr(self.cfg, 'night_enhance', True)
         )
-        # ── YOLO 가중치 공유 ────────────────────────────────────────────────
-        global _SHARED_YOLO_WEIGHTS, _SHARED_YOLO_LOCK
-        with _SHARED_YOLO_LOCK:
-            if _SHARED_YOLO_WEIGHTS is None:
-                _SHARED_YOLO_WEIGHTS = self.tracker.model.model
-                print(f"🧠 [MonitoringDetector] YOLO 가중치 최초 로드 완료")
-            else:
-                self.tracker.model.model = _SHARED_YOLO_WEIGHTS
-                print(f"🧠 [{self.camera_id}] YOLO 가중치 공유 적용 (메모리 절약)")
+        print(f"🧠 [{self.camera_id}] YOLO 모델 로드 완료")
 
         self.judge  = WrongWayJudge(self.cfg, self.flow, self.state)
         self.idm    = IDManager(self.cfg, self.flow, self.state)
@@ -145,6 +130,43 @@ class MonitoringDetector(BaseDetector):
         self.latest_tracks_info = []         # Step 4 REST API용
         self.latest_speeds      = {}         # Step 4 REST API용
         self.debug_info: dict   = {}         # /debug/<camera_id> 응답용
+
+        # ── MJPEG 스트림 최적화용 ─────────────────────────────────────────
+        # generate_frames()에서 같은 프레임을 반복 인코딩하지 않기 위한 카운터.
+        # latest_frame이 교체될 때마다 증가 → 스트림이 last_frame_id와 비교해 스킵 판단.
+        self._stream_frame_id = 0
+        # 스트림 다운스케일 비율 (run()에서 실제 해상도 확인 후 설정).
+        # 트랙 좌표도 동일 비율로 스케일링해 canvas overlay 싱크 유지.
+        self._stream_scale = 1.0
+
+        # ── 탭 이탈 시 일시정지 플래그 ───────────────────────────────────
+        # True: run() 루프에서 cap.read/YOLO/emit 을 건너뛰고 gevent.sleep만 실행
+        # → CPU 사용률 거의 0%로 낮추면서 학습된 모델 상태는 메모리에 유지
+        # monitoring.py 의 _pause_all_monitoring() / _resume_all_monitoring() 에서 제어
+        self._paused = False
+
+    # ────────────────────────────────────────────────────────────────────
+    # 탭 이탈/복귀 시 CPU 절약을 위한 일시정지/재개
+    # ────────────────────────────────────────────────────────────────────
+
+    def pause(self):
+        """
+        AI 추론 루프를 일시정지한다.
+        run() 루프가 cap.read/YOLO/emit 없이 gevent.sleep만 실행하게 되어
+        CPU 점유가 거의 0% 로 낮아진다.
+        학습 완료 상태(flow_map 가중치, TrafficAnalyzer 등)는 메모리에 유지된다.
+        """
+        self._paused = True
+        print(f"⏸️  [{self.camera_id}] 감지기 일시정지 (탭 이탈 — CPU 절약 모드)")
+
+    def resume(self):
+        """
+        일시정지된 AI 추론 루프를 재개한다.
+        run() 루프가 다시 cap.read/YOLO/emit 을 실행하며,
+        학습 완료 상태가 그대로 이어진다.
+        """
+        self._paused = False
+        print(f"▶️  [{self.camera_id}] 감지기 재개 (탭 복귀 — 추론 재시작)")
 
     # ────────────────────────────────────────────────────────────────────
     # BaseDetector 추상 메서드 구현
@@ -357,6 +379,51 @@ class MonitoringDetector(BaseDetector):
         }
 
     # ────────────────────────────────────────────────────────────────────
+    # MJPEG 스트림 (base_detector.generate_frames 오버라이드)
+    # ────────────────────────────────────────────────────────────────────
+    def generate_frames(self):
+        """
+        base_detector의 generate_frames()를 오버라이드.
+        개선 사항:
+          1) _stream_frame_id 비교로 새 프레임이 없으면 인코딩 완전 스킵
+          2) 스트림용 640px 다운스케일 → 인코딩 부하 대폭 감소
+          3) gevent.sleep으로 20fps 상한 + 이벤트 루프 양보 보장
+        """
+        _TARGET_INTERVAL = 1.0 / 20   # 20fps 상한
+        last_frame_id = -1
+
+        while self.is_running:
+            with self.frame_lock:
+                frame_id = self._stream_frame_id
+                frame    = self.latest_frame
+
+            if frame is not None and frame_id != last_frame_id:
+                last_frame_id = frame_id
+                frame_copy = frame.copy()
+
+                # 스트림 다운스케일 (트랙 좌표와 동일 비율 사용)
+                ss = self._stream_scale
+                if ss < 1.0:
+                    h, w       = frame_copy.shape[:2]
+                    frame_copy = cv2.resize(
+                        frame_copy, (int(w * ss), int(h * ss)),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+                ret, buffer = cv2.imencode(
+                    '.jpg', frame_copy, [cv2.IMWRITE_JPEG_QUALITY, 60]
+                )
+                if ret:
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' +
+                        buffer.tobytes() +
+                        b'\r\n'
+                    )
+
+            gevent.sleep(_TARGET_INTERVAL)
+
+    # ────────────────────────────────────────────────────────────────────
     # 메인 루프
     # ────────────────────────────────────────────────────────────────────
     def run(self):
@@ -389,6 +456,10 @@ class MonitoringDetector(BaseDetector):
         st.frame_w, st.frame_h, st.video_fps = fw, fh, fps
         self.flow.init_grid(fw, fh)
 
+        # 스트림 다운스케일 비율 확정 (640px 상한)
+        self._stream_scale = min(1.0, 640 / fw) if fw > 640 else 1.0
+        print(f"📐 [{self.camera_id}] 스트림 스케일: {fw}×{fh} → scale={self._stream_scale:.3f}")
+
         # ── GRU 초기화 ────────────────────────────────────────────────
         if _GRU_AVAILABLE:
             self.gru_module_a = GRUModule(cfg, fps=fps)
@@ -413,7 +484,7 @@ class MonitoringDetector(BaseDetector):
         self.predictor_a = CongestionPredictor(cfg, fps=fps)
         self.predictor_b = CongestionPredictor(cfg, fps=fps)
 
-        # 옵션 B: 항상 학습 모드로 시작
+        # 학습 모드로 시작
         st.is_learning = True
         self.traffic_analyzer_a.set_baseline()
         self.traffic_analyzer_b.set_baseline()
@@ -433,10 +504,24 @@ class MonitoringDetector(BaseDetector):
         _base_jump_px     = getattr(cfg, 'frame_skip_jump_px', 80.0)
         _jump_thr_dynamic = _base_jump_px
 
+        # ── 로그 노이즈 억제 변수 ────────────────────────────────────────
+        # 학습 진행률 마일스톤: 이미 출력한 10% 단위 % 값을 저장해 중복 출력 방지
+        _learn_logged_pcts:   set = set()   # 초기 학습 마일스톤 (10, 20, ..., 100)
+        _relearn_logged_pcts: set = set()   # 재학습 마일스톤
+        # 프레임 스킵 쿨타임: 마지막으로 스킵 로그를 찍은 프레임 번호
+        _last_skip_log_frame: int = -_SKIP_LOG_COOL   # 초기값 → 첫 감지 시 바로 출력
+
         print(f"📚 [{self.camera_id}] 학습 모드 시작 (목표: {cfg.learning_frames}프레임 ≈ {cfg.learning_frames/fps:.0f}초)")
 
         # ── 메인 루프 ────────────────────────────────────────────────
         while self.is_running and self.cap.isOpened():
+            # 일시정지 상태이면 프레임 읽기/YOLO 추론/emit 을 전부 건너뛴다.
+            # gevent.sleep 으로 이벤트 루프를 양보해 소켓 하트비트 등은 계속 처리된다.
+            # 학습 완료 상태(flow_map, TrafficAnalyzer 등)는 메모리에 그대로 유지됨.
+            if self._paused:
+                gevent.sleep(0.3)  # 0.3초 대기 후 루프 재확인 (CPU 점유 없음)
+                continue
+
             # cap.read(): FFMPEG C 코드가 HLS 세그먼트 다운로드 시 수십 초 블로킹.
             # OS 스레드에서 실행해 gevent 이벤트 루프(소켓 하트비트·MJPEG 스트림)를 보호.
             success, frame = _FRAME_POOL.apply(self.cap.read)
@@ -445,6 +530,10 @@ class MonitoringDetector(BaseDetector):
                 if not reconnected:
                     gevent.sleep(10)
                 continue
+
+            with self.frame_lock:
+                self.latest_frame      = frame
+                self._stream_frame_id += 1
 
             st.frame_num += 1
 
@@ -490,7 +579,10 @@ class MonitoringDetector(BaseDetector):
                 and _jump_count / _jump_total >= _jump_ratio
             )
             if _is_frame_skip:
-                print(f"[{self.camera_id}] ⚠️ 프레임 스킵 감지 ({_jump_count}/{_jump_total}대 jump) → 스킵")
+                # 쿨타임(_SKIP_LOG_COOL) 이내 중복 출력 방지 — HLS 끊김이 연속될 때 터미널 도배 억제
+                if st.frame_num - _last_skip_log_frame >= _SKIP_LOG_COOL:
+                    print(f"[{self.camera_id}] ⚠️ 프레임 스킵 감지 ({_jump_count}/{_jump_total}대 jump) → 스킵")
+                    _last_skip_log_frame = st.frame_num
                 for _t in tracks:
                     _tid = _t["id"]
                     if st.trajectories[_tid]:
@@ -538,6 +630,7 @@ class MonitoringDetector(BaseDetector):
                             self.traffic_analyzer_b.congestion_judge.reset()
                             self._ref_direction = None
                             _relearn_smooth_80 = _relearn_smooth_95 = False
+                            _relearn_logged_pcts = set()   # 재학습 마일스톤 초기화
 
                 # (C) 재학습 중: 또 흔들리면 중단 → 대기 복귀
                 elif st.relearning:
@@ -727,14 +820,20 @@ class MonitoringDetector(BaseDetector):
                         })
                         print(f"⚠️  [{self.camera_id}] 역주행 탐지 track_id={tid} label={label}")
 
-                # REST API용 트랙 정보 수집 (Step 4에서 사용)
-                bh_info = max(y2 - y1, cfg.min_bbox_h)
-                nm_info = speeds.get(tid, 0.0) / bh_info if speeds.get(tid) else 0.0
+                # REST API용 트랙 정보 수집 (궤적·중앙점·방향 벡터)
+                # 스트림 다운스케일과 동일 비율로 좌표 변환 → canvas overlay 싱크 유지
+                bh_info  = max(y2 - y1, cfg.min_bbox_h)
+                nm_info  = speeds.get(tid, 0.0) / bh_info if speeds.get(tid) else 0.0
+                ss       = self._stream_scale
+                traj_pts = [[int(p[0] * ss), int(p[1] * ss)] for p in traj[-20:]]
                 current_tracks_info.append({
-                    "id":        tid,
-                    "x1": int(x1), "y1": int(y1),
-                    "x2": int(x2), "y2": int(y2),
-                    "nm":        round(nm_info, 4),
+                    "id":          tid,
+                    "cx":          int(cx * ss),
+                    "cy":          int(cy * ss),
+                    "vx":          round(ndx, 3),   # 정규화 방향 벡터 x (-1~1)
+                    "vy":          round(ndy, 3),   # 정규화 방향 벡터 y (-1~1)
+                    "trail":       traj_pts,
+                    "nm":          round(nm_info, 4),
                     "is_wrongway": tid in st.wrong_way_ids,
                 })
 
@@ -773,31 +872,44 @@ class MonitoringDetector(BaseDetector):
                 self.latest_tracks_info = current_tracks_info
                 self.latest_speeds      = speeds.copy()
 
-            # ── 30프레임마다 emit + 콘솔 로그 ──
+            # ── 30프레임마다 Socket.IO emit ──────────────────────────────
+            # emit 주기(_EMIT_INTERVAL)는 유지 — 프론트엔드 실시간성 보장
             if st.frame_num % _EMIT_INTERVAL == 0:
                 self._emit_traffic_update()
-                if st.is_learning:
-                    progress = min(st.frame_num, cfg.learning_frames)
-                    print(f"[{self.camera_id}] f={st.frame_num} | "
-                          f"학습중({progress}/{cfg.learning_frames}) | "
+
+            # ── 콘솔 로그: 학습 중 10% 마일스톤 + 탐지 중 10초 주기 ──────
+            # 학습 단계별로 로그 전략을 달리해 터미널 노이즈를 최소화한다.
+            if st.is_learning:
+                # 초기 학습: 10% 단위(10, 20, ..., 100)에 한 번씩만 출력
+                progress = min(st.frame_num, cfg.learning_frames)
+                pct = int(progress / cfg.learning_frames * 100) // 10 * 10   # 10% 버킷
+                if pct > 0 and pct not in _learn_logged_pcts:
+                    _learn_logged_pcts.add(pct)
+                    print(f"[{self.camera_id}] 학습 {pct}% ({progress}/{cfg.learning_frames}) | "
                           f"차량:{len(tracks)}대")
-                elif st.relearning:
-                    elapsed = st.frame_num - st.relearn_start_frame
-                    print(f"[{self.camera_id}] f={st.frame_num} | "
-                          f"재보정중({elapsed}/{cfg.relearn_frames}) | "
+            elif st.relearning:
+                # 재학습: 동일하게 10% 마일스톤
+                elapsed = st.frame_num - st.relearn_start_frame
+                pct = int(elapsed / cfg.relearn_frames * 100) // 10 * 10
+                if pct > 0 and pct not in _relearn_logged_pcts:
+                    _relearn_logged_pcts.add(pct)
+                    print(f"[{self.camera_id}] 재보정 {pct}% ({elapsed}/{cfg.relearn_frames}) | "
                           f"차량:{len(tracks)}대")
-                elif st.waiting_stable:
+            elif st.waiting_stable:
+                # 안정 대기: _LOG_INTERVAL(~10초)마다 1줄
+                if st.frame_num % _LOG_INTERVAL == 0:
                     stable_elapsed = st.frame_num - st.stable_since_frame
-                    print(f"[{self.camera_id}] f={st.frame_num} | "
-                          f"안정대기중(diff={self.switch.last_adj_diff:.1f}, {stable_elapsed}f) | "
+                    print(f"[{self.camera_id}] 안정대기중 "
+                          f"(diff={self.switch.last_adj_diff:.1f}, {stable_elapsed}f) | "
                           f"차량:{len(tracks)}대")
-                else:
+            else:
+                # 탐지 모드: _LOG_INTERVAL(~10초)마다 상태 출력
+                if st.frame_num % _LOG_INTERVAL == 0:
                     ja = self.traffic_analyzer_a.get_jam_score()
                     jb = self.traffic_analyzer_b.get_jam_score()
                     la = self.traffic_analyzer_a.get_congestion_level()
                     lb = self.traffic_analyzer_b.get_congestion_level()
-                    print(f"[{self.camera_id}] f={st.frame_num} | "
-                          f"A:{la}({ja:.3f}) B:{lb}({jb:.3f}) | "
+                    print(f"[{self.camera_id}] A:{la}({ja:.3f}) B:{lb}({jb:.3f}) | "
                           f"차량:{len(tracks)}대")
 
             # ── gevent 이벤트 루프 양보 ──────────────────────────────

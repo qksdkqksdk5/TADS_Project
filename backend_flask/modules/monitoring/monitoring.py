@@ -7,7 +7,7 @@ import gevent
 from flask import Blueprint, jsonify, request, current_app, Response
 
 from modules.traffic.detectors.manager import detector_manager
-from modules.monitoring.monitoring_detector import MonitoringDetector
+from modules.monitoring.monitoring_detector import MonitoringDetector, _FRAME_POOL
 from modules.monitoring import its_helper
 
 # 동시 AI 모니터링 카메라 최대 개수 (YOLO 모델 동시 로드 한계)
@@ -17,6 +17,110 @@ monitoring_bp = Blueprint('monitoring', __name__)
 
 # Overpass 백그라운드 fetch 중복 방지 (현재 요청 중인 road_key 집합)
 _geo_fetching: set = set()
+
+# 구간 큐 러너 greenlet 추적 (stop 시 kill용)
+# key: (road, start_ic, end_ic) → gevent.Greenlet
+_queue_greenlets: dict = {}
+
+# ── 탭 이탈 시 일시정지 설정 ────────────────────────────────────────────────
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  PERSIST_MODE = False  ← 기본값: 탭 이탈 시 AI 추론 자동 일시정지       │
+# │  PERSIST_MODE = True   ← 탭 이동해도 AI 추론 계속 실행 (항상 유지 모드)  │
+# └─────────────────────────────────────────────────────────────────────────┘
+PERSIST_MODE: bool = False
+
+# 현재 모니터링 탭을 열고 있는 소켓 SID 집합
+# monitoring_join 이벤트 수신 시 추가, disconnect 시 제거
+_monitoring_sids: set = set()
+
+
+# ── 일괄 일시정지 / 재개 헬퍼 ────────────────────────────────────────────────
+
+def _pause_all_monitoring():
+    """
+    현재 활성화된 모든 MonitoringDetector 를 일시정지한다.
+    YOLO 추론/emit 루프만 멈추고 학습 완료 상태(모델 가중치)는 메모리에 유지된다.
+    monitoring_ 접두사 키만 대상으로 하여 타 팀 감지기에는 영향을 주지 않는다.
+    """
+    with detector_manager._lock:
+        # active_detectors 에서 MonitoringDetector 인스턴스만 추출
+        targets = [
+            det for key, det in detector_manager.active_detectors.items()
+            if key.startswith('monitoring_') and isinstance(det, MonitoringDetector)
+        ]
+    for det in targets:
+        det.pause()  # 각 감지기에 일시정지 신호 전달
+    if targets:
+        print(f"⏸️  [monitoring] {len(targets)}개 감지기 일시정지 완료")
+
+
+def _resume_all_monitoring():
+    """
+    일시정지된 모든 MonitoringDetector 를 재개한다.
+    학습 완료 상태가 그대로 유지된 채로 추론이 이어진다.
+    monitoring_ 접두사 키만 대상으로 하여 타 팀 감지기에는 영향을 주지 않는다.
+    """
+    with detector_manager._lock:
+        targets = [
+            det for key, det in detector_manager.active_detectors.items()
+            if key.startswith('monitoring_') and isinstance(det, MonitoringDetector)
+        ]
+    for det in targets:
+        det.resume()  # 각 감지기에 재개 신호 전달
+    if targets:
+        print(f"▶️  [monitoring] {len(targets)}개 감지기 재개 완료")
+
+
+# ── Socket.IO 이벤트 핸들러 등록 함수 ────────────────────────────────────────
+
+def register_monitoring_socket_events(socketio):
+    """
+    app.py 에서 호출: monitoring 탭 진입/이탈 소켓 이벤트 핸들러를 등록한다.
+
+    이벤트 흐름:
+      프론트 탭 진입 → emit('monitoring_join') → 일시정지 감지기 재개
+      프론트 탭 이탈 → 소켓 자동 해제 → disconnect 이벤트 → 마지막 클라이언트면 일시정지
+
+    Parameters
+    ----------
+    socketio : flask_socketio.SocketIO
+        app.py 에서 생성한 SocketIO 인스턴스
+    """
+
+    @socketio.on('monitoring_join')
+    def on_monitoring_join():
+        """
+        프론트엔드 모니터링 탭 진입 시 수신.
+        SID 를 _monitoring_sids 에 등록하고,
+        이전에 일시정지된 감지기가 있으면 모두 재개한다.
+        """
+        from flask import request as req  # gevent 환경에서 request context 안전하게 접근
+        sid = req.sid
+        _monitoring_sids.add(sid)  # 이 소켓을 monitoring 클라이언트로 등록
+        print(f"🟢 [monitoring] 탭 진입 SID={sid} (연결 수: {len(_monitoring_sids)})")
+        # 일시정지 상태인 감지기가 있으면 재개
+        _resume_all_monitoring()
+
+    @socketio.on('disconnect')
+    def on_monitoring_disconnect():
+        """
+        소켓 연결 해제 시 수신 (모든 소켓에 대해 발동).
+        monitoring 탭 SID 가 아니면 즉시 반환하여 타 팀 소켓에 영향을 주지 않는다.
+        마지막 monitoring 클라이언트가 끊어지고 PERSIST_MODE=False 이면 전체 일시정지.
+        """
+        from flask import request as req
+        sid = req.sid
+
+        # monitoring 탭 사용자가 아닌 소켓 disconnect → 아무것도 하지 않음
+        if sid not in _monitoring_sids:
+            return
+
+        _monitoring_sids.discard(sid)  # SID 제거
+        print(f"🔴 [monitoring] 탭 이탈 SID={sid} (남은 연결: {len(_monitoring_sids)})")
+
+        # 마지막 클라이언트가 떠났고 PERSIST_MODE=False 이면 일시정지
+        if not _monitoring_sids and not PERSIST_MODE:
+            _pause_all_monitoring()
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
 
@@ -475,8 +579,14 @@ def its_start_segment():
 
     # 큐에 남은 카메라를 백그라운드 그린렛이 자동 처리
     queued_ids = [c['camera_id'] for c in queued_cams]
+    seg_key = (road, start_ic, end_ic)
     if queued_cams:
-        gevent.spawn(_segment_queue_runner, list(queued_cams), socketio, app_obj, db_inst)
+        # 이전 큐 러너가 있으면 kill 후 새로 시작
+        old_g = _queue_greenlets.pop(seg_key, None)
+        if old_g and not old_g.dead:
+            old_g.kill()
+        g = gevent.spawn(_segment_queue_runner, list(queued_cams), socketio, app_obj, db_inst)
+        _queue_greenlets[seg_key] = g
 
     msg_parts = []
     if started:         msg_parts.append(f"{len(started)}개 시작")
@@ -533,26 +643,42 @@ def its_view_feed():
         return jsonify({"error": "허용되지 않은 스트림 URL"}), 403
 
     def _generate_proxy():
+        # ITS 공식 스트림 URL을 직접 열어 MJPEG 프록시로 중계하는 제너레이터
         cap = _cv2.VideoCapture(url)
         if not cap.isOpened():
-            return
+            return  # 스트림 열기 실패 시 즉시 종료
+
+        # 20fps 상한: 한 프레임 처리에 소요할 최소 간격 (초)
+        _TARGET_INTERVAL = 1.0 / 20
+
         try:
             while True:
-                ret, frame = cap.read()
+                # cap.read()는 C 레벨 블로킹 호출 → gevent 스레드풀에서 실행해
+                # 이벤트 루프(소켓 하트비트·폴링 등)가 멈추지 않도록 한다
+                ret, frame = _FRAME_POOL.apply(cap.read)
+
                 if not ret:
-                    time.sleep(0.1)
+                    # 프레임 읽기 실패 시 gevent.sleep으로 양보 (time.sleep은 greenlet 블로킹)
+                    gevent.sleep(0.1)
                     continue
+
+                # JPEG 인코딩 (품질 65 → 용량·속도 균형)
                 _, jpeg = _cv2.imencode(
                     '.jpg', frame, [_cv2.IMWRITE_JPEG_QUALITY, 65]
                 )
+
+                # MJPEG multipart 경계 포맷으로 전송
                 yield (
                     b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n\r\n'
                     + jpeg.tobytes()
                     + b'\r\n'
                 )
+
+                # 20fps 상한: gevent.sleep으로 다른 greenlet에 제어권 양보
+                gevent.sleep(_TARGET_INTERVAL)
         finally:
-            cap.release()
+            cap.release()  # 스트림 종료 시 반드시 캡처 해제
 
     return Response(
         _generate_proxy(),
@@ -582,6 +708,13 @@ def its_stop_segment():
         return jsonify({"status": "error", "message": "road, start_ic, end_ic 필요"}), 400
 
     cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
+
+    # 해당 구간 큐 러너가 살아있으면 kill (재시작 방지)
+    seg_key = (road, start_ic, end_ic)
+    old_g = _queue_greenlets.pop(seg_key, None)
+    if old_g and not old_g.dead:
+        old_g.kill()
+        print(f"⏹️ 구간 큐 러너 취소: {road} {start_ic}→{end_ic}")
 
     stopped   = []
     not_found = []

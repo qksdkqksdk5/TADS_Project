@@ -56,10 +56,7 @@ class CameraSwitchDetector:
 
         self.prev_small = small.copy()  # 현재 축소본을 다음 프레임을 위한 prev로 저장
 
-        # 디버그용 출력: 30프레임마다 한 번씩 현재 상태 출력
-        if frame_num % 30 == 0:
-            avg_adj = np.mean(self.diff_history) if self.diff_history else 0
-            print(f"[F:{frame_num}] adj:{adj_diff:.1f} avg:{avg_adj:.1f} ref:{ref_diff:.1f}")
+        # [F:] 디버그 출력 제거 — 카메라 전환 감지 diff 튜닝용 로그로 운영 중 불필요
 
         triggered = False  # 전환 의심 플래그
 

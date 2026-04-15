@@ -64,6 +64,10 @@ app.register_blueprint(tunnel_bp,      url_prefix='/api/tunnel')
 app.register_blueprint(monitoring_bp,  url_prefix='/api/monitoring')
 app.register_blueprint(raspi_bp,       url_prefix='/api/raspi')
 
+# 탭 이탈 시 monitoring 감지기 자동 일시정지 소켓 이벤트 등록
+from modules.monitoring.monitoring import register_monitoring_socket_events
+register_monitoring_socket_events(socketio)
+
 # ✅ DB 매니저 초기화 (백그라운드 스레드에서 DB 접근 가능하도록)
 from modules.plate import db_manager
 db_manager.init_app(app)

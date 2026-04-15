@@ -19,6 +19,8 @@ export function useMonitoringSocket(host, callbacks = {}) {
   const [connected, setConnected] = useState(false);
 
   const socketRef   = useRef(null);
+  // 중지된 카메라 ID 집합 — 이 ID의 traffic_update는 무시 (재추가 방지)
+  const stoppedRef  = useRef(new Set());
   // 콜백을 ref에 저장 — 소켓을 재생성하지 않고 항상 최신 콜백 참조
   const callbackRef = useRef(callbacks);
   useEffect(() => { callbackRef.current = callbacks; });
@@ -46,18 +48,45 @@ export function useMonitoringSocket(host, callbacks = {}) {
     });
     socketRef.current = sock;
 
-    sock.on('connect',    () => setConnected(true));
+    sock.on('connect', () => {
+      setConnected(true);
+      // 모니터링 탭 진입을 백엔드에 알린다.
+      // 백엔드는 이 SID를 _monitoring_sids에 등록하고,
+      // 이전에 일시정지된 감지기가 있으면 자동으로 재개한다.
+      sock.emit('monitoring_join');
+    });
     sock.on('disconnect', () => setConnected(false));
 
     // 30프레임(약 1초)마다 수신 — 카메라별 최신 상태 갱신
     sock.on('traffic_update', (data) => {
-      setCameras(prev => ({ ...prev, [data.camera_id]: data }));
+      if (stoppedRef.current.has(data.camera_id)) return;
+      setCameras(prev => {
+        const prevCam  = prev[data.camera_id];
+        const isActive = data.level === 'SLOW' || data.level === 'JAM';
+        const wasActive = prevCam?.level === 'SLOW' || prevCam?.level === 'JAM';
+
+        // levelSince: SLOW/JAM이 처음 시작된 시각 (ms)
+        // - SMOOTH → SLOW/JAM 전환: 지금 시각 기록
+        // - 이미 SLOW/JAM였으면: 기존 시각 유지
+        // - SMOOTH 복귀: null 초기화
+        let levelSince;
+        if (!isActive) {
+          levelSince = null;
+        } else if (!wasActive) {
+          levelSince = Date.now();
+        } else {
+          levelSince = prevCam?.levelSince ?? Date.now();
+        }
+
+        return { ...prev, [data.camera_id]: { ...data, levelSince } };
+      });
     });
 
     // 정체 이상 이벤트
     sock.on('anomaly_alert', (data) => {
       setEventLogs(prev => [
-        { id: Date.now() + Math.random(), event_type: 'anomaly', is_resolved: false, ...data },
+        // id를 마지막에 두어 서버의 data.id가 덮어쓰는 것을 방지 (중복 key 경고 원인)
+        { event_type: 'anomaly', is_resolved: false, ...data, id: Date.now() + Math.random() },
         ...prev.slice(0, 99),
       ]);
       setUnresolvedCounts(prev => ({
@@ -71,7 +100,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
     // 역주행 탐지
     sock.on('wrongway_alert', (data) => {
       setEventLogs(prev => [
-        { id: Date.now() + Math.random(), event_type: 'wrongway', is_resolved: false, ...data },
+        { event_type: 'wrongway', is_resolved: false, ...data, id: Date.now() + Math.random() },
         ...prev.slice(0, 99),
       ]);
       setUnresolvedCounts(prev => ({ ...prev, wrongway: prev.wrongway + 1 }));
@@ -102,6 +131,20 @@ export function useMonitoringSocket(host, callbacks = {}) {
     return () => sock.close();
   }, [host]);
 
+  // 중지된 카메라를 cameras 상태에서 즉시 제거 (시각적 피드백용)
+  // 10초간 해당 camera_id의 traffic_update를 무시해 재추가 방지
+  const removeCameras = useCallback((cameraIds) => {
+    cameraIds.forEach(id => stoppedRef.current.add(id));
+    setCameras(prev => {
+      const next = { ...prev };
+      cameraIds.forEach(id => delete next[id]);
+      return next;
+    });
+    setTimeout(() => {
+      cameraIds.forEach(id => stoppedRef.current.delete(id));
+    }, 10000);
+  }, []);
+
   return {
     cameras,
     eventLogs,
@@ -109,5 +152,6 @@ export function useMonitoringSocket(host, callbacks = {}) {
     connected,
     emitSelectCamera,
     resolveEvent,
+    removeCameras,
   };
 }

@@ -44,13 +44,95 @@ function LiveDot({ connected }) {
   );
 }
 
+// ── 카메라 팝업 모달 ──────────────────────────────────────────
+function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose }) {
+  // ESC 키로 닫기
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const title = selectedItsCctv
+    ? selectedItsCctv.name
+    : (selectedData?.location || selectedId || '');
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(2,6,23,0.82)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{
+        width:  'min(1020px, 95vw)',
+        height: 'min(580px, 90vh)',
+        background: '#0f172a',
+        borderRadius: '16px',
+        border: '1px solid #1e293b',
+        display: 'flex', flexDirection: 'column',
+        overflow: 'hidden',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+      }}>
+        {/* 팝업 헤더 */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '10px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0,
+        }}>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0' }}>
+            📷 {title}
+          </span>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: '1px solid #1e293b',
+              borderRadius: '6px', color: '#475569',
+              width: '26px', height: '26px',
+              fontSize: '13px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >✕</button>
+        </div>
+
+        {/* 팝업 바디 */}
+        <div style={{ flex: 1, display: 'flex', gap: '8px', padding: '8px', minHeight: 0 }}>
+          {/* 영상 */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <CctvPlayer
+              host={host}
+              cameraId={selectedId}
+              cameraData={selectedData}
+              itsCctv={selectedItsCctv}
+            />
+          </div>
+
+          {/* 우측: 지표 + 대응 */}
+          {!selectedItsCctv && (
+            <div style={{ width: '230px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <MetricsPanel data={selectedData} />
+              </div>
+              <div style={{ height: '210px', flexShrink: 0 }}>
+                <ActionPanel host={host} cameraId={selectedId} cameraData={selectedData} />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
 export default function MonitoringModule({ host, isMobile }) {
-  const [selectedId,    setSelectedId]    = useState(null);
-  const [soundOn,       setSoundOn]       = useState(true);
-  const [flashActive,   setFlashActive]   = useState(false);
-  const [selectedItsCctv, setSelectedItsCctv] = useState(null);  // ITS 보기 전용 CCTV
-  const [itsCctvList,   setItsCctvList]   = useState([]);         // 지도에 표시할 ITS 마커 목록
+  const [selectedId,      setSelectedId]      = useState(null);
+  const [soundOn,         setSoundOn]         = useState(true);
+  const [flashActive,     setFlashActive]     = useState(false);
+  const [selectedItsCctv, setSelectedItsCctv] = useState(null);
+  const [itsCctvList,     setItsCctvList]     = useState([]);
+  const [popupOpen,       setPopupOpen]       = useState(false);
 
   // ── 사운드 훅 ─────────────────────────────────────────────
   const {
@@ -59,8 +141,8 @@ export default function MonitoringModule({ host, isMobile }) {
     startCongestionRepeat, stopCongestionRepeat,
   } = useSoundAlert(soundOn);
 
-  // ── 소켓 훅 (콜백 연결) ───────────────────────────────────
-  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent } =
+  // ── 소켓 훅 ───────────────────────────────────────────────
+  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent, removeCameras } =
     useMonitoringSocket(host, {
       onAnomalyAlert: useCallback((data) => {
         playAlert(data.level);
@@ -89,39 +171,40 @@ export default function MonitoringModule({ host, isMobile }) {
     else              stopCongestionRepeat();
   }, [cameras, startCongestionRepeat, stopCongestionRepeat]);
 
-  // ── ITS CCTV 보기 핸들러 ─────────────────────────────────
+  // ── ITS CCTV 보기 핸들러 ──────────────────────────────────
   const handleViewItsCctv = useCallback((cam) => {
     setSelectedItsCctv(cam);
-    setSelectedId(null);   // 모니터링 카메라 선택 해제
+    setSelectedId(null);
+    setPopupOpen(true);
   }, []);
 
-  // ITS CCTV 탭 변경 시 지도 마커 목록 갱신
   const handleItsCctvListChange = useCallback((list) => {
     setItsCctvList(list);
   }, []);
 
-  // ── 카메라 선택 ───────────────────────────────────────────
-  const handleSelect = (camera_id) => {
+  // ── 카메라 선택 → 팝업 열기 ──────────────────────────────
+  const handleSelect = useCallback((camera_id) => {
     setSelectedId(camera_id);
-    setSelectedItsCctv(null);  // 모니터링 카메라 선택 시 ITS 보기 해제
+    setSelectedItsCctv(null);
+    setPopupOpen(true);
     emitSelectCamera(camera_id);
-  };
+  }, [emitSelectCamera]);
 
-  // 첫 카메라 수신 시 자동 선택
+  // ── 팝업 닫기 ─────────────────────────────────────────────
+  const handleClosePopup = useCallback(() => {
+    setPopupOpen(false);
+    // 선택 상태는 유지 (지도 마커 하이라이트 등)
+  }, []);
+
+  // ── 선택 카메라가 제거되면 팝업 자동 닫기 ───────────────────
   useEffect(() => {
-    if (!selectedId && Object.keys(cameras).length > 0) {
-      setSelectedId(Object.keys(cameras)[0]);
+    if (selectedId && !cameras[selectedId]) {
+      setSelectedId(null);
+      setPopupOpen(false);
     }
   }, [cameras, selectedId]);
 
   // ── 역주행 경보 해제 ──────────────────────────────────────
-  const handleDismissWrongway = useCallback((eventId) => {
-    stopWrongwayAlarm();
-    resolveEvent(eventId);
-    setUnresolvedCounts_wrongway(); // 카운트 감소는 resolveEvent로 처리됨
-  }, [stopWrongwayAlarm, resolveEvent]);
-
-  // unresolvedCounts.wrongway 감소 처리
   const [wrongwayAdj, setWrongwayAdj] = useState(0);
   const handleDismissWrongwayFull = useCallback((eventId) => {
     stopWrongwayAlarm();
@@ -137,11 +220,12 @@ export default function MonitoringModule({ host, isMobile }) {
     wrongway:  Math.max(0, unresolvedCounts.wrongway - wrongwayAdj),
   };
 
+  const showPopup = popupOpen && (selectedId || selectedItsCctv);
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column',
       height: '100%', background: '#020617', overflow: 'hidden',
-      // CONGESTED 감지 시 테두리 빨강 flash
       boxShadow: flashActive ? 'inset 0 0 0 3px #ef4444' : 'inset 0 0 0 3px transparent',
       transition: 'box-shadow 0.3s ease',
     }}>
@@ -189,57 +273,43 @@ export default function MonitoringModule({ host, isMobile }) {
             onSelect={handleSelect}
             onViewItsCctv={handleViewItsCctv}
             onCctvListChange={handleItsCctvListChange}
+            onRemoveCameras={removeCameras}
           />
         </div>
 
-        {/* CENTER — 지도 + CCTV */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <MonitoringMap
-              host={host}
-              cameras={cameras}
-              selectedId={selectedId}
-              onSelect={handleSelect}
-              onViewItsCctv={handleViewItsCctv}
-              itsCctvList={itsCctvList}
-              selectedItsId={selectedItsCctv?.camera_id}
-            />
-          </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <CctvPlayer
-              host={host}
-              cameraId={selectedId}
-              cameraData={selectedData}
-              itsCctv={selectedItsCctv}
-            />
-          </div>
+        {/* CENTER — 지도 (전체 높이) */}
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+          <MonitoringMap
+            host={host}
+            cameras={cameras}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+            onViewItsCctv={handleViewItsCctv}
+            itsCctvList={itsCctvList}
+            selectedItsId={selectedItsCctv?.camera_id}
+          />
         </div>
 
-        {/* RIGHT — 지표 패널 + 대응 패널 자리 */}
-        <div style={{ width: isMobile ? '190px' : '250px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <MetricsPanel data={selectedData} />
-          </div>
-          <div style={{ height: '220px', flexShrink: 0 }}>
-            <ActionPanel host={host} cameraId={selectedId} cameraData={selectedData} />
-          </div>
+        {/* RIGHT — 이벤트 로그 */}
+        <div style={{ ...styles.panel, width: isMobile ? '200px' : '280px', flexShrink: 0 }}>
+          <EventLog
+            eventLogs={eventLogs}
+            onSelectCamera={handleSelect}
+            onDismissWrongway={handleDismissWrongwayFull}
+          />
         </div>
       </div>
 
-      {/* ── 이벤트 로그 (하단) ──────────────────────────────── */}
-      <div style={{
-        height: '130px', margin: '0 8px 8px',
-        background: '#0f172a', borderRadius: '12px',
-        border: '1px solid #1e293b',
-        display: 'flex', flexDirection: 'column',
-        overflow: 'hidden', flexShrink: 0,
-      }}>
-        <EventLog
-          eventLogs={eventLogs}
-          onSelectCamera={handleSelect}
-          onDismissWrongway={handleDismissWrongwayFull}
+      {/* ── 카메라 팝업 ───────────────────────────────────────── */}
+      {showPopup && (
+        <CameraPopup
+          host={host}
+          selectedId={selectedId}
+          selectedData={selectedData}
+          selectedItsCctv={selectedItsCctv}
+          onClose={handleClosePopup}
         />
-      </div>
+      )}
 
       <style>{`
         @keyframes pulse-dot {
@@ -265,11 +335,4 @@ const styles = {
     border: '1px solid #1e293b', overflow: 'hidden',
     display: 'flex', flexDirection: 'column',
   },
-  placeholder: {
-    background: '#0f172a', borderRadius: '12px',
-    border: '1px dashed #1e293b',
-    display: 'flex', alignItems: 'center',
-    justifyContent: 'center', flexDirection: 'column', gap: '8px',
-  },
-  placeholderText: { fontSize: '12px', color: '#1e293b' },
 };
