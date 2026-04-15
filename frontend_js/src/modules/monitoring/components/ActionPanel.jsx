@@ -2,6 +2,7 @@
 // src/modules/monitoring/components/ActionPanel.jsx
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import useGoldenTimer from '../hooks/useGoldenTimer';
 
 // ── 레벨별 대응 버튼 목록 ─────────────────────────────────────
 const ACTION_BUTTONS = {
@@ -41,8 +42,10 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
     setLoadingMap({});
   }, [cameraId]);
 
-  const { level, is_learning, relearning } = cameraData || {};
+  const { level, is_learning, relearning, levelSince } = cameraData || {};
   const showLearning = is_learning || relearning;
+
+  const { formatted: timerFormatted } = useGoldenTimer(level, levelSince);
 
   const handleAction = async (actionId) => {
     if (sentActions[actionId] || loadingMap[actionId]) return;
@@ -95,9 +98,14 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
       {/* 서행/정체: 대응 버튼 */}
       {buttons.length > 0 && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-          {/* 레벨 타이틀 */}
-          <div style={{ fontSize: '11px', color: LEVEL_COLOR[level], fontWeight: 700, marginBottom: '8px' }}>
-            {level === 'SLOW' ? '🟡 서행 구간 대응' : '🔴 정체 구간 대응'}
+          {/* 레벨 타이틀 + 골든타임 타이머 */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: LEVEL_COLOR[level], fontWeight: 700 }}>
+              {level === 'SLOW' ? '🟡 서행 구간 대응' : '🔴 정체 구간 대응'}
+            </div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: LEVEL_COLOR[level], fontVariantNumeric: 'tabular-nums' }}>
+              ⏱ {timerFormatted}
+            </div>
           </div>
 
           {/* 버튼 목록 */}

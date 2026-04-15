@@ -437,11 +437,7 @@ class FeatureExtractor:
 
         slow_density = slow_cell_density                   # congestion_judge 전달용 별칭
 
-        # ── 디버그 출력 (30프레임마다) ───────────────────────────────
-        if frame_num % 30 == 0:
-            print(f"[FE] f={frame_num} known={speed_known_count} "
-                  f"occ={flow_occupancy:.3f} cds={cell_dwell_score:.3f} "
-                  f"dwell={dwell_cell_ratio:.3f} persist={cell_persistence:.3f} valid={valid_cell_count}")
+        # [FE] 디버그 출력 제거 — 알고리즘 튜닝용 로그로 운영 중 불필요
 
         # ── feature 딕셔너리 조립 ────────────────────────────────────
         return {                                       # feature 벡터

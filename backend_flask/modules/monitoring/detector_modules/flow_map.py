@@ -110,9 +110,9 @@ class FlowMap:
         if self.smoothed_mask[r, c]:                      # 보간으로 채워진 셀이면
             self.smoothed_mask[r, c] = False              # 실 데이터 유입 → 보간 표시 해제
 
-        # 디버그: 100회마다 학습 현황 출력
+        # 디버그: 10000회마다 학습 현황 출력 (100회 → 10000회로 변경, 터미널 노이즈 억제)
         self._learn_call_count += 1                       # 호출 카운터 증가
-        if self._learn_call_count % 100 == 0:             # 100회마다
+        if self._learn_call_count % 10000 == 0:           # 10000회마다
             active_cells = int(np.sum(self.count > 0))    # 데이터가 있는 셀 수
             total_samples = int(self.count.sum())          # 전체 샘플 수
             angle = np.degrees(np.arctan2(ndy, ndx))      # 마지막 학습 방향 (도)
@@ -171,19 +171,7 @@ class FlowMap:
              이웃끼리 cos < -0.3이면 중앙 분리대 경계 → 채우지 않음
              채움 시 smoothed_mask = True (보간 전용 셀 표시)
         """
-        if verbose:                                       # 상세 진단 시에만 전체 셀 출력
-            print("\n📊 [진단] smoothing 전 — 전체 셀 상태")
-            print(f"   {'[r,c]':>8} {'count':>6} {'angle°':>8} {'mag':>6} {'smooth':>7}")
-            for r in range(self.grid_size):               # 모든 행 순회
-                for c in range(self.grid_size):           # 모든 열 순회
-                    v = self.flow[r, c]                   # 해당 셀 벡터
-                    m = np.linalg.norm(v)                 # 벡터 크기
-                    if m > 0.01:                          # 유효한 벡터만 출력
-                        angle = np.degrees(np.arctan2(v[1], v[0]))  # 각도
-                        cnt = self.count[r, c]            # 샘플 수
-                        sm = "★" if self.smoothed_mask[r, c] else ""  # 보간 셀 표시
-                        mk = " ⚠️" if cnt < self.min_samples else ""
-                        print(f"   [{r:2d},{c:2d}] {cnt:6d} {angle:8.1f} {m:6.3f}{mk} {sm}")
+        # verbose=True 시 전체 셀 덤프 제거 — 400줄 테이블은 운영 중 불필요
 
         new_map = self.flow.copy()                        # 기존 맵 복사본 (수정 대상)
         filled_count = 0                                  # count=0에서 채워진 셀 수
@@ -336,19 +324,7 @@ class FlowMap:
               f"smoothed={smoothed_total}, "
               f"exterior={exterior_total}(채움 제외)")
 
-        if verbose:                                       # 상세 진단 시에만 후 상태 출력
-            print(f"\n📊 [진단] smoothing 후 — 전체 셀 상태")
-            print(f"   {'[r,c]':>8} {'count':>6} {'angle°':>8} {'mag':>6} {'smooth':>7}")
-            for r in range(self.grid_size):
-                for c in range(self.grid_size):
-                    v = self.flow[r, c]
-                    m = np.linalg.norm(v)
-                    if m > 0.01:
-                        angle = np.degrees(np.arctan2(v[1], v[0]))
-                        cnt = self.count[r, c]
-                        sm = "★" if self.smoothed_mask[r, c] else ""  # 보간 셀 표시
-                        mk = " ⚠️" if cnt < self.min_samples else ""
-                        print(f"   [{r:2d},{c:2d}] {cnt:6d} {angle:8.1f} {m:6.3f}{mk} {sm}")
+        # verbose=True 시 후 상태 셀 덤프 제거 — 400줄 테이블은 운영 중 불필요
 
     # ==================== Phase 1 정체 탐지용 — 셀별 속도 학습 ====================
     def learn_baseline(self, fx: float, fy: float, norm_speed: float):

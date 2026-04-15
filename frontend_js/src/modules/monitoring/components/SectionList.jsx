@@ -14,7 +14,7 @@ const ROADS = [
   { key: 'jungang',   label: '중앙' },
 ];
 
-export default function SectionList({ host, cameras, selectedId, onSelect, onViewItsCctv, onCctvListChange }) {
+export default function SectionList({ host, cameras, selectedId, onSelect, onViewItsCctv, onCctvListChange, onRemoveCameras }) {
   const [road,        setRoad]        = useState('gyeongbu');
   const [cctvList,    setCctvList]    = useState([]);
   const [icList,      setIcList]      = useState([]);
@@ -76,13 +76,17 @@ export default function SectionList({ host, cameras, selectedId, onSelect, onVie
     setSegError('');
     try {
       const res = await stopSegment(host, road, startIC, endIC);
-      setSegError(`${res.data.stopped.length}개 중지 완료`);
+      const stopped = res.data.stopped || [];
+      if (stopped.length > 0) {
+        onRemoveCameras?.(stopped);
+      }
+      setSegError(stopped.length > 0 ? `${stopped.length}개 중지 완료` : '중지할 카메라 없음');
     } catch {
       setSegError('구간 중지 실패');
     } finally {
       setLoadingSeg(false);
     }
-  }, [host, road, startIC, endIC]);
+  }, [host, road, startIC, endIC, onRemoveCameras]);
 
   // 현재 모니터링 중인 카메라 목록 (cameras prop에서 필터)
   const monitoringList = Object.values(cameras).sort((a, b) => {

@@ -243,6 +243,7 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
       const content = makeMarkerContent(cam, camera_id === selectedId);
       if (overlaysRef.current[camera_id]) {
         overlaysRef.current[camera_id].setContent(content);
+        overlaysRef.current[camera_id].setMap(map);
       } else {
         const overlay = new window.kakao.maps.CustomOverlay({
           position: new window.kakao.maps.LatLng(lat, lng),
@@ -282,6 +283,7 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
       const content = makeItsMarkerContent(cam, isSelected);
       if (itsOverlayRef.current[camera_id]) {
         itsOverlayRef.current[camera_id].setContent(content);
+        itsOverlayRef.current[camera_id].setMap(map);
       } else {
         const overlay = new window.kakao.maps.CustomOverlay({
           position: new window.kakao.maps.LatLng(lat, lng),

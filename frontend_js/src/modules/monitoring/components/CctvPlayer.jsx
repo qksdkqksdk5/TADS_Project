@@ -55,7 +55,7 @@ function ItsProxyPlayer({ host, cam }) {
         src={proxyUrl}
         alt="ITS CCTV"
         onError={() => setImgError(true)}
-        onLoad={()  => setImgError(false)}
+        onLoad={() => setImgError(false)}
         style={{
           width: '100%', height: '100%',
           objectFit: 'contain',
@@ -94,8 +94,10 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     setStreamKey(k => k + 1);
   }, [cameraId]);
 
-  // 바운딩박스 폴링
+  // 바운딩박스 폴링 + 서버 재시작 감지 → MJPEG 자동 재연결
+  // tracks 요청이 실패(서버 다운)했다가 다시 성공하면 서버가 재시작된 것 → streamKey 올려서 img src 재요청
   useEffect(() => {
+    let wasDown = false;
     const poll = setInterval(async () => {
       try {
         const res = await axios.get(
@@ -103,7 +105,15 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
           { timeout: 400 },
         );
         tracksRef.current = Array.isArray(res.data) ? res.data : [];
-      } catch {}
+        if (wasDown) {
+          wasDown = false;
+          setImgError(false);
+          setStreamKey(k => k + 1);
+        }
+      } catch {
+        wasDown = true;
+        tracksRef.current = [];
+      }
     }, POLL_MS);
     return () => clearInterval(poll);
   }, [host, cameraId]);
@@ -128,22 +138,65 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
           const dispH = nh * scale;
           const offX  = (dw - dispW) / 2;
           const offY  = (dh - dispH) / 2;
+
           tracksRef.current.forEach(t => {
-            const x1 = t.x1 * scale + offX;
-            const y1 = t.y1 * scale + offY;
-            const w  = (t.x2 - t.x1) * scale;
-            const h  = (t.y2 - t.y1) * scale;
+            const color  = t.is_wrongway ? WRONG_COLOR : NORMAL_COLOR;
+            const trail  = (t.trail || []).map(([px, py]) => [px * scale + offX, py * scale + offY]);
+            const cx_    = t.cx * scale + offX;
+            const cy_    = t.cy * scale + offY;
+
+            // 궤적 선 (오래된 점은 투명, 최신 점은 불투명)
+            if (trail.length >= 2) {
+              for (let i = 1; i < trail.length; i++) {
+                ctx.globalAlpha = (i / trail.length) * 0.85;
+                ctx.strokeStyle = color;
+                ctx.lineWidth   = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(trail[i - 1][0], trail[i - 1][1]);
+                ctx.lineTo(trail[i][0],     trail[i][1]);
+                ctx.stroke();
+              }
+              ctx.globalAlpha = 1;
+            }
+
+            // 중앙점 (채운 원)
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(cx_, cy_, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 방향 화살표
+            const vx = t.vx || 0, vy = t.vy || 0;
+            const vmag = Math.sqrt(vx * vx + vy * vy);
+            if (vmag > 0.1) {
+              const arrowLen = 20;
+              const ex = cx_ + vx * arrowLen;
+              const ey = cy_ + vy * arrowLen;
+              ctx.strokeStyle = color;
+              ctx.lineWidth   = 2;
+              ctx.beginPath();
+              ctx.moveTo(cx_, cy_);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+              // 화살촉
+              const headLen = 7;
+              const angle   = Math.atan2(vy, vx);
+              ctx.beginPath();
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(ex - headLen * Math.cos(angle - Math.PI / 6), ey - headLen * Math.sin(angle - Math.PI / 6));
+              ctx.moveTo(ex, ey);
+              ctx.lineTo(ex - headLen * Math.cos(angle + Math.PI / 6), ey - headLen * Math.sin(angle + Math.PI / 6));
+              ctx.stroke();
+            }
+
+            // 역주행 라벨
             if (t.is_wrongway) {
-              ctx.strokeStyle = WRONG_COLOR; ctx.lineWidth = 3;
-              ctx.strokeRect(x1, y1, w, h);
-              ctx.fillStyle = WRONG_COLOR;
-              ctx.font = 'bold 11px sans-serif';
-              ctx.fillText(`⚠️ ${t.id}`, x1 + 2, y1 > 16 ? y1 - 4 : y1 + h + 12);
-            } else {
-              ctx.strokeStyle = NORMAL_COLOR; ctx.lineWidth = 1.5;
-              ctx.strokeRect(x1, y1, w, h);
+              ctx.fillStyle = color;
+              ctx.font      = 'bold 11px sans-serif';
+              ctx.fillText(`⚠️ ${t.id}`, cx_ + 6, cy_ - 6);
             }
           });
+          ctx.globalAlpha = 1;
         }
       }
       rafRef.current = requestAnimationFrame(draw);
@@ -163,8 +216,11 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
         ref={imgRef}
         src={streamUrl}
         alt="CCTV"
-        onError={() => setImgError(true)}
-        onLoad={()  => setImgError(false)}
+        onError={() => {
+          setImgError(true);
+          setTimeout(() => setStreamKey(k => k + 1), 2000);
+        }}
+        onLoad={() => setImgError(false)}
         style={{ width: '100%', height: '100%', objectFit: 'contain', display: imgError ? 'none' : 'block' }}
       />
       {!imgError && (
