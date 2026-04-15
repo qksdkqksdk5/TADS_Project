@@ -8,7 +8,8 @@ import AnalyticsModal from './components/AnalyticsModal';
 
 // ✅ isMobile은 Dashboard에서 prop으로 받아서 사용 (내부 훅 제거)
 export default function PlateModule({ host, user, isMobile }) {
-  const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
+  // const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
+  const BASE_URL = `http://${host || window.location.hostname}/api/plate`;
   const api = plateApi(BASE_URL);
 
   const [connected, setConnected]                 = useState(false);
