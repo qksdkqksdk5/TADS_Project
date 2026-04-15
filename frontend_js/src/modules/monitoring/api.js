@@ -2,7 +2,7 @@
 // src/modules/monitoring/api.js
 import axios from 'axios';
 
-const base = (host) => `http://${host}/api/monitoring`;
+const base = (host) => `${host}/api/monitoring`;
 // `http://${host}:5000/api/monitoring`;
 export const startCamera = (host, params) =>
   axios.post(`${base(host)}/start`, params);
