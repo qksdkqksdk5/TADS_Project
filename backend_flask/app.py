@@ -21,6 +21,12 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distri
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+@app.after_request
+def add_header(response):
+    # 브라우저가 ngrok 경고 페이지를 띄우지 않고 바로 데이터를 받게 만드는 핵심 헤더입니다.
+    response.headers['ngrok-skip-browser-warning'] = 'true'
+    return response
+
 DB_USER = os.getenv("DB_USER", "root")
 DB_PW   = os.getenv("DB_PASSWORD", "12341234")
 DB_HOST = os.getenv("DB_HOST", "localhost")
