@@ -19,7 +19,7 @@ load_dotenv()
 warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distributed.reduce_op` is deprecated")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 DB_USER = os.getenv("DB_USER", "root")
 DB_PW   = os.getenv("DB_PASSWORD", "12341234")
