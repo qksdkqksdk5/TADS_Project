@@ -84,10 +84,15 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
     const idx  = type === 'reverse' ? 0 : 1;
     const item = cctvData[idx];
     if (!item) return;
+
     if (currentOn) {
+      // ON → OFF: UI 먼저 끄고 백엔드 stop
+      setOn(false);
       try { await stopDetection(host, { name: item.name, type }); } catch {}
+    } else {
+      // OFF → ON: 그냥 켜기 (fire_feed 요청이 자동으로 detector 생성)
+      setOn(true);
     }
-    setOn(!currentOn);
   };
 
   const handleCapture = async () => {
@@ -131,7 +136,6 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
                 finalUrl = `http://${host}:5000/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
                 isHls    = false;
               }
-
               const displayName = isReverse
                 ? `🔴 ${item.name}`
                 : isFire
@@ -142,6 +146,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
                 <div key={idx} style={{ cursor: 'zoom-in', width: '100%', height: '100%' }}
                   onClick={() => setExpandedMedia({ url: finalUrl, isHls, name: item.name })}>
                   <SingleMedia
+                    key={finalUrl}
                     url={finalUrl} isHls={isHls} name={displayName}
                     showToggle={isReverse || isFire}
                     isOn={isOn}

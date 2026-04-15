@@ -15,7 +15,7 @@ os.makedirs(TEST_DIR, exist_ok=True)
 # 'paddle' 또는 'yolo' 로 전환
 OCR_ENGINE = 'yolo'
 
-ROI_TOP = 0.25
+ROI_TOP = 0.3
 ROI_BOTTOM = 0.85
 YOLO_IMG_SIZE = 640
 DISPLAY_H = 720
@@ -24,7 +24,7 @@ ASPECT_RATIO_MIN = 1.5
 ASPECT_RATIO_MAX = 5.0
 MAX_BOX_AREA_RATIO = 0.1
 MIN_BOX_AREA_RATIO = 0.0003
-VOTE_THRESHOLD = 4
+VOTE_THRESHOLD = 3
 
 # --- [검출 설정] ---
 PAD          = 8      # 번호판 크롭 패딩

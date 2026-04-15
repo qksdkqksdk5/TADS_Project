@@ -1,12 +1,13 @@
 /* eslint-disable */
 import { useState, useEffect, useRef } from 'react';
 import { plateApi } from './api';
-import ControlBox      from './components/ControlBox';
-import VideoStream     from './components/VideoStream';
-import PlateList       from './components/PlateList';
-import AnalyticsModal  from './components/AnalyticsModal';
+import ControlBox     from './components/ControlBox';
+import VideoStream    from './components/VideoStream';
+import PlateList      from './components/PlateList';
+import AnalyticsModal from './components/AnalyticsModal';
 
-export default function PlateModule({ host, user }) {  // ✅ user prop 추가
+// ✅ isMobile은 Dashboard에서 prop으로 받아서 사용 (내부 훅 제거)
+export default function PlateModule({ host, user, isMobile }) {
   const BASE_URL = `http://${host || window.location.hostname}:5000/api/plate`;
   const api = plateApi(BASE_URL);
 
@@ -62,7 +63,6 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
   }, [started, videoFilter]);
 
   const handleStart = async (video) => {
-    // ✅ operator_name(user.name) 함께 전달
     await api.start(video, user?.name);
     setStarted(true);
   };
@@ -99,9 +99,9 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
   }, [connected]);
 
   return (
-    <div style={s.container}>
-      <div style={s.body}>
-        <div style={s.left}>
+    <div style={isMobile ? s.containerMobile : s.container}>
+      <div style={isMobile ? s.bodyMobile : s.body}>
+        <div style={isMobile ? s.leftMobile : s.left}>
           <ControlBox
             connected={connected}
             videos={videos}
@@ -137,11 +137,55 @@ export default function PlateModule({ host, user }) {  // ✅ user prop 추가
 }
 
 const s = {
+  // ── 데스크톱: 부모 높이 채우기 ──
   container: {
-    flex: 1, height: '100%', background: '#0f0f1a',
-    color: '#e0e0ff', display: 'flex', flexDirection: 'column',
-    padding: '15px', boxSizing: 'border-box', overflow: 'hidden',
+    flex: 1,
+    height: '100%',
+    background: '#0f0f1a',
+    color: '#e0e0ff',
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '15px',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
   },
-  body: { display: 'flex', gap: '20px', flex: 1, minHeight: 0 },
-  left: { flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
+
+  // ── 모바일: 높이 고정 해제, 스크롤 허용 ──
+  containerMobile: {
+    flex: 1,
+    background: '#0f0f1a',
+    color: '#e0e0ff',
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '10px',
+    boxSizing: 'border-box',
+    overflowY: 'auto',
+  },
+
+  // ── 데스크톱 body ──
+  body: {
+    display: 'flex',
+    gap: '20px',
+    flex: 1,
+    minHeight: 0,
+  },
+  left: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    minHeight: 0,
+  },
+
+  // ── 모바일 body ──
+  bodyMobile: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  leftMobile: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
 };

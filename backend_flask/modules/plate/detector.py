@@ -1,12 +1,16 @@
+import os
+
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENVINO_NUM_THREADS"] = "2"
+os.environ["KMP_BLOCKTIME"] = "1"
+
 import threading
 import cv2
 import re
 import time
-import os
 from datetime import datetime
 from collections import Counter
 from ultralytics import YOLO
-from gevent.threadpool import ThreadPoolExecutor as GThreadPoolExecutor
 
 from .state import (
     state, state_lock,

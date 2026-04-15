@@ -25,6 +25,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const host = window.location.hostname;
+  const plateHost = '220.76.197.149'; // 고정 IP로 변경
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
@@ -88,7 +89,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "plate" && (
             <div style={moduleWrapper}>
-              <PlateModule isMobile={isMobile} host={host} user={user} />
+              <PlateModule isMobile={isMobile} host={plateHost} user={user} />
             </div>
           )}
           {activeTab === "monitoring" && (
