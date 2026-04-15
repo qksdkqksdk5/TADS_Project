@@ -18,7 +18,7 @@ export default function RaspiModule() {
   // ✅ 렌더마다 재생성되지 않도록 ref로 고정
   const RASPI_IP = "192.168.219.155";
   // const BASE_URL = useRef(`http://${window.location.hostname}:5000/api/raspi`).current;
-  const BASE_URL = useRef(`https://with-guitar-power-ferry.trycloudflare.com/api/raspi`).current;
+  const BASE_URL = useRef(`https://upcoming-venture-patrol-true.trycloudflare.com/api/raspi`).current;
 
   // ✅ video URL도 ref로 관리 — streamKey state 변경이 useEffect 재실행 유발 안 하도록
   const normalVideoUrl  = useRef(`http://${RASPI_IP}:5000/video_feed`);

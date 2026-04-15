@@ -25,7 +25,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const host = window.location.hostname;
-  const outsideHost = 'https://with-guitar-power-ferry.trycloudflare.com'; // 고정 IP로 변경
+  const outsideHost = 'https://upcoming-venture-patrol-true.trycloudflare.com'; // 고정 IP로 변경
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
