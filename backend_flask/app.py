@@ -19,13 +19,12 @@ load_dotenv()
 warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distributed.reduce_op` is deprecated")
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {
+    "origins": "*", 
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "ngrok-skip-browser-warning"]
+}})
 
-@app.after_request
-def add_header(response):
-    # 브라우저가 ngrok 경고 페이지를 띄우지 않고 바로 데이터를 받게 만드는 핵심 헤더입니다.
-    response.headers['ngrok-skip-browser-warning'] = 'true'
-    return response
 
 DB_USER = os.getenv("DB_USER", "root")
 DB_PW   = os.getenv("DB_PASSWORD", "12341234")

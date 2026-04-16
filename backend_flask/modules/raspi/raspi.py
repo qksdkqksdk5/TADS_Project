@@ -190,6 +190,33 @@ def stream_proxy_worker():
 
 # --- [6. API 엔드포인트] ---
 
+
+# raspi.py 수정 제안
+@raspi_bp.route('/normal_feed')
+def normal_feed():
+    def generate():
+        stream_url = f"{RASPI_BACKEND_URL}/video_feed"
+        try:
+            # stream=True일 때 연결 자체가 실패할 경우를 대비합니다.
+            with requests.get(stream_url, stream=True, timeout=3) as r:
+                r.raise_for_status() # 200 OK가 아니면 에러 발생
+                for chunk in r.iter_content(chunk_size=4096):
+                    yield chunk
+        except Exception as e:
+            print(f"⚠️ [Proxy Error] 라즈베리파이 연결 불가: {e}")
+            # 연결 실패 시 빈 바이트를 보내거나 루프 종료
+            return
+
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'ngrok-skip-browser-warning': 'true',
+            'Cache-Control': 'no-cache',
+        }
+    )
+
 @raspi_bp.route('/start', methods=['POST'])
 def start_workers():
     global _workers_started
@@ -221,13 +248,23 @@ def stop_workers():
 @raspi_bp.route('/video_feed')
 def video_feed():
     def generate():
-        while True:
+        while not _stop_event.is_set(): # 전역 정지 이벤트 확인
             with frame_lock:
                 if processed_frame:
                     yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                            + processed_frame + b'\r\n')
-            time.sleep(0.04)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+            time.sleep(0.04) # 약 25 FPS 유지
+    
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': '*',
+            'ngrok-skip-browser-warning': 'true',
+            'Cache-Control': 'no-cache',
+        }
+    )
 
 
 @raspi_bp.route('/control')
