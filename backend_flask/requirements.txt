@@ -21,3 +21,4 @@ zope-event==6.1
 zope-interface==8.2
 cryptography==44.0.1
 openvino>=2024.0.0
+openai==1.58.0
