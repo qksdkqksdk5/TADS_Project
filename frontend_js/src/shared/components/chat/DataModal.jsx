@@ -1,7 +1,12 @@
 import { COLUMN_MAP, formatValue } from './columnConfig';
 
-export default function DataModal({ data, onClose }) {
-  if (!data) return null;
+export default function DataModal({ data, onClose, host }) {
+  if (!data || data.length === 0) return null;
+
+  // ✅ 호스트 주소 정리 (http:// 및 포트 중복 방지)
+  const baseUrl = host.startsWith('http') ? host : `http://${host}`;
+  // 만약 host에 이미 :5000이 포함되어 있다면 아래 :5000은 제거해야 합니다.
+  const finalHost = baseUrl.includes(':5000') ? baseUrl : `${baseUrl}:5000`;
 
   return (
     <div style={modalOverlay} onClick={onClose}>
@@ -23,7 +28,25 @@ export default function DataModal({ data, onClose }) {
               {data.map((row, idx) => (
                 <tr key={idx}>
                   {Object.entries(row).map(([key, val], i) => (
-                    <td key={i} style={tableTd}>{formatValue(key, val)}</td>  // ← 여기가 td 렌더링!
+                    <td key={i} style={tableTd}>
+                      {/* ✅ 수정 포인트: SQL에서 보낸 'IMAGE_PATH' 별칭을 정확히 체크 */}
+                      {key.toUpperCase() === 'IMAGE_PATH' || key.includes('img_path') || key.includes('image_path') ? (
+                        <a href={`${finalHost}${val}`} target="_blank" rel="noreferrer">
+                          <img 
+                            src={`${finalHost}${val}`} 
+                            alt="인식 이미지" 
+                            style={{ width: '100px', height: 'auto', borderRadius: '4px', cursor: 'pointer', display: 'block', margin: '0 auto' }} 
+                            // 엑박 방지: 이미지 로드 실패 시 텍스트 표시
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                              e.target.parentNode.innerHTML = '<span style="font-size:10px;color:#64748b;">이미지 없음</span>';
+                            }}
+                          />
+                        </a>
+                      ) : (
+                        formatValue(key, val)
+                      )}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -42,4 +65,12 @@ const closeBtn = { background: '#ef4444', color: '#fff', border: 'none', padding
 const tableWrapper = { overflow: 'auto', flex: 1, marginTop: '10px', border: '1px solid #1e293b', borderRadius: '8px', background: '#020617' };
 const dataTable = { width: '100%', borderCollapse: 'separate', borderSpacing: 0, color: '#e2e8f0' };
 const tableTh = { background: '#1e293b', color: '#94a3b8', padding: '15px 20px', fontSize: '13px', fontWeight: 'bold', textTransform: 'uppercase', borderBottom: '2px solid #334155', position: 'sticky', top: 0, zIndex: 10};
-const tableTd = { padding: '12px 16px', borderBottom: '1px solid #1e293b', color: '#e2e8f0', whiteSpace: 'nowrap', fontSize: '13px', textAlign: 'center' };
+const tableTd = { 
+  padding: '12px 16px', 
+  borderBottom: '1px solid #1e293b', 
+  color: '#e2e8f0', 
+  whiteSpace: 'nowrap', 
+  fontSize: '13px', 
+  textAlign: 'center',
+  verticalAlign: 'middle' // 이미지와 텍스트 높이 맞춤
+};

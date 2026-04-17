@@ -90,7 +90,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "plate" && (
             <div style={moduleWrapper}>
-              <PlateModule isMobile={isMobile} host={outsideHost} user={user} />
+              <PlateModule isMobile={isMobile} host={host} user={user} />
             </div>
           )}
           {activeTab === "monitoring" && (
@@ -122,7 +122,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
         </div>
       </main>
-      <ChatAssistant host={host} />
+      <ChatAssistant host={host} user={user} />
     </div>
   );
 }

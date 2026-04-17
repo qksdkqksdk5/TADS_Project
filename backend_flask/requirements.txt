@@ -22,3 +22,16 @@ zope-interface==8.2
 cryptography==44.0.1
 openvino>=2024.0.0
 openai==2.32.0
+
+# LangChain & Vector DB
+langchain==1.2.15
+langchain-classic==1.0.4
+langchain-community==0.4.1
+langchain-core==1.2.31
+langchain-openai==1.1.14
+langchain-text-splitters==1.1.2
+chromadb==1.5.8
+
+# MongoDB
+pymongo==4.16.0
+dnspython==2.8.0
