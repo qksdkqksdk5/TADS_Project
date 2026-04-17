@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Sidebar      from '../../shared/components/Sidebar';
+import ChatAssistant from '../../shared/components/chat/ChatAssistant';
 import TrafficModule  from '../traffic';
 import PlateModule    from '../plate';
 import MonitoringModule from '../monitoring';
@@ -121,6 +122,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
         </div>
       </main>
+      <ChatAssistant host={host} />
     </div>
   );
 }
