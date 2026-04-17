@@ -11,8 +11,6 @@ load_dotenv()
 chat_bp = Blueprint('chat', __name__)
 
 # OpenAI 클라이언트 및 DB 엔진 설정
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key)
 DB_URL = f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
 engine = create_engine(DB_URL)
 
@@ -20,8 +18,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(BASE_DIR, "schema_context.txt"), "r", encoding="utf-8") as f:
     SCHEMA_CONTEXT = f.read()
 
+
+def get_openai_client():
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set")
+    return OpenAI(api_key=api_key)
+
 @chat_bp.route('/ask', methods=['POST'])
 def ask_tads():
+    client = get_openai_client()
     data = request.json
     user_question = data.get('question')
 
