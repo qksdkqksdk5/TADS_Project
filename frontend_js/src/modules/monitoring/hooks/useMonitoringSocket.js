@@ -41,7 +41,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
   useEffect(() => {
     if (!host) return;
 
-    const sock = io(`http://${host}:5000`, {
+    const sock = io(`https://${host}`, {
       transports: ['polling', 'websocket'],
       reconnectionAttempts: 5,
       timeout: 5000,
