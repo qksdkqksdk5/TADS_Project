@@ -120,7 +120,7 @@ export default function PlateModule({ host, user, isMobile }) {
           resultVideos={resultVideos}
           videoFilter={videoFilter}
           onVideoFilter={handleVideoFilter}
-          baseUrl={`http://${host || window.location.hostname}`}
+          baseUrl={`http://${host || window.location.hostname}:5000`}
           preprocessMethods={preprocessMethods}
           onVerify={handleVerify}
           onReprocess={handleReprocess}

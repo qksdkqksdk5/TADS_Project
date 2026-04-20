@@ -34,7 +34,19 @@ engine = create_engine(
 # ============================================================
 try:
     MONGO_URI = os.getenv("MONGO_URI")
-    mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    from gevent import monkey
+    if monkey.is_module_patched('socket'):  # gevent 패치 감지
+        from pymongo.pool import PoolOptions
+        mongo_client = MongoClient(
+            MONGO_URI,
+            serverSelectionTimeoutMS=3000,
+            connectTimeoutMS=3000,
+            socketTimeoutMS=5000,
+            maxPoolSize=10,
+            waitQueueTimeoutMS=2000
+        )
+    else:
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     mongo_client.server_info()  # 실제 연결 확인
     mongo_db = mongo_client["TADS_DB"]
     history_col = mongo_db["chat_history"]
