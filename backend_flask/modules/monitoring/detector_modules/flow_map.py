@@ -1,7 +1,11 @@
-# 파일 경로: C:\final_pj\src\flow_map.py
+# 파일 경로: C:\TADS_PJ\TADS_Project\backend_flask\modules\monitoring\detector_modules\flow_map.py
+# 출처: C:\final_pj\src\flow_map.py (AI 모델 v4, 커밋 101~122차 반영)
 # 15x15 그리드 기반 정상 흐름장
 # EMA 학습 + 이중 선형 보간(Bilinear Interpolation) + 방향 일관성 공간 평활화
 # smoothed_mask: 보간으로 채워진 셀(실 데이터 없음) 추적 — judge.py에서 cos_threshold 완화에 사용
+# 변경 이력:
+#   v4 (122차): 양방향 채널(A/B) 분리, bbox 풋프린트 학습, apply_direction_repair 추가
+#   eroded_mask: save/load에 포함 (기존 웹 버전 테스트 하위 호환)
 
 import numpy as np                                       # 수치 계산
 from collections import deque                             # BFS 큐 (flood-fill용)
@@ -9,15 +13,33 @@ from pathlib import Path                                  # 경로 조작
 
 
 class FlowMap:
-    def __init__(self, grid_size: int, alpha: float, min_samples: int):
+    def __init__(self, grid_size: int, alpha: float, min_samples: int,
+                 bbox_alpha_decay: float = 0.5,
+                 bbox_gating_alpha_ratio: float = 0.3,
+                 edge_margin: int = 1):
         self.grid_size = grid_size                        # 흐름 맵을 나눌 격자 크기 (N x N)
         self.alpha = alpha                                # EMA 학습 속도 (새 데이터 반영 비율)
         self.min_samples = min_samples                    # 셀당 최소 학습 샘플 수 (이하이면 공간 보정)
+        self._bbox_alpha_decay = bbox_alpha_decay         # bbox 거리당 alpha 감쇠율
+        self._bbox_gating_ratio = bbox_gating_alpha_ratio # 이 비율 미만 셀 → 방향 게이팅·count 비적용
+        self._edge_margin = edge_margin                   # 학습 제외 가장자리 셀 수
 
-        # 각 셀의 정상 이동 방향 벡터 (ndx, ndy)
+        # 각 셀의 정상 이동 방향 벡터 (ndx, ndy) — 학습 단계에서 단일 글로벌 맵으로 학습
         self.flow = np.zeros((grid_size, grid_size, 2), np.float32)
         # 각 셀의 학습 데이터 개수
         self.count = np.zeros((grid_size, grid_size), np.int32)
+
+        # ── 양방향(Dual-Channel) flow map ─────────────────────────────────
+        # 학습 완료 후 build_directional_channels()로 글로벌 맵을 A/B로 분리.
+        # A = ref_direction과 cos >= 0 방향 차량의 셀
+        # B = ref_direction과 cos < 0 방향 차량의 셀
+        # 판정 시: 차량의 진행 방향 채널을 우선 조회 → 반대 차선 차량에 의한
+        #           중앙선 오염이 구조적으로 불가능 (다른 채널만 오염 가능)
+        # 해당 채널에 데이터 없으면 글로벌 맵으로 fallback (호환성 보장)
+        self.flow_a  = np.zeros((grid_size, grid_size, 2), np.float32)
+        self.count_a = np.zeros((grid_size, grid_size), np.int32)
+        self.flow_b  = np.zeros((grid_size, grid_size, 2), np.float32)
+        self.count_b = np.zeros((grid_size, grid_size), np.int32)
 
         self.frame_w = 0                                  # 영상 너비
         self.frame_h = 0                                  # 영상 높이
@@ -27,8 +49,13 @@ class FlowMap:
         # Phase 1 정체 탐지용 — 셀별 정상 normalized_speed EMA
         self.speed_ref = np.zeros((grid_size, grid_size), np.float32)  # 셀별 정상 norm_speed 기준값
 
-        # apply_boundary_erosion()이 제거한 셀 기록 — learn_step에서 재학습 금지
+        # apply_boundary_erosion() / apply_overlap_erosion()이 제거한 셀 — 재학습 금지
         self.eroded_mask = np.zeros((grid_size, grid_size), dtype=bool)  # True=영구 빈 셀
+
+        # bbox 겹침 추적 — 반대 차선 차량의 bbox가 이 셀을 밟은 횟수
+        # learn_step(bbox=...) 호출 시 방향 게이팅으로 EMA 갱신이 거부된 셀에 카운트
+        # apply_overlap_erosion()에서 threshold 이상이면 중앙선 경계로 판정 → 제거
+        self._bbox_contra_count = np.zeros((grid_size, grid_size), np.int32)
 
         # ── 개선 1: smoothed_mask — 보간으로 채워진 셀 추적 ──────────────
         # apply_spatial_smoothing()에서 count=0 셀이 이웃 평균으로 채워지면 True
@@ -37,6 +64,13 @@ class FlowMap:
         self.smoothed_mask = np.zeros((grid_size, grid_size), dtype=bool)  # True=보간 채움, 실 데이터 없음
 
         self._learn_call_count = 0                        # learn_step 호출 횟수 (디버그용)
+
+        # ── 양방향 채널 기준 방향 (build_directional_channels 호출 후 설정) ──
+        # get_interpolated의 contamination-aware global fallback에 사용:
+        #   채널 데이터 없는 셀에서 글로벌 맵 방향이 쿼리 방향과 반대면 None 반환
+        #   → 오염된 글로벌 벡터가 판정에 개입하는 것을 구조적으로 차단
+        self._ref_dx: float | None = None
+        self._ref_dy: float | None = None
 
     # ==================== 초기화/리셋 ====================
     def init_grid(self, frame_w, frame_h):
@@ -53,7 +87,14 @@ class FlowMap:
         self.speed_ref[:] = 0                             # 셀별 정상 속도 기준값 초기화
         self.eroded_mask[:] = False                       # 경계 마스크 초기화 (재학습 시 초기화)
         self.smoothed_mask[:] = False                     # 보간 마스크 초기화 (재학습 시 초기화)
+        self._bbox_contra_count[:] = 0                    # bbox 반대방향 방문 카운터 초기화
         self._learn_call_count = 0                        # 호출 카운터 초기화
+        self.flow_a[:] = 0                                # A채널 벡터 초기화
+        self.count_a[:] = 0                               # A채널 카운터 초기화
+        self.flow_b[:] = 0                                # B채널 벡터 초기화
+        self.count_b[:] = 0                               # B채널 카운터 초기화
+        self._ref_dx = None                               # 기준 방향 리셋
+        self._ref_dy = None
 
     # ==================== 좌표 변환 ====================
     def _cell_coords(self, x, y):
@@ -62,97 +103,248 @@ class FlowMap:
         c = (x / self.cell_w) - 0.5                       # 열 인덱스 실수 값
         return r, c
 
-    # ==================== EMA 기반 학습 ====================
-    def learn_step(self, x1, y1, x2, y2, min_move):
-        """한 차량의 이동 벡터를 flow_map에 반영 (EMA 기반 학습)"""
+    # ==================== bbox 셀 목록 헬퍼 ====================
+    def _get_bbox_cells(self, bx1, by1, bx2, by2):
+        """bbox 영역에 포함되는 모든 그리드 셀 (r, c) 인덱스 목록 반환."""
+        gs = self.grid_size
+        r_min = int(np.clip(by1 / self.cell_h, 0, gs - 1))
+        r_max = int(np.clip(by2 / self.cell_h, 0, gs - 1))
+        c_min = int(np.clip(bx1 / self.cell_w, 0, gs - 1))
+        c_max = int(np.clip(bx2 / self.cell_w, 0, gs - 1))
+        return [(r, c) for r in range(r_min, r_max + 1)
+                       for c in range(c_min, c_max + 1)]
 
+    # ==================== EMA 기반 학습 ====================
+    def learn_step(self, x1, y1, x2, y2, min_move, bbox=None,
+                   traj_ndx=None, traj_ndy=None):
+        """한 차량의 이동 벡터를 flow_map에 반영 (EMA 기반 학습).
+
+        Args:
+            x1, y1: 이전 위치 (velocity_window 프레임 전 중심점).
+            x2, y2: 현재 footpoint (bbox 중심).
+            min_move: 최소 이동 거리 (이하이면 무시).
+            bbox: (bx1, by1, bx2, by2) — 현재 프레임 bbox 좌표.
+                  None이면 기존 중심점 1셀 방식. 지정하면 bbox 전체 셀에 EMA 갱신.
+            traj_ndx, traj_ndy: 궤적 전체 방향 벡터 (traj[0] → traj[-1]).
+                  지정 시 중앙점(dist=0) 게이팅·갱신에 사용 — velocity_window 노이즈 차단.
+                  None이면 velocity_window 방향(ndx, ndy) 사용.
+
+        셀 유형별 동작:
+          dist=0 (중앙점): 게이팅 적용 — trajectory 방향 기준 (velocity_window 아님).
+                           반대 방향(cos<-0.4) → EMA 거부 + count-=2 (2배 빠른 잠금 해제).
+                           게이팅 통과 시에만 EMA 갱신 + count 증가.
+                           _bbox_contra_count: 중앙점 기반으로만 추적 (중앙선 경계 검출).
+          dist=1 (bbox 인접): 게이팅 적용 (velocity_window 방향), contra 추적 없음.
+          dist≥2 (bbox 원거리): 게이팅 없음, count 미증가 (항상 soft).
+        """
         dx, dy = x2 - x1, y2 - y1                        # 이동 벡터
         mag = np.sqrt(dx ** 2 + dy ** 2)                  # 크기(속도)
         if mag < min_move:                                # 너무 작은 움직임은 무시
             return
 
-        ndx, ndy = dx / mag, dy / mag                     # 단위 방향 벡터
-        r = int((y1 + y2) / 2 / self.cell_h)             # 중간 위치의 셀 행 좌표
-        c = int((x1 + x2) / 2 / self.cell_w)             # 중간 위치의 셀 열 좌표
-        r = np.clip(r, 0, self.grid_size - 1)             # 범위 보정
-        c = np.clip(c, 0, self.grid_size - 1)
+        ndx, ndy = dx / mag, dy / mag                     # 단위 방향 벡터 (velocity_window 기반)
+        gs = self.grid_size
 
-        # ── 경계 마스크: erosion으로 제거된 셀은 영구 재학습 금지 ────────
-        # apply_boundary_erosion()이 설정한 셀에는 enable_online_flow_update=True
-        # 상태에서도 차량이 지나가며 다시 채우지 못하도록 완전 차단.
-        if self.eroded_mask[r, c]:                        # 제거된 경계 셀이면
-            return                                        # 학습 거부
+        # ── 업데이트 대상 셀 목록 결정 ──────────────────────────────────
+        if bbox is not None:
+            bx1, by1, bx2, by2 = bbox
+            cells = self._get_bbox_cells(*bbox)            # bbox 전체 셀
+            # bbox 중심 셀 — 거리 기반 alpha 감쇠의 기준점
+            _cx = (bx1 + bx2) / 2
+            _cy = (by1 + by2) / 2
+            r_center = int(np.clip(_cy / self.cell_h, 0, gs - 1))
+            c_center = int(np.clip(_cx / self.cell_w, 0, gs - 1))
+            _log_r, _log_c = r_center, c_center
+        else:
+            # 기존 방식: 이동 경로 중간 점 1셀
+            _r = int((y1 + y2) / 2 / self.cell_h)
+            _c = int((x1 + x2) / 2 / self.cell_w)
+            _log_r = int(np.clip(_r, 0, gs - 1))
+            _log_c = int(np.clip(_c, 0, gs - 1))
+            cells = [(_log_r, _log_c)]
+            r_center, c_center = _log_r, _log_c
 
-        # ── 방향 게이팅: 확립된 셀에 반대 방향 진입 차단 ────────────────
-        # count >= min_samples인 셀은 이미 방향이 확립된 것으로 간주.
-        # 새 벡터가 기존 방향과 cos < -0.4 (120° 이상 반대)이면 오염으로 판정,
-        # EMA 갱신을 거부한다. 중앙 분리대 경계에서 상행 차량이 하행 셀을
-        # 오염시키는 것을 원천 차단하는 핵심 로직.
-        if self.count[r, c] >= self.min_samples:          # 충분히 학습된 셀만 검사
-            existing = self.flow[r, c]                    # 기존 방향 벡터
-            emag = np.linalg.norm(existing)               # 기존 벡터 크기
-            if emag > 0.1:                                # 기존 방향이 유효하면
-                cos_val = float(                          # 기존 방향과의 코사인 유사도
-                    ndx * existing[0] / emag
-                    + ndy * existing[1] / emag
-                )
-                if cos_val < -0.4:                        # 120° 이상 반대 → 오염 시도
-                    return                                # EMA 갱신 거부
+        # ── 셀별 EMA 갱신 ────────────────────────────────────────────────
+        for r, c in cells:
+            # erosion으로 제거된 셀은 영구 재학습 금지
+            if self.eroded_mask[r, c]:
+                continue
 
-        # EMA: 기존 흐름 벡터에 새 방향을 비율(alpha)만큼 섞어줌
-        self.flow[r, c, 0] = (1 - self.alpha) * self.flow[r, c, 0] + self.alpha * ndx
-        self.flow[r, c, 1] = (1 - self.alpha) * self.flow[r, c, 1] + self.alpha * ndy
-        self.count[r, c] += 1                             # 샘플 수 증가
+            # 가장자리 마진 내 셀은 학습 제외 (궤적 미확립 상태에서 오염 방지)
+            if (r < self._edge_margin or r >= gs - self._edge_margin
+                    or c < self._edge_margin or c >= gs - self._edge_margin):
+                continue
 
-        # ── 개선 1: 실 데이터 유입 시 smoothed_mask 해제 ────────────────
-        # 보간으로 채워진 셀에 실제 차량이 통과하면 더 이상 "보간 전용"이 아님
-        # → judge.py에서 이 셀은 정상 cos_threshold(-0.75) 적용으로 복귀
-        if self.smoothed_mask[r, c]:                      # 보간으로 채워진 셀이면
-            self.smoothed_mask[r, c] = False              # 실 데이터 유입 → 보간 표시 해제
+            # ── 거리 기반 alpha 감쇠 ─────────────────────────────────────
+            if bbox is not None:
+                dist = max(abs(r - r_center), abs(c - c_center))  # Chebyshev 거리
+                alpha_ratio = self._bbox_alpha_decay ** dist       # 감쇠 비율
+                alpha_cell  = self.alpha * alpha_ratio             # 실제 적용 alpha
+            else:
+                dist        = 0                                    # 단일 셀 모드 → 항상 중앙점
+                alpha_ratio = 1.0
+                alpha_cell  = self.alpha
 
-        # 디버그: 10000회마다 학습 현황 출력 (100회 → 10000회로 변경, 터미널 노이즈 억제)
-        self._learn_call_count += 1                       # 호출 카운터 증가
-        if self._learn_call_count % 10000 == 0:           # 10000회마다
-            active_cells = int(np.sum(self.count > 0))    # 데이터가 있는 셀 수
-            total_samples = int(self.count.sum())          # 전체 샘플 수
-            angle = np.degrees(np.arctan2(ndy, ndx))      # 마지막 학습 방향 (도)
+            existing = self.flow[r, c]
+            emag = np.linalg.norm(existing)
+
+            # ── 중앙점(dist=0): trajectory 기반 게이팅 적용 ────────────
+            # 설계 근거:
+            #   - 반대 차선 차량의 bbox 중심이 인접 차선 셀을 오염시키는 문제 차단
+            #   - velocity_window는 전환 구간에서 노이즈가 많아 게이팅에 부적합
+            #     → 궤적 전체 방향(traj[0]→traj[-1])은 실제 진행 방향을 안정적으로 반영
+            #   - 반대 방향 거부 시 count -= 2 (기존 -1 대비 2배 빠른 잠금 해제)
+            #     → 오염된 셀이 정상 차량으로 min_samples/2 번만 덮어씌워지면 재학습 가능
+            #   - _bbox_contra_count: 중앙점 기반으로만 추적
+            #     → 실제 차량 중심이 침범한 경우만 중앙선 경계로 판정 (bbox 확장 오탐 방지)
+            if dist == 0:
+                # ── traj 방향 없으면 중앙점 갱신 자체를 건너뜀 ────────────
+                # traj=None: velocity_window 미만이거나 이동량 부족 (방향 신뢰 불가).
+                # 이 상태에서 확립된 셀(count>=min_samples)을 갱신하면 오염 위험.
+                # 새 셀(count<min_samples)은 velocity_window 방향으로 초기 학습 허용.
+                if traj_ndx is None:
+                    if self.count[r, c] >= self.min_samples:
+                        continue                         # 확립 셀: traj 없으면 건너뜀
+                    # 미확립 셀: velocity_window로 초기 학습 허용
+                    upd_x, upd_y = ndx, ndy
+                else:
+                    upd_x, upd_y = traj_ndx, traj_ndy  # trajectory 방향 사용
+
+                # 게이팅: 확립된 셀에서 방향이 반대이면 갱신 거부
+                if self.count[r, c] >= self.min_samples and emag > 0.1:
+                    cos_val = float(upd_x * existing[0] / emag + upd_y * existing[1] / emag)
+                    if cos_val < -0.4:                    # 반대 방향 → 거부
+                        if bbox is not None:
+                            self._bbox_contra_count[r, c] += 1  # 중앙선 경계 후보 기록
+                        self.count[r, c] = max(0, self.count[r, c] - 2)  # 2배 빠른 잠금 해제
+                        continue                         # EMA 갱신 거부 ← 핵심
+                # 게이팅 통과 → EMA 갱신
+                self.flow[r, c, 0] = (1 - alpha_cell) * self.flow[r, c, 0] + alpha_cell * upd_x
+                self.flow[r, c, 1] = (1 - alpha_cell) * self.flow[r, c, 1] + alpha_cell * upd_y
+                self.count[r, c] += 1
+                if self.smoothed_mask[r, c]:
+                    self.smoothed_mask[r, c] = False
+                continue                                  # 나머지 로직 스킵
+
+            # ── dist >= 1: 방향 게이팅 유지 (bbox edge cells) ────────────
+            # _bbox_contra_count는 여기서 추적하지 않음:
+            #   bbox 확장으로 반대 차선 차량의 bbox가 경계를 넘어온 경우
+            #   → dist=1 셀에 contra를 누적하면 정상 차선의 유효 셀까지 과침식
+            #   → 실제 중앙선 침범은 dist=0 추적만으로 충분히 검출 가능
+            #
+            # [중앙선 침범 방지] dist=1 게이팅:
+            #   - traj 방향 우선 사용 (velocity_window보다 안정적 — dist=0과 동일 이유)
+            #   - 임계값 -0.4 → -0.2 강화 (완만한 역방향도 거부)
+            if alpha_ratio >= self._bbox_gating_ratio:    # dist=1 (decay^1=0.5 ≥ 0.3)
+                if self.count[r, c] >= self.min_samples and emag > 0.1:
+                    # dist=0과 동일하게 traj 방향 우선, 없으면 velocity_window 사용
+                    _g1x = traj_ndx if traj_ndx is not None else ndx
+                    _g1y = traj_ndy if traj_ndy is not None else ndy
+                    cos_val = float(_g1x * existing[0] / emag + _g1y * existing[1] / emag)
+                    if cos_val < -0.2:                    # -0.4 → -0.2 강화 (완만한 역방향도 거부)
+                        continue                         # contra·count 변경 없이 스킵
+            else:
+                # ── dist≥2: soft EMA지만 확립 셀은 반대방향 거부 ──────────
+                # 기존: 게이팅 없음 → 반대 차선 bbox 원거리 셀이 soft EMA로 조금씩 오염
+                # 수정: 확립 셀(count≥min_samples)에서 반대방향이면 soft EMA도 거부
+                # dist=1(-0.2)보다 완화된 -0.3 사용 — 멀리서 넓게 학습하는 soft 셀 보호
+                if self.count[r, c] >= self.min_samples and emag > 0.1:
+                    _g2x = traj_ndx if traj_ndx is not None else ndx
+                    _g2y = traj_ndy if traj_ndy is not None else ndy
+                    cos_val = float(_g2x * existing[0] / emag + _g2y * existing[1] / emag)
+                    if cos_val < -0.3:                    # 확립 셀 soft 오염 방지
+                        continue
+
+            # EMA 갱신 (중심에서 가까울수록 alpha 큼 → 강하게 학습)
+            self.flow[r, c, 0] = (1 - alpha_cell) * self.flow[r, c, 0] + alpha_cell * ndx
+            self.flow[r, c, 1] = (1 - alpha_cell) * self.flow[r, c, 1] + alpha_cell * ndy
+
+            # count: dist=1(강한 기여)만 증가, dist≥2(soft)는 항상 미증가 (잠금 방지)
+            if alpha_ratio >= self._bbox_gating_ratio:
+                self.count[r, c] += 1
+
+            if self.smoothed_mask[r, c]:                 # 보간 셀에 실 데이터 → 표시 해제
+                self.smoothed_mask[r, c] = False
+
+        # 디버그: 100회마다 학습 현황 출력
+        self._learn_call_count += 1
+        if self._learn_call_count % 100 == 0:
+            active_cells = int(np.sum(self.count > 0))
+            total_samples = int(self.count.sum())
+            angle = np.degrees(np.arctan2(ndy, ndx))
+            contra_total = int(self._bbox_contra_count.sum())
             print(f"   📈 learn_step #{self._learn_call_count}: "
-                  f"cell[{r},{c}] cnt={self.count[r,c]}, "
+                  f"cell[{_log_r},{_log_c}] cnt={self.count[_log_r,_log_c]}, "
                   f"angle={angle:+.0f}°, "
                   f"active_cells={active_cells}/{self.grid_size**2}, "
-                  f"total={total_samples}")
+                  f"total={total_samples}, contra_hits={contra_total}")
 
     # ==================== 이중 선형 보간 ====================
-    def get_interpolated(self, x, y):
+    def _interpolate_arr(self, x, y, flow_arr):
+        """flow_arr에서 (x, y) 위치의 이중 선형 보간 단위 벡터 반환.
+        보간 결과가 너무 작으면 None.
+        """
+        r, c = self._cell_coords(x, y)
+        r0, c0 = int(np.floor(r)), int(np.floor(c))
+        dr, dc = r - r0, c - c0
+        gs = self.grid_size - 1
+        r0, r1 = int(np.clip(r0, 0, gs)), int(np.clip(r0 + 1, 0, gs))
+        c0, c1 = int(np.clip(c0, 0, gs)), int(np.clip(c0 + 1, 0, gs))
+        top     = (1 - dc) * flow_arr[r0, c0] + dc * flow_arr[r0, c1]
+        bottom  = (1 - dc) * flow_arr[r1, c0] + dc * flow_arr[r1, c1]
+        final_v = (1 - dr) * top + dr * bottom
+        mag = np.linalg.norm(final_v)
+        return final_v / (mag + 1e-6) if mag > 0.1 else None
+
+    def get_interpolated(self, x, y, direction=None):
         """이중 선형 보간으로 (x, y) 위치의 흐름 벡터 추정.
 
-        충돌 감지 없이 순수 이중 선형 보간만 수행한다.
-        apply_spatial_smoothing에서 count=0 셀 오염을 차단하므로
-        보간 결과가 엉뚱한 방향이 되는 문제가 발생하지 않는다.
+        Args:
+            x, y: 픽셀 좌표.
+            direction: 'a' | 'b' | None.
+                'a'/'b' 지정 시 해당 방향 채널(flow_a / flow_b)을 우선 조회.
+
+        채널 활성화(build_directional_channels 이후):
+          ① 채널에 데이터 있으면 → 채널 벡터 사용 (반대 차선 오염 없음)
+          ② 채널 데이터 없음 → 오염-인식 글로벌 fallback:
+               글로벌 방향이 쿼리 방향과 일치하면 반환,
+               반대 방향이면 None (오염 벡터 → vote loop skip)
+          채널 미활성화(direction=None 또는 학습 완료 전) → 글로벌 그대로 사용
         """
+        if direction is not None and self._ref_dx is not None:
+            # ── 양방향 채널 활성화 상태 ─────────────────────────────────────
+            chan_flow  = self.flow_a  if direction == 'a' else self.flow_b
+            chan_count = self.count_a if direction == 'a' else self.count_b
+            r, c = self._cell_coords(x, y)
+            r0 = int(np.clip(np.floor(r), 0, self.grid_size - 1))
+            c0 = int(np.clip(np.floor(c), 0, self.grid_size - 1))
+            r1 = min(r0 + 1, self.grid_size - 1)
+            c1 = min(c0 + 1, self.grid_size - 1)
+            # 4개 인접 셀 중 최소 2개에 채널 데이터가 있을 때만 채널 보간 사용.
+            # 1개만 있으면 경계 셀 1개의 방향이 그대로 반영 → 방향 오차가 크면 오탐 유발.
+            # 2개 이상: 보간이 두 방향의 평균 → 이상치 영향 희석.
+            _ch_cnt = ((1 if chan_count[r0, c0] > 0 else 0)
+                       + (1 if chan_count[r0, c1] > 0 else 0)
+                       + (1 if chan_count[r1, c0] > 0 else 0)
+                       + (1 if chan_count[r1, c1] > 0 else 0))
+            if _ch_cnt >= 2:
+                result = self._interpolate_arr(x, y, chan_flow)
+                if result is not None:
+                    return result
 
-        r, c = self._cell_coords(x, y)                   # 그리드 좌표로 변환 (실수)
-        r0, c0 = int(np.floor(r)), int(np.floor(c))      # 좌상단 셀 인덱스 (정수)
-        r1, c1 = r0 + 1, c0 + 1                          # 우하단 셀 인덱스
-        dr, dc = r - r0, c - c0                           # 소수점 부분 (보간 가중치)
+            # ② 채널 데이터 없음 → 오염-인식 글로벌 fallback ─────────────
+            # 글로벌 맵 방향이 쿼리 방향과 반대(오염)이면 None 반환.
+            # 예: A차량 flow_a 조회 → 없음 → 글로벌=B방향(오염) → None 반환
+            #     A차량 flow_a 조회 → 없음 → 글로벌=A방향(clean) → 반환
+            _gv = self._interpolate_arr(x, y, self.flow)
+            if _gv is not None:
+                _cos_g = float(_gv[0] * self._ref_dx + _gv[1] * self._ref_dy)
+                if (direction == 'a') == (_cos_g >= 0):
+                    return _gv        # 방향 일치 → 신뢰 가능
+            return None               # 방향 불일치 → 오염 가능성 → skip
 
-        # grid 범위 안으로 인덱스 보정
-        gs = self.grid_size - 1                           # 최대 인덱스
-        r0, r1 = np.clip([r0, r1], 0, gs)                # 행 범위 보정
-        c0, c1 = np.clip([c0, c1], 0, gs)                # 열 범위 보정
-
-        v00 = self.flow[r0, c0]                           # (r0, c0) 셀의 흐름 벡터
-        v01 = self.flow[r0, c1]                           # (r0, c1)
-        v10 = self.flow[r1, c0]                           # (r1, c0)
-        v11 = self.flow[r1, c1]                           # (r1, c1)
-
-        # 순수 이중 선형 보간 (충돌 감지 제거)
-        top    = (1 - dc) * v00 + dc * v01               # 위쪽 두 셀 가로 보간
-        bottom = (1 - dc) * v10 + dc * v11               # 아래쪽 두 셀 가로 보간
-        final_v = (1 - dr) * top + dr * bottom            # 위/아래 세로 보간
-
-        mag = np.linalg.norm(final_v)                     # 최종 벡터 크기
-        return final_v / (mag + 1e-6) if mag > 0.1 else None  # 단위 벡터 또는 None
+        # 글로벌 맵 (채널 미활성화·direction=None)
+        return self._interpolate_arr(x, y, self.flow)
 
     # ==================== 공간 평활화 (원본 방식 + 방향 일관성 보호) ====================
     def apply_spatial_smoothing(self, verbose=False):
@@ -171,7 +363,19 @@ class FlowMap:
              이웃끼리 cos < -0.3이면 중앙 분리대 경계 → 채우지 않음
              채움 시 smoothed_mask = True (보간 전용 셀 표시)
         """
-        # verbose=True 시 전체 셀 덤프 제거 — 400줄 테이블은 운영 중 불필요
+        if verbose:                                       # 상세 진단 시에만 전체 셀 출력
+            print("\n📊 [진단] smoothing 전 — 전체 셀 상태")
+            print(f"   {'[r,c]':>8} {'count':>6} {'angle°':>8} {'mag':>6} {'smooth':>7}")
+            for r in range(self.grid_size):               # 모든 행 순회
+                for c in range(self.grid_size):           # 모든 열 순회
+                    v = self.flow[r, c]                   # 해당 셀 벡터
+                    m = np.linalg.norm(v)                 # 벡터 크기
+                    if m > 0.01:                          # 유효한 벡터만 출력
+                        angle = np.degrees(np.arctan2(v[1], v[0]))  # 각도
+                        cnt = self.count[r, c]            # 샘플 수
+                        sm = "★" if self.smoothed_mask[r, c] else ""  # 보간 셀 표시
+                        mk = " ⚠️" if cnt < self.min_samples else ""
+                        print(f"   [{r:2d},{c:2d}] {cnt:6d} {angle:8.1f} {m:6.3f}{mk} {sm}")
 
         new_map = self.flow.copy()                        # 기존 맵 복사본 (수정 대상)
         filled_count = 0                                  # count=0에서 채워진 셀 수
@@ -324,7 +528,19 @@ class FlowMap:
               f"smoothed={smoothed_total}, "
               f"exterior={exterior_total}(채움 제외)")
 
-        # verbose=True 시 후 상태 셀 덤프 제거 — 400줄 테이블은 운영 중 불필요
+        if verbose:                                       # 상세 진단 시에만 후 상태 출력
+            print(f"\n📊 [진단] smoothing 후 — 전체 셀 상태")
+            print(f"   {'[r,c]':>8} {'count':>6} {'angle°':>8} {'mag':>6} {'smooth':>7}")
+            for r in range(self.grid_size):
+                for c in range(self.grid_size):
+                    v = self.flow[r, c]
+                    m = np.linalg.norm(v)
+                    if m > 0.01:
+                        angle = np.degrees(np.arctan2(v[1], v[0]))
+                        cnt = self.count[r, c]
+                        sm = "★" if self.smoothed_mask[r, c] else ""  # 보간 셀 표시
+                        mk = " ⚠️" if cnt < self.min_samples else ""
+                        print(f"   [{r:2d},{c:2d}] {cnt:6d} {angle:8.1f} {m:6.3f}{mk} {sm}")
 
     # ==================== Phase 1 정체 탐지용 — 셀별 속도 학습 ====================
     def learn_baseline(self, fx: float, fy: float, norm_speed: float):
@@ -407,7 +623,130 @@ class FlowMap:
         c = int(np.clip(px / self.cell_w, 0, self.grid_size - 1))  # 열 계산 + 범위 보정
         return r, c
 
-    # ==================== 경계 셀 제거 ====================
+    # ==================== bbox 겹침 기반 경계 제거 ====================
+    def apply_overlap_erosion(self, contra_threshold: int = 3):
+        """학습 중 반대 차선 차량의 bbox가 N회 이상 밟은 셀을 중앙선 경계로 판정해 제거한다.
+
+        apply_boundary_erosion()의 대체·보완 메서드.
+        - 기존: 인접 1칸에 반대방향 이웃이 있으면 제거 (단순 형태학적 침식)
+        - 개선: 실제 반대 차선 차량의 bbox 발자국 데이터 기반 → 실제 겹친 셀만 제거
+
+        호출 순서:
+          apply_spatial_smoothing()   ← 초기 채움
+          apply_overlap_erosion()     ← bbox 겹침 셀 제거
+          apply_spatial_smoothing()   ← 삭제 후 재채움 (중앙선 불가침)
+
+        Args:
+            contra_threshold: 반대방향 bbox 방문 횟수 임계값 (이 이상이면 경계로 판정).
+                              기본값 3: 1~2회 우연한 방문(합류로·진입로)은 무시,
+                              3회 이상 = 차선 중첩 구간으로 확정.
+        """
+        erased = 0
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self._bbox_contra_count[r, c] >= contra_threshold:
+                    self.flow[r, c]  = 0                  # 벡터 초기화
+                    self.count[r, c] = 0                  # 샘플 수 초기화
+                    self.eroded_mask[r, c]    = True      # 영구 재학습 금지
+                    self.smoothed_mask[r, c]  = False     # smoothed 표시 해제
+                    erased += 1
+        print(f"   ✂️  overlap_erosion: {erased}셀 제거 "
+              f"(bbox 반대방향 방문 ≥ {contra_threshold}회)")
+
+    # ==================== 프레임 스킵 방향 오류 교정 ====================
+    def apply_direction_repair(self,
+                               repair_cos_threshold: float = -0.3,
+                               min_consistent_neighbors: int = 3):
+        """카메라 끊김(프레임 스킵)으로 반대 방향으로 학습된 셀을 이웃 평균으로 교정한다.
+
+        apply_boundary_erosion / apply_overlap_erosion이 셀을 '제거'하는 것과 달리,
+        이 메서드는 방향만 '교정'하고 셀 자체는 유지한다.
+
+        동작 원리:
+          1) 각 셀의 방향을 3×3 이웃 평균과 비교.
+          2) 이웃 대부분이 일관된 방향을 가리키는데 (경계 구역이 아님)
+             이 셀만 반대 방향(cos < repair_cos_threshold)이면 이웃 평균으로 덮어씀.
+          3) 이웃끼리 방향이 불일치(경계 구역 판정)하면 교정하지 않음
+             → 실제 중앙선 경계 셀과 프레임 스킵 아티팩트 셀을 구분.
+
+        호출 위치:
+          apply_spatial_smoothing(verbose=True)  ← ① 초기 채움
+          apply_overlap_erosion()                ← ② 중앙선 경계 제거
+          apply_direction_repair()               ← ③ 프레임 스킵 오류 교정  ★ HERE
+          apply_spatial_smoothing()              ← ④ 재채움
+
+        Args:
+            repair_cos_threshold: 이웃 평균과의 코사인이 이 값 미만이면 교정 대상.
+                                  -0.3 ≈ 107° 이상 방향 어긋남 → 명백한 반전 셀만 교정.
+            min_consistent_neighbors: 교정 판단을 위한 최소 일관성 이웃 수.
+                                      부족하면 데이터 부족으로 보고 교정 건너뜀.
+        """
+        repaired = 0
+        new_flow = self.flow.copy()                        # 교정 결과 버퍼 (원본 유지)
+        gs = self.grid_size
+
+        for r in range(gs):
+            for c in range(gs):
+                if self.eroded_mask[r, c]:                 # 이미 제거된 셀 건너뜀
+                    continue
+
+                v    = self.flow[r, c]
+                vmag = np.linalg.norm(v)
+                if vmag < 0.1:                             # 빈 셀 건너뜀
+                    continue
+
+                vn = v / (vmag + 1e-6)                     # 이 셀의 단위 벡터
+
+                # ── 3×3 이웃 수집 ────────────────────────────────────────
+                neighbor_vecs = []
+                for dr in range(-1, 2):
+                    for dc in range(-1, 2):
+                        if dr == 0 and dc == 0:            # 자기 자신 건너뜀
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if not (0 <= nr < gs and 0 <= nc < gs):
+                            continue
+                        if self.eroded_mask[nr, nc]:       # 제거된 이웃 건너뜀
+                            continue
+                        nv = self.flow[nr, nc]
+                        if np.linalg.norm(nv) > 0.1:
+                            neighbor_vecs.append(nv)
+
+                if len(neighbor_vecs) < min_consistent_neighbors:
+                    continue                               # 이웃 부족 → 판단 불가
+
+                # ── 이웃 평균 방향 계산 ──────────────────────────────────
+                avg_v   = np.mean(neighbor_vecs, axis=0)
+                avg_mag = np.linalg.norm(avg_v)
+                if avg_mag < 0.1:                          # 이웃 평균이 상쇄됨 → 경계 구역
+                    continue
+
+                avg_n = avg_v / (avg_mag + 1e-6)           # 이웃 평균 단위 벡터
+
+                # ── 이웃 일관성 확인 (경계 구역 vs 아티팩트 구분) ────────
+                # 이웃들이 이웃 평균과 얼마나 일치하는지 계산.
+                # 경계 구역(중앙선 근처): 이웃끼리 반대 방향 존재 → 일관성 낮음 → 건너뜀.
+                # 프레임 스킵 아티팩트: 이웃은 모두 한 방향인데 이 셀만 반대 → 일관성 높음 → 교정.
+                consistent_count = sum(
+                    1 for nv in neighbor_vecs
+                    if float(np.dot(avg_n,
+                                    nv / (np.linalg.norm(nv) + 1e-6))) > 0.3
+                )
+                if consistent_count < min_consistent_neighbors:
+                    continue                               # 이웃 불일치 → 경계 구역 → 건너뜀
+
+                # ── 이 셀이 이웃 평균과 반대 방향인지 확인 ───────────────
+                cos_vs_avg = float(np.dot(vn, avg_n))
+                if cos_vs_avg < repair_cos_threshold:      # 반대 방향 → 교정
+                    new_flow[r, c] = avg_v                 # 이웃 평균으로 덮어씌움
+                    self.smoothed_mask[r, c] = True        # 보간·교정 셀 표시 (판정 완화용)
+                    repaired += 1
+
+        self.flow = new_flow                               # 교정 결과 적용
+        print(f"   🔧 direction_repair: {repaired}셀 교정 "
+              f"(cos<{repair_cos_threshold}, min_neighbors={min_consistent_neighbors})")
+
+    # ==================== 인접 방향 기반 경계 제거 (legacy fallback) ====================
     def apply_boundary_erosion(self, majority_threshold: float = 0.4):
         """방향이 반전되는 경계 셀을 두 단계로 제거한다.
 
@@ -510,6 +849,49 @@ class FlowMap:
               f"(flow_size={self.grid_size}x{self.grid_size})")
 
     # ==================== 저장/로드 ====================
+    def build_directional_channels(self, ref_dx: float, ref_dy: float):
+        """학습 완료 후 글로벌 flow map을 A/B 두 채널로 분리.
+
+        Args:
+            ref_dx, ref_dy: A방향 기준 단위 벡터 (detector._ref_direction).
+                cos >= 0인 셀 → A채널 / cos < 0인 셀 → B채널
+
+        학습 단계에서는 글로벌 맵(self.flow)에 모든 차량이 학습됨.
+        학습 완료 후 이 메서드를 호출하면 각 셀의 방향을 기준 방향과 비교해
+        A/B 채널로 분리. 이후 get_interpolated(direction='a'/'b') 사용 가능.
+
+        중앙선 오염 방지 원리:
+          - A차량은 flow_a만 조회 → B차량이 A셀을 오염시켜도 영향 없음
+          - B차량은 flow_b만 조회 → A차량이 B셀을 오염시켜도 영향 없음
+          - 학습 기반 분리라 EMA 게이팅과 독립적으로 동작
+        """
+        self.flow_a[:] = 0
+        self.count_a[:] = 0
+        self.flow_b[:] = 0
+        self.count_b[:] = 0
+        self._ref_dx = ref_dx                             # 기준 방향 저장 (get_interpolated fallback 필터용)
+        self._ref_dy = ref_dy
+
+        a_cells = 0
+        b_cells = 0
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self.count[r, c] < self.min_samples:
+                    continue                               # 미확립 셀 건너뜀
+                v = self.flow[r, c]
+                cos = float(v[0] * ref_dx + v[1] * ref_dy)
+                if cos >= 0:                              # A방향 셀
+                    self.flow_a[r, c]  = v
+                    self.count_a[r, c] = self.count[r, c]
+                    a_cells += 1
+                else:                                     # B방향 셀
+                    self.flow_b[r, c]  = v
+                    self.count_b[r, c] = self.count[r, c]
+                    b_cells += 1
+
+        print(f"✅ 양방향 채널 구축: A={a_cells}셀, B={b_cells}셀 "
+              f"(글로벌 {a_cells+b_cells}/{self.grid_size**2}셀 분리)")
+
     def save(self, path: Path):
         """학습된 flow_map, count, speed_ref, smoothed_mask를 .npy 파일로 저장.
 
@@ -518,11 +900,16 @@ class FlowMap:
         """
         path.parent.mkdir(parents=True, exist_ok=True)    # 저장 폴더 생성
         data = {                                           # 저장할 데이터 딕셔너리
-            "version":       3,                           # 포맷 버전 (3=baseline 제거)
-            "flow":          self.flow,                   # 흐름 벡터 배열
+            "version":       4,                           # 포맷 버전 (4=양방향 채널 추가)
+            "flow":          self.flow,                   # 흐름 벡터 배열 (글로벌)
             "count":         self.count,                  # 셀별 샘플 수 배열
             "speed_ref":     self.speed_ref,              # 셀별 정상 속도 배열
             "smoothed_mask": self.smoothed_mask,          # 보간 채움 셀 마스크
+            "eroded_mask":   self.eroded_mask,            # 영구 재학습 금지 경계 셀 마스크 (하위 호환)
+            "flow_a":        self.flow_a,                 # A방향 채널 벡터
+            "count_a":       self.count_a,                # A방향 채널 카운터
+            "flow_b":        self.flow_b,                 # B방향 채널 벡터
+            "count_b":       self.count_b,                # B방향 채널 카운터
         }
         np.save(path, data)                               # .npy 파일로 저장
         print(f"✅ flow_map 저장: {path}")
@@ -548,6 +935,18 @@ class FlowMap:
             self.speed_ref = data["speed_ref"]            # 셀별 속도 기준 로드
         if "smoothed_mask" in data:                       # smoothed_mask가 저장되어 있으면
             self.smoothed_mask = data["smoothed_mask"]    # 보간 마스크 로드
+        if "eroded_mask" in data:                         # eroded_mask가 저장되어 있으면
+            self.eroded_mask = data["eroded_mask"]        # 경계 침식 마스크 로드 (하위 호환)
+        if version >= 4:                                  # 버전 4+: 양방향 채널 로드
+            if "flow_a" in data:
+                self.flow_a  = data["flow_a"]
+                self.count_a = data["count_a"]
+            if "flow_b" in data:
+                self.flow_b  = data["flow_b"]
+                self.count_b = data["count_b"]
+        _ch_a = int(np.sum(self.count_a > 0))
+        _ch_b = int(np.sum(self.count_b > 0))
         print(f"✅ flow_map 로드 ({self.count.sum()} 샘플, ver={version}, "
-              f"smoothed={int(np.sum(self.smoothed_mask))}셀)")
+              f"smoothed={int(np.sum(self.smoothed_mask))}셀, "
+              f"채널 A={_ch_a}셀 B={_ch_b}셀)")
         return True                                       # 로드 성공

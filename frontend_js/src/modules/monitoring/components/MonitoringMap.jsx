@@ -9,6 +9,87 @@ const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', 
 const LEVEL_LABEL = { SMOOTH: '원활',    SLOW: '서행',    CONGESTED: '정체',    JAM: '정체'    };
 const ROAD_LINE_GRAY = '#334155';
 
+// 도로 키 → OSM 도로명 (its_helper.py의 ROAD_CONFIG와 동기화)
+// 브라우저 직접 Overpass 쿼리 시 사용
+const OVERPASS_OSM_NAMES = {
+  gyeongbu:  '경부고속도로',
+  gyeongin:  '경인고속도로',
+  seohae:    '서해안고속도로',
+  jungang:   '중앙고속도로',
+  youngdong: '영동고속도로',
+};
+
+// Overpass 브라우저 직접 쿼리 엔드포인트 목록
+// 서버 IP가 차단돼도 브라우저(사용자 IP)는 허용되는 경우가 많다.
+// Overpass API는 Access-Control-Allow-Origin: * 로 CORS를 허용한다.
+const OVERPASS_BROWSER_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+
+/**
+ * 브라우저에서 직접 Overpass API에 쿼리해 도로 선형 GeoJSON을 가져온다.
+ * 백엔드 서버 IP가 Overpass에서 차단/속도제한 당할 경우 이 경로로 우회한다.
+ *
+ * @param {string} roadKey - 도로 키 (예: 'gyeongbu')
+ * @returns {Promise<{type:'FeatureCollection', features:Array}|null>}
+ *          성공 시 GeoJSON, 모든 엔드포인트 실패 시 null
+ */
+async function fetchOverpassDirect(roadKey) {
+  const osmName = OVERPASS_OSM_NAMES[roadKey];     // 도로 키 → OSM 검색어
+  if (!osmName) return null;                        // 지원하지 않는 도로 키이면 즉시 포기
+
+  // 고속도로 선형 조회 쿼리 (motorway/trunk/motorway_link만 포함)
+  const query =
+    `[out:json][timeout:30];` +
+    `(way["name"="${osmName}"]["highway"~"motorway|trunk|motorway_link"];);` +
+    `out geom;`;
+
+  for (const endpoint of OVERPASS_BROWSER_ENDPOINTS) {
+    try {
+      // AbortController로 엔드포인트별 35초 타임아웃 적용
+      const ctrl = new AbortController();
+      const tid  = setTimeout(() => ctrl.abort(), 35000);
+
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        // Overpass는 application/x-www-form-urlencoded POST를 표준으로 지원
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    `data=${encodeURIComponent(query)}`,
+        signal:  ctrl.signal,
+      });
+      clearTimeout(tid);
+
+      if (!resp.ok) continue;                       // HTTP 오류 → 다음 엔드포인트
+
+      const json     = await resp.json();
+      const elements = json.elements || [];
+
+      // way 타입이고 좌표가 2개 이상인 요소만 LineString으로 변환
+      const features = elements
+        .filter(el => el.type === 'way' && (el.geometry?.length ?? 0) >= 2)
+        .map(el => ({
+          type: 'Feature',
+          properties: { osm_id: el.id },
+          geometry: {
+            type: 'LineString',
+            coordinates: el.geometry.map(pt => [pt.lon, pt.lat]),
+          },
+        }));
+
+      if (features.length > 0) {
+        console.log(`[MonitoringMap] 브라우저 Overpass 성공 (${endpoint.split('/')[2]}): ${features.length}개 way`);
+        return { type: 'FeatureCollection', features };
+      }
+    } catch {
+      continue;                                     // 타임아웃·네트워크 오류 → 다음 시도
+    }
+  }
+
+  console.warn('[MonitoringMap] 브라우저 Overpass 전체 엔드포인트 실패');
+  return null;
+}
+
 function fmtDuration(sec) {
   if (!sec || sec <= 0) return '-';
   const m = Math.floor(sec / 60);
@@ -155,7 +236,9 @@ function buildColoredSegments(features, cameras) {
 }
 
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
-export default function MonitoringMap({ host, cameras, selectedId, onSelect, onViewItsCctv, itsCctvList = [], selectedItsId }) {
+// serverRoadGeo: 부모(index.jsx)가 Socket.IO road_geo_ready 이벤트로 수신한 GeoJSON
+// null이면 아직 서버로부터 데이터가 오지 않은 것 → 폴링 retry가 대신 처리
+export default function MonitoringMap({ host, cameras, selectedId, onSelect, onViewItsCctv, itsCctvList = [], selectedItsId, serverRoadGeo }) {
   const mapRef        = useRef(null);
   const overlaysRef   = useRef({});     // 모니터링 카메라 마커
   const itsOverlayRef = useRef({});     // ITS CCTV 마커
@@ -172,13 +255,74 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
     return () => { delete window.__monMapSelect; delete window.__monItsSelect; };
   }, [onSelect, onViewItsCctv]);
 
-  // 도로 선형 GeoJSON 로드 (최초 1회)
+  // ── 도로 선형 GeoJSON 로드 ────────────────────────────────
+  // [주 경로] Socket.IO road_geo_ready 이벤트 수신 시 즉시 반영
+  // serverRoadGeo는 useMonitoringSocket 훅이 관리하며 백엔드 push가 오면 갱신됨
+  useEffect(() => {
+    if (serverRoadGeo?.features?.length > 0) {
+      setRoadGeo(serverRoadGeo);   // 서버 push 도착 → 즉시 도로선 반영
+    }
+  }, [serverRoadGeo]);
+
+  // [보조 경로] 초기 로드 + 브라우저 직접 Overpass 폴백
+  //
+  // 순서:
+  //   1. 백엔드 fetchRoadGeo 호출 (파일/메모리 캐시 히트 시 즉시 반환)
+  //   2. 백엔드가 빈 결과 반환 → 브라우저에서 직접 Overpass 쿼리 (서버 IP 차단 우회)
+  //   3. 브라우저도 실패 → 최대 3회 전체 재시도 (60초 간격)
+  //
+  // roadGeo가 이미 있으면 (socket push 또는 이전 시도 성공) 즉시 중단한다.
   useEffect(() => {
     if (!host) return;
-    fetchRoadGeo(host, 'gyeongbu')
-      .then(res => setRoadGeo(res.data))
-      .catch(() => {});
-  }, [host]);
+
+    let cancelled = false;     // 언마운트 후 setState 방지 플래그
+    let retries   = 0;         // 전체 사이클 재시도 횟수
+    const MAX_RETRIES = 3;     // 최대 3회 (브라우저 직접 쿼리가 주 폴백이므로 충분)
+    const RETRY_MS    = 60000; // 60초 — 실패 캐시 TTL(60초)이 만료된 후 재시도
+    let timer = null;
+
+    const load = async () => {
+      if (cancelled || roadGeo) return;   // 이미 데이터 있으면 중단
+
+      // ── 1단계: 백엔드 캐시 확인 ────────────────────────────────────────
+      // 파일 또는 메모리 캐시에 데이터가 있으면 즉시 반환
+      try {
+        const res = await fetchRoadGeo(host, 'gyeongbu');
+        if (!cancelled && res.data?.features?.length > 0) {
+          setRoadGeo(res.data);
+          return;                         // 백엔드 캐시 히트 → 완료
+        }
+      } catch { /* 백엔드 오류는 무시하고 2단계로 진행 */ }
+
+      if (cancelled) return;
+
+      // ── 2단계: 브라우저 직접 Overpass 쿼리 ────────────────────────────
+      // 백엔드 서버 IP가 Overpass에서 차단/속도제한돼도
+      // 브라우저(사용자 IP)에서 직접 쿼리하면 허용되는 경우가 많다.
+      // Overpass API는 Access-Control-Allow-Origin: * 로 CORS를 지원한다.
+      const browserGeo = await fetchOverpassDirect('gyeongbu');
+      if (!cancelled && browserGeo) {
+        setRoadGeo(browserGeo);
+        return;                           // 브라우저 Overpass 성공 → 완료
+      }
+
+      if (cancelled) return;
+
+      // ── 3단계: 전체 실패 → 재시도 예약 ────────────────────────────────
+      if (retries < MAX_RETRIES) {
+        retries++;
+        // socket push(road_geo_ready)가 오면 위 useEffect가 먼저 처리하므로
+        // 이 타이머는 socket push가 오지 않을 경우의 마지막 보험이다
+        timer = setTimeout(load, RETRY_MS);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;                   // 언마운트 시 진행 중인 async 작업 취소
+      if (timer) clearTimeout(timer);
+    };
+  }, [host]); // roadGeo는 의존성 제외 — 변경마다 재실행하면 루프 위험
 
   // 지도 초기화 + CSS 주입 (마운트 1회)
   useEffect(() => {

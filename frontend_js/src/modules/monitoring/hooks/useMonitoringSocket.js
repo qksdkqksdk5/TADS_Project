@@ -16,7 +16,10 @@ export function useMonitoringSocket(host, callbacks = {}) {
   const [unresolvedCounts, setUnresolvedCounts] = useState({
     congested: 0, slow: 0, wrongway: 0,
   });
-  const [connected, setConnected] = useState(false);
+  const [connected,     setConnected]     = useState(false);
+  // 백엔드 background fetch 성공 시 road_geo_ready 이벤트로 수신한 GeoJSON
+  // null → 아직 수신 전, 객체 → 수신 완료 (MonitoringMap이 이를 감지해 도로선 렌더)
+  const [serverRoadGeo, setServerRoadGeo] = useState(null);
 
   const socketRef   = useRef(null);
   // 중지된 카메라 ID 집합 — 이 ID의 traffic_update는 무시 (재추가 방지)
@@ -86,7 +89,10 @@ export function useMonitoringSocket(host, callbacks = {}) {
     sock.on('anomaly_alert', (data) => {
       setEventLogs(prev => [
         // id를 마지막에 두어 서버의 data.id가 덮어쓰는 것을 방지 (중복 key 경고 원인)
-        { event_type: 'anomaly', is_resolved: false, ...data, id: Date.now() + Math.random() },
+        // received_at: 클라이언트가 이벤트를 수신한 시각(ms).
+        // 서버의 detected_at은 UTC 나이브 문자열이라 브라우저가 로컬 시간으로 오해석해
+        // 경과 시간이 9시간(KST 오프셋)만큼 부풀려지는 버그를 막기 위해 별도 기록한다.
+        { event_type: 'anomaly', is_resolved: false, ...data, id: Date.now() + Math.random(), received_at: Date.now() },
         ...prev.slice(0, 99),
       ]);
       setUnresolvedCounts(prev => ({
@@ -100,11 +106,20 @@ export function useMonitoringSocket(host, callbacks = {}) {
     // 역주행 탐지
     sock.on('wrongway_alert', (data) => {
       setEventLogs(prev => [
-        { event_type: 'wrongway', is_resolved: false, ...data, id: Date.now() + Math.random() },
+        // received_at: anomaly_alert 와 동일한 이유로 클라이언트 수신 시각을 기록한다.
+        { event_type: 'wrongway', is_resolved: false, ...data, id: Date.now() + Math.random(), received_at: Date.now() },
         ...prev.slice(0, 99),
       ]);
       setUnresolvedCounts(prev => ({ ...prev, wrongway: prev.wrongway + 1 }));
       callbackRef.current?.onWrongwayAlert?.(data);
+    });
+
+    // 도로 선형 GeoJSON 수신 (Overpass 백그라운드 fetch 성공 시 서버가 push)
+    // 폴링 없이 즉시 MonitoringMap에 도로선을 그리기 위한 이벤트
+    sock.on('road_geo_ready', (data) => {
+      if (data?.geo?.features?.length > 0) {  // 유효한 GeoJSON인지 확인
+        setServerRoadGeo(data.geo);            // 상태 갱신 → MonitoringMap이 감지
+      }
     });
 
     // 이벤트 해소 (Step 9에서 emit — 지금은 수신만 준비)
@@ -153,5 +168,6 @@ export function useMonitoringSocket(host, callbacks = {}) {
     emitSelectCamera,
     resolveEvent,
     removeCameras,
+    serverRoadGeo,   // road_geo_ready 이벤트로 수신한 GeoJSON (null=미수신)
   };
 }

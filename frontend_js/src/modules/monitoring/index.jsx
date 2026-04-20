@@ -1,6 +1,6 @@
 /* eslint-disable */
 // src/modules/monitoring/index.jsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useMonitoringSocket } from './hooks/useMonitoringSocket';
 import { useSoundAlert }       from './hooks/useSoundAlert';
 import SectionList   from './components/SectionList';
@@ -45,17 +45,28 @@ function LiveDot({ connected }) {
 }
 
 // ── 카메라 팝업 모달 ──────────────────────────────────────────
-function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose }) {
-  // ESC 키로 닫기
+// onNavigate(dir): dir = -1(이전) | +1(다음) — 방향키 내비게이션 콜백
+// currentIdx, total: 팝업 헤더에 표시할 "현재/전체" 카운터 (없으면 숨김)
+function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose, onNavigate, currentIdx, total }) {
+  // ESC → 닫기, ← → → 이전/다음 카메라
   useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    const handler = (e) => {
+      if (e.key === 'Escape')      { onClose(); return; }
+      // 텍스트 입력 중에는 방향키 내비게이션을 비활성화한다
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === 'ArrowLeft')   { e.preventDefault(); onNavigate?.(-1); }
+      if (e.key === 'ArrowRight')  { e.preventDefault(); onNavigate?.(1);  }
+    };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, onNavigate]);
 
   const title = selectedItsCctv
     ? selectedItsCctv.name
     : (selectedData?.location || selectedId || '');
+
+  // 카메라가 2개 이상일 때만 내비게이션 UI를 보여준다
+  const showNav = total > 1;
 
   return (
     <div
@@ -81,19 +92,38 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose 
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: '10px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0,
         }}>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0' }}>
-            📷 {title}
-          </span>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'transparent', border: '1px solid #1e293b',
-              borderRadius: '6px', color: '#475569',
-              width: '26px', height: '26px',
-              fontSize: '13px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-          >✕</button>
+          {/* 좌측: 카메라 이름 + 순번 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              📷 {title}
+            </span>
+            {/* 현재/전체 카운터 — 카메라가 2개 이상일 때만 표시 */}
+            {showNav && (
+              <span style={{ fontSize: '11px', color: '#475569', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {currentIdx}/{total}
+              </span>
+            )}
+          </div>
+
+          {/* 우측: 방향키 힌트 + 닫기 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {/* 방향키 힌트 — 카메라가 2개 이상일 때만 표시 */}
+            {showNav && (
+              <span style={{ fontSize: '11px', color: '#334155', userSelect: 'none' }}>
+                ← → 전환
+              </span>
+            )}
+            <button
+              onClick={onClose}
+              style={{
+                background: 'transparent', border: '1px solid #1e293b',
+                borderRadius: '6px', color: '#475569',
+                width: '26px', height: '26px',
+                fontSize: '13px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >✕</button>
+          </div>
         </div>
 
         {/* 팝업 바디 */}
@@ -142,7 +172,7 @@ export default function MonitoringModule({ host, isMobile }) {
   } = useSoundAlert(soundOn);
 
   // ── 소켓 훅 ───────────────────────────────────────────────
-  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent, removeCameras } =
+  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent, removeCameras, serverRoadGeo } =
     useMonitoringSocket(host, {
       onAnomalyAlert: useCallback((data) => {
         playAlert(data.level);
@@ -211,6 +241,43 @@ export default function MonitoringModule({ host, isMobile }) {
     resolveEvent(eventId);
     setWrongwayAdj(v => v + 1);
   }, [stopWrongwayAlarm, resolveEvent]);
+
+  // ── 방향키 카메라 전환 ────────────────────────────────────────
+  // dir: -1(이전) | +1(다음)
+  // ITS 모드이면 itsCctvList, 모니터링 모드이면 cameras 키 배열에서 순환한다.
+  const navigateCamera = useCallback((dir) => {
+    if (selectedItsCctv && itsCctvList.length > 0) {
+      // ITS 카메라 목록에서 현재 위치를 찾아 dir 방향으로 순환
+      const idx  = itsCctvList.findIndex(c => c.camera_id === selectedItsCctv.camera_id);
+      if (idx === -1) return;
+      const next = itsCctvList[(idx + dir + itsCctvList.length) % itsCctvList.length];
+      setSelectedItsCctv(next);
+    } else if (selectedId) {
+      // 모니터링 카메라 목록에서 현재 위치를 찾아 dir 방향으로 순환
+      const ids    = Object.keys(cameras);
+      const idx    = ids.indexOf(selectedId);
+      if (idx === -1) return;
+      const nextId = ids[(idx + dir + ids.length) % ids.length];
+      setSelectedId(nextId);
+      emitSelectCamera(nextId);   // 서버에 카메라 선택 이벤트 전송
+    }
+  }, [selectedItsCctv, selectedId, itsCctvList, cameras, emitSelectCamera]);
+
+  // ── 팝업 헤더용 현재/전체 카운터 ──────────────────────────────
+  const navInfo = useMemo(() => {
+    if (selectedItsCctv && itsCctvList.length > 0) {
+      // ITS 모드: itsCctvList 내 현재 위치
+      const idx = itsCctvList.findIndex(c => c.camera_id === selectedItsCctv.camera_id);
+      return { current: idx + 1, total: itsCctvList.length };
+    }
+    if (selectedId) {
+      // 모니터링 모드: cameras 키 배열 내 현재 위치
+      const ids = Object.keys(cameras);
+      const idx = ids.indexOf(selectedId);
+      return { current: idx + 1, total: ids.length };
+    }
+    return null;
+  }, [selectedItsCctv, selectedId, itsCctvList, cameras]);
 
   const selectedData = selectedId ? cameras[selectedId] : null;
 
@@ -287,6 +354,7 @@ export default function MonitoringModule({ host, isMobile }) {
             onViewItsCctv={handleViewItsCctv}
             itsCctvList={itsCctvList}
             selectedItsId={selectedItsCctv?.camera_id}
+            serverRoadGeo={serverRoadGeo}
           />
         </div>
 
@@ -308,6 +376,9 @@ export default function MonitoringModule({ host, isMobile }) {
           selectedData={selectedData}
           selectedItsCctv={selectedItsCctv}
           onClose={handleClosePopup}
+          onNavigate={navigateCamera}          // 방향키 ← → 내비게이션 콜백
+          currentIdx={navInfo?.current}        // 현재 카메라 순번 (1-based)
+          total={navInfo?.total}               // 전체 카메라 수
         />
       )}
 
