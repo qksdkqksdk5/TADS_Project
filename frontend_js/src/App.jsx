@@ -19,39 +19,53 @@ function App() {
   });
 
   const [socket, setSocket] = useState(null);
+  const [outsideSocket, setOutsideSocket] = useState(null);
 
   const handleLogout = () => {
     sessionStorage.removeItem('user');
     setUser(null);
+    // ✅ 두 소켓 모두 연결 끊기
     if (socket) socket.disconnect();
+    if (outsideSocket) outsideSocket.disconnect();
   };
 
   useEffect(() => {
     if (user) {
       const host = window.location.hostname;
-      const newSocket = io(`http://${host}:5000`, {
-        transports: ["polling", "websocket"],
+      const mainSocket = io(`http://${host}:5000`, {
+        transports: ["websocket"],
         forceNew: true,
         reconnectionAttempts: 3,
         timeout: 5000,
       });
-      newSocket.on("connect", () => console.log(`✅ 서버(${host}:5000)와 소켓 연결 성공!`));
-      newSocket.on("disconnect", (reason) => {
-        if (reason === "transport close" || reason === "io server disconnect") {
-          toast.error("서버 세션이 만료되었습니다. 다시 로그인해주세요.");
-          handleLogout();
-        }
+
+      const cloudSocket = io("https://itsras.illit.kr", {
+        transports: ["websocket"], // 터널 서버도 웹소켓 강제
+        forceNew: true,
       });
-      newSocket.on("connect_error", () => {
+
+      mainSocket.on("connect", () => console.log("✅ EC2 메인 소켓 연결 성공!"));
+      cloudSocket.on("connect", () => console.log("✅ Cloudflare 터널 소켓 연결 성공!"));
+
+      // 에러 핸들링 (메인 서버 기준)
+      mainSocket.on("connect_error", () => {
         if (sessionStorage.getItem('user')) {
-          toast.error("서버에 연결할 수 없습니다. 다시 로그인해 주세요.");
-          handleLogout();
+          toast.error("메인 서버 연결에 실패했습니다.");
+          // 필요하다면 여기서 handleLogout() 호출
         }
       });
-      setSocket(newSocket);
-      return () => { if (newSocket) newSocket.close(); };
+
+      setSocket(mainSocket);
+      setOutsideSocket(cloudSocket);
+
+      // ✅ 클린업 함수: 언마운트 시 두 소켓 모두 닫기
+      return () => { 
+        if (mainSocket) mainSocket.close(); 
+        if (cloudSocket) cloudSocket.close(); 
+      };
     } else {
       setSocket(null);
+      setOutsideSocket(null);
     }
   }, [user]);
 
@@ -82,7 +96,7 @@ function App() {
           <Route
             path="/dashboard/:tab"
             element={user
-              ? <Dashboard socket={socket} user={user} setUser={setUser} onLogout={handleLogout} />
+              ? <Dashboard socket={socket} outsideSocket={outsideSocket} user={user} setUser={setUser} onLogout={handleLogout} />
               : <Navigate to="/" />}
           />
           <Route

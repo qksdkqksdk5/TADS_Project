@@ -17,7 +17,7 @@ import StatsModule    from '../stats';
 const VALID_TABS = ["cctv", "webcam", "sim", "stats", "plate", "monitoring", "tunnel", "raspi"];
 const MODULE_TABS = ["stats", "plate", "monitoring", "tunnel", "raspi"];
 
-export default function Dashboard({ socket, user, setUser, onLogout }) {
+export default function Dashboard({ socket, outsideSocket, user, setUser, onLogout }) {
   const { tab } = useParams();
   const navigate = useNavigate();
 
@@ -46,6 +46,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
       sessionStorage.removeItem('user');
       setUser(null);
       if (socket) socket.disconnect();
+      if (outsideSocket) outsideSocket.disconnect();
       window.location.href = "/";
     }
   };
@@ -95,7 +96,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "monitoring" && (
             <div style={moduleWrapper}>
-              <MonitoringModule isMobile={isMobile} host={outsideHost} />
+              <MonitoringModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/>
             </div>
           )}
           {activeTab === "tunnel" && (
@@ -105,7 +106,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "raspi" && (
             <div style={moduleWrapper}>
-              <RaspiModule isMobile={isMobile} host={outsideHost} />
+              <RaspiModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/>
             </div>
           )}
 
