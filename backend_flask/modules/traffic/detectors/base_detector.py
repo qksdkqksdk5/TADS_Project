@@ -25,7 +25,13 @@ class BaseDetector:
                 if not self.alert_queue.empty():
                     data = self.alert_queue.get()
                     try:
-                        self.process_alert(data)
+                        # ✅ 핵심 수정: self.app이 있다면 컨텍스트를 수동으로 열어줌
+                        if self.app:
+                            with self.app.app_context():
+                                self.process_alert(data)
+                        else:
+                            # 앱 객체가 없을 경우를 대비한 예외 처리
+                            self.process_alert(data)
                     except Exception as e:
                         print(f"❌ [Worker Error] {self.cctv_name}: {e}")
                 time.sleep(0.1)

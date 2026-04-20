@@ -1,8 +1,4 @@
 /* eslint-disable */
-// src/modules/dashboard/index.jsx
-// 역할: 레이아웃(사이드바 + 메인), 탭 라우팅, 각 모듈 렌더링
-// CCTV 관련 로직은 traffic/index.jsx가 담당
-
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Sidebar      from '../../shared/components/Sidebar';
@@ -13,6 +9,7 @@ import MonitoringModule from '../monitoring';
 import TunnelModule   from '../tunnel';
 import RaspiModule    from '../raspi';
 import StatsModule    from '../stats';
+import { useAnomalyDetection } from '../traffic/hooks/useAnomalyDetection';
 
 const VALID_TABS = ["cctv", "webcam", "sim", "stats", "plate", "monitoring", "tunnel", "raspi"];
 const MODULE_TABS = ["stats", "plate", "monitoring", "tunnel", "raspi"];
@@ -25,8 +22,20 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
   const isModuleTab = MODULE_TABS.includes(activeTab);
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+  const [videoUrl, setVideoUrl] = useState("");
   const host = window.location.hostname;
-  const outsideHost = 'itsras.illit.kr'; // 고정 IP로 변경
+  const outsideHost = 'itsras.illit.kr';
+
+  const { isEmergency, pendingAlerts, logs, mapRef,
+          resolveEmergency, resolveAllAlertsAction, moveToAlert, createMarker, clearMarkersRef } =
+    useAnomalyDetection(
+      socket,
+      activeTab,
+      (newTab) => navigate(`/dashboard/${newTab}`),
+      setVideoUrl,
+      host,
+      user?.name
+    );
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
@@ -46,7 +55,6 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
       sessionStorage.removeItem('user');
       setUser(null);
       if (socket) socket.disconnect();
-      if (outsideSocket) outsideSocket.disconnect();
       window.location.href = "/";
     }
   };
@@ -83,34 +91,22 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
           height: '100%',
         }}>
 
-          {/* 각 모듈 탭 */}
           {activeTab === "stats" && (
-            <div style={moduleWrapper}>
-              <StatsModule isMobile={isMobile} host={host} />
-            </div>
+            <div style={moduleWrapper}><StatsModule isMobile={isMobile} host={host} /></div>
           )}
           {activeTab === "plate" && (
-            <div style={moduleWrapper}>
-              <PlateModule isMobile={isMobile} host={host} user={user} />
-            </div>
+            <div style={moduleWrapper}><PlateModule isMobile={isMobile} host={host} user={user} /></div>
           )}
           {activeTab === "monitoring" && (
-            <div style={moduleWrapper}>
-              <MonitoringModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/>
-            </div>
+            <div style={moduleWrapper}><MonitoringModule isMobile={isMobile} host={outsideHost} /></div>
           )}
           {activeTab === "tunnel" && (
-            <div style={moduleWrapper}>
-              <TunnelModule isMobile={isMobile} host={host} />
-            </div>
+            <div style={moduleWrapper}><TunnelModule isMobile={isMobile} host={host} /></div>
           )}
           {activeTab === "raspi" && (
-            <div style={moduleWrapper}>
-              <RaspiModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/>
-            </div>
+            <div style={moduleWrapper}><RaspiModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/></div>
           )}
 
-          {/* CCTV/웹캠/시뮬 탭 — traffic 모듈이 담당 */}
           {!isModuleTab && (
             <TrafficModule
               socket={socket}
@@ -118,6 +114,17 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
               activeTab={activeTab}
               isMobile={isMobile}
               host={host}
+              isEmergency={isEmergency}
+              pendingAlerts={pendingAlerts}
+              logs={logs}
+              mapRef={mapRef}
+              resolveEmergency={resolveEmergency}
+              resolveAllAlertsAction={resolveAllAlertsAction}
+              moveToAlert={moveToAlert}
+              videoUrl={videoUrl}
+              setVideoUrl={setVideoUrl}
+              createMarker={createMarker}
+              clearMarkersRef={clearMarkersRef}
             />
           )}
 

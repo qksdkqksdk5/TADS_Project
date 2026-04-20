@@ -47,11 +47,19 @@ function App() {
       mainSocket.on("connect", () => console.log("✅ EC2 메인 소켓 연결 성공!"));
       cloudSocket.on("connect", () => console.log("✅ Cloudflare 터널 소켓 연결 성공!"));
 
-      // 에러 핸들링 (메인 서버 기준)
-      mainSocket.on("connect_error", () => {
-        if (sessionStorage.getItem('user')) {
-          toast.error("메인 서버 연결에 실패했습니다.");
-          // 필요하다면 여기서 handleLogout() 호출
+      const forceLogout = (reason) => {
+        console.warn(`🚨 서버와 연결이 끊어졌습니다 (${reason}). 로그아웃합니다.`);
+        handleLogout(); // 👈 기존에 선언된 handleLogout 함수 호출
+      };
+
+      // 연결 에러 발생 시
+      mainSocket.on("connect_error", () => forceLogout("Connect Error"));
+      
+      // 서버에 의해 연결이 끊기거나 네트워크 문제로 끊겼을 때
+      mainSocket.on("disconnect", (reason) => {
+        // 사용자가 직접 끊은 경우('io client disconnect')가 아닐 때만 로그아웃
+        if (reason !== "io client disconnect") {
+          forceLogout(reason);
         }
       });
 
