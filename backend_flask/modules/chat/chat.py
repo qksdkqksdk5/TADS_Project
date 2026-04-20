@@ -35,6 +35,7 @@ engine = create_engine(
 history_col = None
 mongo_client = None
 
+# chat.py 내부 get_mongo_collection() 수정
 def get_mongo_collection():
     global history_col, mongo_client
     if history_col is not None:
@@ -42,8 +43,8 @@ def get_mongo_collection():
         
     try:
         MONGO_URI = os.getenv("MONGO_URI")
-        # gevent 호환성을 위해 waitQueueMultiple 옵션 추가 추천
-        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, waitQueueMultiple=10)
+        # [수정] waitQueueMultiple 같은 Gevent 전용 옵션 제거 (표준 연결)
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
         mongo_client.server_info()
         history_col = mongo_client["TADS_DB"]["chat_history"]
         print("MongoDB 연결 성공")

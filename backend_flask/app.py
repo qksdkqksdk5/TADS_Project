@@ -1,9 +1,8 @@
 # 1. 최상단: gevent 패치 (SocketIO와 멀티스레딩 호환을 위해 필수)
-from gevent import monkey
-monkey.patch_all()
+# from gevent import monkey
+# monkey.patch_all()
 
 import os
-os.environ["MONGO_USE_GEVENT"] = "1"
 
 import warnings
 import atexit
@@ -43,7 +42,7 @@ migrate = Migrate(app, db)
 
 os.makedirs(os.path.join(app.root_path, "static", "captures"), exist_ok=True)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent',
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
                     ping_timeout=60, ping_interval=25)
 app.extensions['socketio'] = socketio
 
