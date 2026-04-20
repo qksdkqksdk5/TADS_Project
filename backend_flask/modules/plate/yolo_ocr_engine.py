@@ -1,12 +1,16 @@
+import os
+
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENVINO_NUM_THREADS"] = "2"
+os.environ["KMP_BLOCKTIME"] = "1"
+
 import queue
 import re
-import os
 import threading
 import time
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from gevent.threadpool import ThreadPoolExecutor as GThreadPoolExecutor
 
 ocr_input_queue = queue.Queue(maxsize=2)
 ocr_result_queue = queue.Queue()

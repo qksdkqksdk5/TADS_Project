@@ -18,6 +18,8 @@ services:
       - ./backend_flask/assets:/app/assets
       - ./backend_flask/modules/plate/test:/app/modules/plate/test
       - ./backend_flask/modules/plate/best_plates_golden:/app/modules/plate/best_plates_golden
+      - ./backend_flask/modules/tunnel/raw_video:/app/modules/tunnel/raw_video
+      - ./backend_flask/modules/chat:/app/modules/chat
     networks:
       - tads-network
     logging:

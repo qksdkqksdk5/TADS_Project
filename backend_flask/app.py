@@ -19,7 +19,12 @@ load_dotenv()
 warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distributed.reduce_op` is deprecated")
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {
+    "origins": "*", 
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "ngrok-skip-browser-warning"]
+}})
+
 
 DB_USER = os.getenv("DB_USER", "root")
 DB_PW   = os.getenv("DB_PASSWORD", "12341234")
@@ -58,11 +63,13 @@ from modules.plate.plate      import plate_bp
 from modules.tunnel.tunnel    import tunnel_bp
 from modules.monitoring.monitoring import monitoring_bp
 from modules.raspi.raspi      import raspi_bp
+from modules.chat.chat import chat_bp
 
 app.register_blueprint(plate_bp,       url_prefix='/api/plate')
 app.register_blueprint(tunnel_bp,      url_prefix='/api/tunnel')
 app.register_blueprint(monitoring_bp,  url_prefix='/api/monitoring')
 app.register_blueprint(raspi_bp,       url_prefix='/api/raspi')
+app.register_blueprint(chat_bp,       url_prefix='/api/chat')
 
 # 탭 이탈 시 monitoring 감지기 자동 일시정지 소켓 이벤트 등록
 from modules.monitoring.monitoring import register_monitoring_socket_events

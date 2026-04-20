@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Sidebar      from '../../shared/components/Sidebar';
+import ChatAssistant from '../../shared/components/chat/ChatAssistant';
 import TrafficModule  from '../traffic';
 import PlateModule    from '../plate';
 import MonitoringModule from '../monitoring';
@@ -25,6 +26,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const host = window.location.hostname;
+  const outsideHost = 'itsras.illit.kr'; // 고정 IP로 변경
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
@@ -93,7 +95,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "monitoring" && (
             <div style={moduleWrapper}>
-              <MonitoringModule isMobile={isMobile} host={host} />
+              <MonitoringModule isMobile={isMobile} host={outsideHost} />
             </div>
           )}
           {activeTab === "tunnel" && (
@@ -103,7 +105,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
           )}
           {activeTab === "raspi" && (
             <div style={moduleWrapper}>
-              <RaspiModule isMobile={isMobile} host={host} />
+              <RaspiModule isMobile={isMobile} host={outsideHost} />
             </div>
           )}
 
@@ -120,6 +122,7 @@ export default function Dashboard({ socket, user, setUser, onLogout }) {
 
         </div>
       </main>
+      <ChatAssistant host={host} user={user} />
     </div>
   );
 }

@@ -16,7 +16,7 @@ export const fetchCctvUrl = async (host) => {
     // 2. 캐시가 비어있을 때만 브라우저에서 직접 ITS API 호출 (최초 1회 실행용)
     const res = await axios.get('https://openapi.its.go.kr:9443/cctvInfo', {
       params: {
-        apiKey: '22f088a782aa49f6a441b24c2b36d4ec',
+        apiKey: '9241caeb859d43b0aaadf26b6b64988a',
         type: 'ex', cctvType: '1',
         minX: '126.8', maxX: '127.89',
         minY: '36.8', maxY: '37.0', getType: 'json'

@@ -157,14 +157,18 @@ def process_ai_logic(jpg_data):
         with frame_lock:
             processed_frame = enc_buffer.tobytes()
 
+# 전역 상태 변수 (상단에 추가)
+raw_frame = None  # 추가된 원본 프레임 변수
 
-# --- [5. 스트림 수신 워커] ---
+# --- [5. 스트림 수신 워커] 수정 ---
 def stream_proxy_worker():
+    global raw_frame  # 추가
     stream_url = f"{RASPI_BACKEND_URL}/video_feed"
     print(f"[INFO] Connecting to Raspi Stream: {stream_url}")
+    
     while not _stop_event.is_set():
         try:
-            response  = requests.get(stream_url, stream=True, timeout=5)
+            response = requests.get(stream_url, stream=True, timeout=5)
             byte_data = b''
             for chunk in response.iter_content(chunk_size=16384):
                 if _stop_event.is_set():
@@ -178,6 +182,11 @@ def stream_proxy_worker():
                     if start != -1 and end != -1 and end > start:
                         jpg       = byte_data[start:end + 2]
                         byte_data = byte_data[end + 2:]
+                        
+                        # 💡 원본 프레임 전역 변수에 저장
+                        with frame_lock:
+                            raw_frame = jpg
+                            
                         process_ai_logic(jpg)
                     else:
                         break
@@ -189,6 +198,27 @@ def stream_proxy_worker():
 
 
 # --- [6. API 엔드포인트] ---
+
+# raspi.py 수정 제안
+@raspi_bp.route('/normal_feed')
+def normal_feed():
+    def generate():
+        while not _stop_event.is_set():
+            with frame_lock:
+                if raw_frame: # 저장된 원본 프레임을 그대로 스트리밍
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                           + raw_frame + b'\r\n')
+            time.sleep(0.04) # 약 25 FPS 유지
+
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'ngrok-skip-browser-warning': 'true',
+            'Cache-Control': 'no-cache',
+        }
+    )
 
 @raspi_bp.route('/start', methods=['POST'])
 def start_workers():
@@ -221,13 +251,23 @@ def stop_workers():
 @raspi_bp.route('/video_feed')
 def video_feed():
     def generate():
-        while True:
+        while not _stop_event.is_set(): # 전역 정지 이벤트 확인
             with frame_lock:
                 if processed_frame:
                     yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                            + processed_frame + b'\r\n')
-            time.sleep(0.04)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+            time.sleep(0.04) # 약 25 FPS 유지
+    
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': '*',
+            'ngrok-skip-browser-warning': 'true',
+            'Cache-Control': 'no-cache',
+        }
+    )
 
 
 @raspi_bp.route('/control')

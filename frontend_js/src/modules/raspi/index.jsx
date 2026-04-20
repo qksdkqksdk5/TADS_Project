@@ -17,17 +17,40 @@ export default function RaspiModule() {
 
   // ✅ 렌더마다 재생성되지 않도록 ref로 고정
   const RASPI_IP = "192.168.219.155";
-  const BASE_URL = useRef(`http://${window.location.hostname}:5000/api/raspi`).current;
+  // const BASE_URL = useRef(`http://${window.location.hostname}:5000/api/raspi`).current;
+  // ✅ BASE_URL 아래에 추가
+  const BASE_URL = useRef(`https://itsras.illit.kr/api/raspi`).current;
+
+  // ✅ 이걸 추가
+  const client = useRef(axios.create({
+    baseURL: BASE_URL,
+    // Cloudflare 터널에서는 사실 불필요하지만, 기존 백엔드 호환을 위해 유지
+    headers: { 'ngrok-skip-browser-warning': 'true' }
+  })).current;
 
   // ✅ video URL도 ref로 관리 — streamKey state 변경이 useEffect 재실행 유발 안 하도록
-  const normalVideoUrl  = useRef(`http://${RASPI_IP}:5000/video_feed`);
-  const thermalVideoUrl = useRef(`${BASE_URL}/video_feed`);
+  // const normalVideoUrl  = useRef(`http://${RASPI_IP}:5000/video_feed`);
+  const normalVideoUrl = useRef(`${BASE_URL}/normal_feed?t=${Date.now()}`);
+  const thermalVideoUrl = useRef(`${BASE_URL}/video_feed?t=${Date.now()}`);
 
+  const errorCount = useRef(0);
+  
   const handleStreamError = useCallback(() => {
-    const t = Date.now();
-    normalVideoUrl.current  = `http://${RASPI_IP}:5000/video_feed?t=${t}`;
-    thermalVideoUrl.current = `${BASE_URL}/video_feed?t=${t}`;
-    setStreamKey(t); // img를 key로 재마운트하기 위해서만 사용
+    if (errorCount.current > 5) {
+      console.error("스트림 연결 5회 실패. 백엔드 상태를 확인하세요.");
+      return; // 5회 이상 실패 시 더 이상 재시도하지 않음
+    }
+    
+    errorCount.current += 1;
+    console.warn(`스트림 에러! ${errorCount.current}회 재시도 중... (2초 대기)`);
+    
+    // 2초의 딜레이를 주어 서버가 회복할 시간을 확보
+    setTimeout(() => {
+      const t = Date.now();
+      normalVideoUrl.current = `${BASE_URL}/normal_feed?t=${t}`;
+      thermalVideoUrl.current = `${BASE_URL}/video_feed?t=${t}`;
+      setStreamKey(t);
+    }, 2000); 
   }, []);
 
   // ✅ 의존성 없음 — 마운트 시 딱 한 번만 생성, BASE_URL은 closure로 캡처
@@ -36,7 +59,7 @@ export default function RaspiModule() {
       const params = {};
       if (gcode) params.cmd  = gcode;
       if (mode)  params.mode = mode;
-      const response = await axios.get(`${BASE_URL}/control`, { params, timeout: 2000 });
+      const response = await client.get(`/control`, { params, timeout: 2000 });
       if (response.data) {
         setFireAlert(!!response.data.fire_alert);
         setIsAutoTracking(!!response.data.auto);
@@ -51,7 +74,7 @@ export default function RaspiModule() {
 
   // ✅ 의존성 없음 — 마운트/언마운트 시 딱 한 번만 실행
   useEffect(() => {
-    axios.post(`${BASE_URL}/start`).catch(() => {});
+    client.post(`/start`).catch(() => {});
 
     const init = async () => {
       await fetchStatus("M211 S0");
@@ -64,7 +87,7 @@ export default function RaspiModule() {
 
     return () => {
       clearInterval(timer);
-      axios.post(`${BASE_URL}/stop`).catch(() => {});
+      client.post(`/stop`).catch(() => {});
     };
   }, []); // ✅ 의존성 배열 비움
 
@@ -117,7 +140,7 @@ export default function RaspiModule() {
                 src={normalVideoUrl.current}
                 onError={handleStreamError}
                 style={{ ...videoImgStyle, transform: isFlipped ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                crossOrigin="anonymous"
+                // crossOrigin="anonymous"
               />
             </div>
 

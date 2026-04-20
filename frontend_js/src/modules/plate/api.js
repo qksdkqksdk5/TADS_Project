@@ -1,38 +1,24 @@
 // src/modules/plate/api.js
-// plate 모듈 API 호출 모음
-// BASE_URL은 호출 시 주입
-
 import axios from 'axios';
 
-export const plateApi = (baseUrl) => ({
+export const plateApi = (baseUrl) => {
+  const client = axios.create({
+    baseURL: baseUrl,
+    headers: {
+      'ngrok-skip-browser-warning': 'true'
+    }
+  });
 
-  health: () =>
-    axios.get(`${baseUrl}/health`),
-
-  getVideos: () =>
-    axios.get(`${baseUrl}/videos`),
-
-  getPreprocessMethods: () =>
-    axios.get(`${baseUrl}/preprocess_methods`),
-
-  start: (video, operatorName) =>
-    axios.post(`${baseUrl}/start`, { video, operator_name: operatorName }),
-
-  getPlates: () =>
-    axios.get(`${baseUrl}/plates`),
-
-  getResults: (video = '') =>
-    axios.get(`${baseUrl}/results${video ? `?video=${video}` : ''}`),
-
-  verify: (id, groundTruth) =>
-    axios.post(`${baseUrl}/verify`, { id, ground_truth: groundTruth }),
-
-  reprocess: (id, preprocess) =>
-    axios.post(`${baseUrl}/reprocess`, { id, preprocess }),
-
-  init: () => 
-    axios.get(`${baseUrl}/init`),
-
-  stop: () => 
-    axios.post(`${baseUrl}/stop`), // 중지 API
-});
+  return {
+    health: () => client.get('/health'),
+    getVideos: () => client.get('/videos'),
+    getPreprocessMethods: () => client.get('/preprocess_methods'),
+    start: (video, operatorName) => client.post('/start', { video, operator_name: operatorName }),
+    getPlates: () => client.get('/plates'),
+    getResults: (video = '') => client.get(`/results${video ? `?video=${video}` : ''}`),
+    verify: (id, groundTruth) => client.post('/verify', { id, ground_truth: groundTruth }),
+    reprocess: (id, preprocess) => client.post('/reprocess', { id, preprocess }),
+    init: () => client.get('/init'),
+    stop: () => client.post('/stop'),
+  };
+};
