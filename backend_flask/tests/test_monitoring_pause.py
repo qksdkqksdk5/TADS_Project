@@ -30,7 +30,7 @@ for _s in [
     'models',
     'modules.traffic.detectors.base_detector',
     'modules.traffic.detectors.manager',
-    'modules.monitoring.its_helper',
+    # its_helper 는 os/time/requests 만 사용 → 스텁 불필요, 실제 모듈 로드
     'modules.monitoring.monitoring_detector',
     'detector_modules', 'detector_modules.config', 'detector_modules.state',
     'detector_modules.flow_map', 'detector_modules.tracker',

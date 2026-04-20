@@ -4,6 +4,7 @@
 import os
 import time
 import gevent
+from datetime import datetime, timezone  # diagnostics 엔드포인트의 시각 계산에 필요
 from flask import Blueprint, jsonify, request, current_app, Response
 
 from modules.traffic.detectors.manager import detector_manager
@@ -258,6 +259,83 @@ def cameras():
     return jsonify({"cameras": result}), 200
 
 
+@monitoring_bp.route('/diagnostics', methods=['GET'])
+def diagnostics():
+    """
+    모든 MonitoringDetector 의 실시간 진단 정보 반환.
+
+    블랙아웃·스트림 타임아웃 원인 추적용 엔드포인트.
+    브라우저에서 GET /api/monitoring/diagnostics 로 직접 조회 가능.
+
+    응답 필드 해석:
+        read_max_ms >= 29000  → FFMPEG 30초 타임아웃 발생 확인 (이벤트 루프 차단 위험)
+        reconnect_count 큰 값 → 해당 카메라 스트림이 반복 끊김
+        last_frame_age_s 큰 값 → 프레임 공급이 멈춘 카메라 (블랙아웃 원인 후보)
+        is_paused = true       → 일시정지 상태 (탭 이탈)
+
+    Returns:
+        200  {
+               "pool_maxsize": 16,
+               "detectors": [
+                 {
+                   "camera_id": ...,
+                   "is_running": ...,
+                   "is_paused": ...,
+                   "frame_num": ...,
+                   "read_last_ms": ...,
+                   "read_max_ms": ...,
+                   "reconnect_count": ...,
+                   "reconnect_last_at": ...,
+                   "last_frame_ok_at": ...,
+                   "last_frame_age_s": ...,   ← 마지막 정상 프레임 이후 경과 초
+                 }, ...
+               ]
+             }
+    """
+    import time as _time
+
+    result = []
+    with detector_manager._lock:
+        items = list(detector_manager.active_detectors.items())
+
+    for key, det in items:
+        if not isinstance(det, MonitoringDetector):
+            continue  # 타 팀 감지기 제외
+
+        diag = getattr(det, '_diag', {})
+
+        # 마지막 정상 프레임 수신 이후 경과 시간 계산
+        last_ok = diag.get('last_frame_ok_at')
+        if last_ok:
+            last_ok_dt = datetime.fromisoformat(last_ok)
+            age_s = round((_time.time() - last_ok_dt.replace(tzinfo=timezone.utc).timestamp()), 1)
+        else:
+            age_s = None  # 아직 프레임 수신 전
+
+        result.append({
+            'camera_id':        det.camera_id,
+            'location':         getattr(det, 'location', ''),
+            'is_running':       det.is_running,
+            'is_paused':        getattr(det, '_paused', False),
+            'frame_num':        det.state.frame_num if det.state else 0,
+            'read_last_ms':     diag.get('read_last_ms', 0),
+            'read_max_ms':      diag.get('read_max_ms', 0),    # ← 29000+ 이면 타임아웃
+            'reconnect_count':  diag.get('reconnect_count', 0),
+            'reconnect_last_at': diag.get('reconnect_last_at'),
+            'last_frame_ok_at': last_ok,
+            'last_frame_age_s': age_s,  # ← 이 값이 큰 카메라가 블랙아웃 원인
+        })
+
+    # read_max_ms 내림차순 정렬 → 타임아웃 의심 카메라를 맨 위로
+    result.sort(key=lambda x: x['read_max_ms'], reverse=True)
+
+    return jsonify({
+        'pool_maxsize': 16,             # _FRAME_POOL 최대 동시 스레드 수
+        'detector_count': len(result),
+        'detectors': result,
+    }), 200
+
+
 @monitoring_bp.route('/debug/<camera_id>', methods=['GET'])
 def debug(camera_id):
     """
@@ -412,35 +490,64 @@ def its_cctv():
 @monitoring_bp.route('/its/road_geo', methods=['GET'])
 def its_road_geo():
     """
-    도로 선형 GeoJSON 반환 (Overpass OSM 기반, 캐시).
-    캐시 히트 시 즉시 반환. 캐시 미스 시 백그라운드 요청 후 빈 GeoJSON 반환
-    (프론트는 다음 폴링 또는 재요청 시 데이터를 받는다).
+    도로 선형 GeoJSON 반환 (Overpass OSM 기반, 3단계 캐시).
+
+    캐시 전략:
+      1. 성공 메모리 캐시 히트 → 즉시 반환 (is_failure=True 캐시는 건너뜀)
+      2. 캐시 미스 or 실패 캐시 → 백그라운드 greenlet으로 Overpass 요청
+         (중복 스폰 방지: _geo_fetching 집합으로 관리)
+      3. Overpass 성공 시 → road_geo_ready Socket.IO emit (프론트 즉시 갱신)
+
+    프론트엔드는 이 엔드포인트 호출 후:
+      - 이미 캐시된 데이터가 있으면 즉시 도로선 렌더링
+      - 없으면 road_geo_ready 이벤트 수신 시 렌더링 (폴링 불필요)
 
     Query:
         road  str  'gyeongbu' | ...  (기본 'gyeongbu')
 
     Returns:
-        200  GeoJSON FeatureCollection
+        200  GeoJSON FeatureCollection (성공 캐시 또는 빈 FeatureCollection)
     """
     import time as _time
     road = request.args.get('road', 'gyeongbu').strip()
     if road not in its_helper.ROAD_CONFIG:
         return jsonify({"status": "error", "message": f"지원하지 않는 road: {road}"}), 400
 
-    # 캐시 히트 → 즉시 반환
+    # ── 성공 캐시 히트 → 즉시 반환 ────────────────────────────────────────
+    # is_failure=True 인 실패 캐시는 여기서 건너뛰고 background retry로 진행
+    # (기존 로직은 실패 캐시도 즉시 반환해 background fetch를 막았던 버그)
     cached = its_helper._geo_cache.get(road)
-    if cached and cached['expires'] > _time.time():
+    if cached and cached['expires'] > _time.time() and not cached.get('is_failure'):
         return jsonify(cached['data']), 200
 
-    # 캐시 미스 → 백그라운드에서 Overpass 요청 (중복 스폰 방지)
+    # ── 캐시 미스 or 실패 캐시 → background greenlet 스폰 ─────────────────
     if road not in _geo_fetching:
         _geo_fetching.add(road)
+
+        # request context 바깥(greenlet)에서 사용할 socketio 인스턴스를 미리 캡처
+        # current_app.extensions['socketio']는 실제 SocketIO 객체이므로
+        # 클로저로 캡처해도 greenlet 내에서 안전하게 emit 가능
+        socketio = current_app.extensions['socketio']
+
         def _fetch_bg():
-            its_helper.get_road_geometry(road)
-            _geo_fetching.discard(road)
+            """Overpass 요청 후 성공 시 road_geo_ready 이벤트 전파."""
+            geo = its_helper.get_road_geometry(road)   # 파일/메모리/Overpass 3단계 시도
+            _geo_fetching.discard(road)                 # 완료 후 fetching 플래그 해제
+            if geo.get('features'):                     # 성공(features 있음) 시에만 emit
+                # 모든 연결된 프론트엔드 클라이언트에 도로 선형 데이터 푸시
+                # → 폴링 없이 즉시 지도에 도로선 반영
+                socketio.emit('road_geo_ready', {
+                    'road': road,   # 어느 도로인지 프론트가 구분할 수 있도록 포함
+                    'geo':  geo,    # GeoJSON FeatureCollection 전체
+                })
+                print(f"📡 road_geo_ready emit ({road}): "
+                      f"{len(geo['features'])}개 way → 모든 클라이언트")
+
         gevent.spawn(_fetch_bg)
 
-    # 프론트엔드에 빈 GeoJSON 즉시 반환 (도로 선 없이 먼저 렌더)
+    # ── 즉시 빈 GeoJSON 반환 ───────────────────────────────────────────────
+    # 프론트엔드는 이것을 받아 지도 초기화를 진행하고,
+    # road_geo_ready Socket.IO 이벤트를 수신하면 도로선을 추가 렌더링한다.
     return jsonify({'type': 'FeatureCollection', 'features': []}), 200
 
 
@@ -535,6 +642,9 @@ def its_start_segment():
     if not road or not start_ic or not end_ic:
         return jsonify({"status": "error", "message": "road, start_ic, end_ic 필요"}), 400
 
+    # TTL(60초) 기반 캐시를 그대로 사용한다.
+    # 강제 무효화는 프론트엔드가 보유한 세션 토큰과 다른 신규 토큰을 발급받게 되어
+    # 오히려 스트림 열기 실패를 유발할 수 있으므로 제거한다.
     cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
     if not cameras_in_range:
         return jsonify({"status": "error", "message": "해당 범위 카메라 없음"}), 404
@@ -739,3 +849,145 @@ def its_stop_segment():
         "stopped":   stopped,
         "not_found": not_found,
     }), 200
+
+
+# ── 스트림 URL 수동 탐침 API ─────────────────────────────────────────────────
+
+@monitoring_bp.route('/its/probe_stream', methods=['GET'])
+def its_probe_stream():
+    """
+    ITS CCTV 스트림 URL 을 HTTP 수준에서 탐침해 진단 결과를 반환한다.
+    cv2.VideoCapture 가 실패하는 카메라의 원인을 파악할 때 사용한다.
+
+    Query:
+        url        str  선택 — 직접 탐침할 ITS URL
+        camera_id  str  선택 — 캐시에서 URL 을 조회해 탐침 (url 대신 사용 가능)
+
+    Returns:
+        200  {
+               url, http_status, content_type, stream_format,
+               first_bytes_hex, first_bytes_ascii,
+               diagnosis,         ← 케이스 설명 문자열
+               [http_error]       ← HTTP 연결 실패 시만 포함
+             }
+        400  파라미터 없음
+        403  허용되지 않은 도메인
+
+    사용 예:
+        GET /api/monitoring/its/probe_stream?url=http://cctvsec.ktict.co.kr/3035/...
+        GET /api/monitoring/its/probe_stream?camera_id=gyeongbu_...노포교...
+    """
+    url       = request.args.get('url',       '').strip()
+    camera_id = request.args.get('camera_id', '').strip()
+
+    # camera_id 로 요청한 경우 캐시에서 URL 조회
+    if camera_id and not url:
+        # 모든 도로 캐시에서 camera_id 가 일치하는 항목 탐색
+        for road_key in its_helper.ROAD_CONFIG:
+            cameras = its_helper.get_cctv_list(road_key)
+            for cam in cameras:
+                if cam['camera_id'] == camera_id:
+                    url = cam['url']
+                    break
+            if url:
+                break
+
+    if not url:
+        return jsonify({"error": "url 또는 camera_id 파라미터 필요"}), 400
+
+    # 보안: ITS 공식 도메인만 허용
+    _ALLOWED = ('cctvsec.ktict.co.kr', 'openapi.its.go.kr', 'ktict.co.kr')
+    if not any(d in url for d in _ALLOWED):
+        return jsonify({"error": "허용되지 않은 도메인"}), 403
+
+    # HTTP 탐침 실행
+    probe = its_helper.probe_stream_url(url)
+
+    # 탐침 결과를 케이스 진단 문자열로 변환
+    if 'http_error' in probe:
+        diagnosis = f"케이스 A: HTTP 접근 불가 — {probe['http_error']}"
+    else:
+        status = probe.get('http_status', 0)
+        fmt    = probe.get('stream_format', 'unknown')
+        if status in (401, 403):
+            diagnosis = f"케이스 B: 인증 실패 / 토큰 만료 (HTTP {status})"
+        elif status == 404:
+            diagnosis = "케이스 B: 카메라 URL 없음 (HTTP 404)"
+        elif status == 200 and fmt == 'm3u8':
+            diagnosis = "케이스 C: HLS m3u8 확인 — FFMPEG 가 플레이리스트를 파싱해야 함"
+        elif status == 200 and fmt == 'mpegts':
+            diagnosis = "케이스 D: MPEG-TS 직접 스트림 확인 — cv2 백엔드 설정 문제 가능성"
+        elif status == 200:
+            diagnosis = f"케이스 D (포맷 미확인): HTTP 200 이지만 cv2 열기 실패 — 포맷: {fmt}"
+        else:
+            diagnosis = f"케이스 미확인: HTTP {status}"
+
+    probe['diagnosis'] = diagnosis
+    return jsonify(probe), 200
+
+
+# ── 도로 전체 카메라 일괄 탐침 API ───────────────────────────────────────────
+
+@monitoring_bp.route('/its/probe_batch', methods=['GET'])
+def its_probe_batch():
+    """
+    특정 도로(또는 구간)의 전체 카메라를 한 번에 HTTP 탐침해
+    stream_format 패턴과 카메라별 결과를 반환한다.
+
+    단일 카메라가 아닌 여러 카메라에서 동일 현상이 반복될 때
+    원인 패턴(토큰 만료 / HLS / MPEG-TS 등)을 빠르게 파악하기 위한 엔드포인트.
+
+    Query:
+        road      str  필수  'gyeongbu' | 'gyeongin' | 'seohae' | 'jungang' | 'youngdong'
+        start_ic  str  선택  구간 시작 IC (생략 시 도로 전체 조회)
+        end_ic    str  선택  구간 종료 IC (start_ic 와 함께 사용)
+
+    Returns:
+        200  {
+               road:    str,
+               total:   int,
+               summary: { 'mpegts': N, 'm3u8': N, 'unknown': N, 'error': N },
+               cameras: [
+                 {
+                   camera_id, name, url,
+                   http_status, content_type, stream_format,
+                   first_bytes_hex, first_bytes_ascii,
+                   diagnosis,
+                   [http_error]   ← 접속 실패 시만
+                 },
+                 ...
+               ]
+             }
+        400  road 파라미터 없음 또는 잘못된 도로명
+        404  해당 구간 카메라 없음
+
+    사용 예:
+        GET /api/monitoring/its/probe_batch?road=gyeongbu
+        GET /api/monitoring/its/probe_batch?road=gyeongbu&start_ic=노포IC&end_ic=부산IC
+    """
+    road     = request.args.get('road',     '').strip()
+    start_ic = request.args.get('start_ic', '').strip()
+    end_ic   = request.args.get('end_ic',   '').strip()
+
+    if not road:
+        return jsonify({"error": "road 파라미터 필요"}), 400
+    if road not in its_helper.ROAD_CONFIG:
+        return jsonify({
+            "error": f"알 수 없는 도로: '{road}'",
+            "available": list(its_helper.ROAD_CONFIG.keys()),
+        }), 400
+
+    # 구간 지정 시 해당 구간만, 없으면 도로 전체 카메라 조회
+    if start_ic and end_ic:
+        cameras = its_helper.get_cameras_in_range(road, start_ic, end_ic)
+    else:
+        cameras = its_helper.get_cctv_list(road)
+
+    if not cameras:
+        return jsonify({"error": "해당 조건에 해당하는 카메라 없음"}), 404
+
+    # 일괄 탐침 실행 (카메라 수에 따라 수 초 소요될 수 있음)
+    result = its_helper.probe_batch(cameras)
+    result['road'] = road   # 요청한 도로명도 응답에 포함
+
+    return jsonify(result), 200

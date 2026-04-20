@@ -39,7 +39,7 @@ export default function MetricsPanel({ data }) {
   const {
     level, is_learning, relearning,
     learning_progress, learning_total,
-    jam_score, jam_up, jam_down,
+    jam_up, jam_down,
     vehicle_count, affected,
     occupancy, avg_speed, duration_sec,
   } = data;
@@ -99,17 +99,13 @@ export default function MetricsPanel({ data }) {
         </div>
       )}
 
-      {/* 정체 지수 게이지 */}
+      {/* 방향별 정체 지수 (상행 / 하행) */}
       {!showLearning && (
         <div style={sectionStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-            <span style={labelStyle}>정체 지수</span>
-            <span style={{ fontSize: '15px', fontWeight: 700, color: '#e2e8f0' }}>
-              {(jam_score ?? 0).toFixed(2)}
-            </span>
-          </div>
-          <JamGauge value={jam_score ?? 0} />
-          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+          {/* 평균 정체지수 바 제거 — 모델이 상/하행 방향별로 독립 판정하므로
+              합산 평균은 의미가 없고 오히려 혼란을 줄 수 있어 방향별 수치만 표시 */}
+          <span style={labelStyle}>정체 지수</span>
+          <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
             <SmallBadge label="상행" value={(jam_up   ?? 0).toFixed(2)} />
             <SmallBadge label="하행" value={(jam_down ?? 0).toFixed(2)} />
           </div>
@@ -137,25 +133,6 @@ export default function MetricsPanel({ data }) {
 
 // ── 서브 컴포넌트 ────────────────────────────────────────────
 
-function JamGauge({ value }) {
-  const pct      = Math.min(value, 1) * 100;
-  const barColor = value >= 0.55 ? '#ef4444' : value >= 0.25 ? '#eab308' : '#22c55e';
-  return (
-    <div style={{ position: 'relative', background: '#1e293b', borderRadius: '6px', height: '8px' }}>
-      <div style={{
-        height: '100%',
-        width: `${pct}%`,
-        background: barColor,
-        borderRadius: '6px',
-        transition: 'width 0.4s ease, background 0.4s ease',
-      }} />
-      {/* 임계선 0.25 (SMOOTH↔SLOW) */}
-      <div style={{ position: 'absolute', top: '-3px', left: '25%', width: '2px', height: '14px', background: '#475569' }} />
-      {/* 임계선 0.55 (SLOW↔CONGESTED) */}
-      <div style={{ position: 'absolute', top: '-3px', left: '55%', width: '2px', height: '14px', background: '#475569' }} />
-    </div>
-  );
-}
 
 function SmallBadge({ label, value }) {
   return (

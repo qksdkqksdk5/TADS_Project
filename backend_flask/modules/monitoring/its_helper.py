@@ -2,14 +2,27 @@
 # ITS CCTV API + Overpass 도로 선형 API 호출 및 캐싱 헬퍼
 
 import os
+import json                  # 파일 캐시 직렬화/역직렬화
 import time
 import requests
+from pathlib import Path     # 파일 캐시 경로 조작
 
 # ── 상수 ──────────────────────────────────────────────────────────────────────
 
-ITS_API_KEY = os.getenv('ITS_API_KEY', '8fc75e2a3b1c413f8111579275a4a6fa')
+ITS_API_KEY  = os.getenv('ITS_API_KEY', '8fc75e2a3b1c413f8111579275a4a6fa')
 ITS_CCTV_URL = 'https://openapi.its.go.kr:9443/cctvInfo'
-OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+
+# Overpass API 공개 미러 목록 — 앞에서부터 순서대로 시도하고 성공하면 즉시 사용
+# overpass-api.de 가 느리거나 타임아웃 시 다음 미러로 자동 전환된다.
+OVERPASS_ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',           # 1순위: 공식 서버 (독일)
+    'https://overpass.kumi.systems/api/interpreter',      # 2순위: kumi.systems EU 미러
+    'https://overpass.openstreetmap.fr/api/interpreter',  # 3순위: OpenStreetMap 프랑스 미러
+]
+
+# 도로 선형 파일 캐시 저장 경로 (서버 재시작 후에도 데이터 유지)
+# 경로: backend_flask/modules/monitoring/road_geo_cache/{road_key}.json
+ROAD_GEO_CACHE_DIR = Path(__file__).parent / 'road_geo_cache'
 
 # 고속도로별 좌표 범위 및 OSM 검색 키워드
 ROAD_CONFIG = {
@@ -54,7 +67,7 @@ ROAD_CONFIG = {
 
 _cctv_cache   = {}   # { road_key: {'data': [...], 'expires': timestamp} }
 _geo_cache    = {}   # { road_key: {'data': geojson, 'expires': timestamp} }
-CCTV_TTL      = 3600         # 1시간
+CCTV_TTL      = 60           # 60초 — ITS URL은 시간제한 토큰이므로 짧게 유지
 GEO_TTL       = 86400 * 7   # 7일 (도로 선형은 거의 안 바뀜)
 
 
@@ -220,51 +233,111 @@ def get_cameras_in_range(road_key: str, start_ic: str, end_ic: str) -> list:
 
 def get_road_geometry(road_key: str) -> dict:
     """
-    Overpass API에서 도로 선형 GeoJSON을 조회해 반환한다. 결과는 메모리 캐시된다.
+    도로 선형 GeoJSON을 반환한다. 3단계 캐시 전략을 사용한다.
+
+    조회 우선순위:
+      1. 메모리 캐시 (성공 캐시만) — 가장 빠름, 서버 재시작 시 유실
+      2. 파일 캐시 — 서버 재시작 후에도 유지
+      3. Overpass API (미러 순차 시도) — 네트워크 요청
+
+    실패 캐시(is_failure=True)는 우선순위 1에서 건너뛰고 2→3 순서로 계속 시도한다.
+    모든 미러 실패 시 is_failure=True 로 60초 캐시 → 재시도 폭풍 방지.
 
     Returns:
-        GeoJSON FeatureCollection (LineString features)
-        {
-          "type": "FeatureCollection",
-          "features": [
-            {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[lng, lat], ...]}}
-          ]
-        }
+        GeoJSON FeatureCollection
+        { "type": "FeatureCollection", "features": [LineString Feature, ...] }
     """
     now = time.time()
+
+    # ── 1단계: 메모리 캐시 (성공한 결과만 즉시 반환) ──────────────────────────
     cached = _geo_cache.get(road_key)
-    if cached and cached['expires'] > now:
+    if cached and cached['expires'] > now and not cached.get('is_failure'):
+        # is_failure 플래그가 없는 캐시만 즉시 반환
+        # is_failure=True 이면 이 분기를 건너뛰고 파일/Overpass 재시도로 진행
         return cached['data']
+
+    # ── 2단계: 파일 캐시 (서버 재시작 후에도 유지) ───────────────────────────
+    cache_file = ROAD_GEO_CACHE_DIR / f'{road_key}.json'
+    if cache_file.exists():
+        try:
+            with cache_file.open('r', encoding='utf-8') as f:
+                geo = json.load(f)                          # JSON 파일 읽기
+            if geo.get('features'):                         # 유효한 데이터인지 확인
+                _geo_cache[road_key] = {                    # 메모리 캐시에도 적재
+                    'data': geo, 'expires': now + GEO_TTL
+                }
+                print(f"🗂️ 도로 선형 파일 캐시 로드 ({road_key}): "
+                      f"{len(geo['features'])}개 way")
+                return geo                                   # 파일 캐시 히트 → 반환
+        except Exception as e:
+            print(f"⚠️ 파일 캐시 로드 실패 ({road_key}): {e}")
+            # 파일 손상 시 3단계(Overpass)로 진행
 
     cfg = ROAD_CONFIG.get(road_key)
     if not cfg:
         return {'type': 'FeatureCollection', 'features': []}
 
     osm_name = cfg['osm_name']
+    # Overpass QL 쿼리 — timeout:25 (서버 측), Python timeout=20 (미러당)
+    # 미러 3개 × 20초 = 최대 60초 대기 (기존 단일 서버 35초 타임아웃보다 관대하나
+    # 성공률이 대폭 높아짐)
     query = f"""
-[out:json][timeout:30];
+[out:json][timeout:25];
 (
   way["name"="{osm_name}"]["highway"~"motorway|trunk|motorway_link"];
 );
 out geom;
 """
-    try:
-        resp = requests.post(OVERPASS_URL, data={'data': query}, timeout=35)
-        resp.raise_for_status()
-        elements = resp.json().get('elements', [])
-    except Exception as e:
-        print(f"⚠️ Overpass API 오류 ({road_key}): {e}")
-        # 실패 결과도 1800초(30분) 캐시 → Overpass 504 재시도 폭풍 방지
+
+    # ── 3단계: Overpass 미러 순차 시도 ──────────────────────────────────────
+    elements  = None    # 성공 시 elements 리스트 저장
+    last_err  = None    # 마지막 실패 예외 (로그용)
+
+    # 백엔드 서버 IP가 Overpass에서 거부(406/403)될 경우를 대비해
+    # Overpass가 기대하는 헤더를 명시적으로 설정한다.
+    # - User-Agent: 자동화 봇 차단 우회 (Overpass 측이 식별할 수 있도록 명시)
+    # - Accept: application/json 명시 (406 Not Acceptable 방지)
+    # - Content-Type: form 데이터 전송 방식 명시
+    _overpass_headers = {
+        'User-Agent':   'TADS-TrafficMonitor/1.0 (traffic monitoring; contact: tads@example.com)',
+        'Accept':       'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            resp = requests.post(
+                endpoint,
+                data={'data': query},
+                headers=_overpass_headers,
+                timeout=20,          # 미러당 20초 (기존 단일 35초 → 미러 3개 × 20초)
+            )
+            resp.raise_for_status()
+            elements = resp.json().get('elements', [])
+            break                    # 성공 → 루프 탈출, 나머지 미러 시도 생략
+        except Exception as e:
+            last_err = e
+            print(f"⚠️ Overpass 오류 ({road_key}, {endpoint.split('/')[2]}): {e}")
+            continue                 # 다음 미러로 전환
+
+    # ── 모든 미러 실패 ─────────────────────────────────────────────────────
+    if elements is None:
+        print(f"❌ Overpass 전체 미러 실패 ({road_key}): {last_err}")
         empty = {'type': 'FeatureCollection', 'features': []}
-        _geo_cache[road_key] = {'data': empty, 'expires': now + 1800}
+        # is_failure=True: monitoring.py가 이 캐시를 보고 background retry를 허용
+        # TTL 60초: 너무 짧으면 재시도 폭풍, 너무 길면 회복 지연 — 1분이 적정
+        _geo_cache[road_key] = {
+            'data': empty, 'expires': now + 60, 'is_failure': True
+        }
         return empty
 
+    # ── 성공: GeoJSON FeatureCollection 조립 ────────────────────────────────
     features = []
     for el in elements:
-        if el.get('type') != 'way':
+        if el.get('type') != 'way':    # way 타입만 처리 (node, relation 제외)
             continue
         geometry = el.get('geometry', [])
-        if len(geometry) < 2:
+        if len(geometry) < 2:          # 좌표가 2개 미만이면 선분 불가 → 건너뜀
             continue
         coords = [[pt['lon'], pt['lat']] for pt in geometry]
         features.append({
@@ -274,6 +347,160 @@ out geom;
         })
 
     geo = {'type': 'FeatureCollection', 'features': features}
+
+    # 메모리 캐시 저장 (7일 TTL, is_failure 없음 = 성공 캐시)
     _geo_cache[road_key] = {'data': geo, 'expires': now + GEO_TTL}
-    print(f"🗺️ Overpass 도로 선형 캐시 갱신 ({road_key}): {len(features)}개 way")
+
+    # ── 파일 캐시 저장 (서버 재시작 후 Overpass 불필요) ──────────────────────
+    try:
+        ROAD_GEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)  # 폴더 생성 (없을 경우)
+        with cache_file.open('w', encoding='utf-8') as f:
+            json.dump(geo, f, ensure_ascii=False)               # UTF-8 JSON 저장
+        print(f"🗺️ 도로 선형 Overpass 성공 → 파일 저장 ({road_key}): "
+              f"{len(features)}개 way → {cache_file.name}")
+    except Exception as e:
+        print(f"⚠️ 파일 캐시 저장 실패 ({road_key}): {e}")
+        # 저장 실패해도 메모리 캐시는 유효하므로 계속 진행
+
     return geo
+
+
+# ── 스트림 URL 탐침 (진단용) ─────────────────────────────────────────────────
+
+# MPEG-TS 스트림의 첫 바이트 (sync byte 0x47)
+_MPEGTS_SYNC = b'\x47'
+# HLS m3u8 플레이리스트의 시작 시그니처
+_M3U8_MAGIC = b'#EXTM3U'
+
+
+def _detect_format(first_bytes: bytes) -> str:
+    """
+    스트림 첫 바이트를 보고 포맷을 추정한다.
+    ITS 스트림은 보통 MPEG-TS 또는 HLS(m3u8) 중 하나다.
+
+    Returns:
+        'mpegts'  — MPEG-TS sync byte(0x47) 로 시작하는 경우
+        'm3u8'    — HLS 플레이리스트 (#EXTM3U) 로 시작하는 경우
+        'unknown' — 그 외
+    """
+    if first_bytes and first_bytes[:1] == _MPEGTS_SYNC:
+        return 'mpegts'   # MPEG-TS: cv2.VideoCapture 직접 열기 가능
+    if first_bytes and first_bytes[:7] == _M3U8_MAGIC:
+        return 'm3u8'     # HLS: FFMPEG가 플레이리스트를 파싱해 열어야 함
+    return 'unknown'
+
+
+def probe_stream_url(url: str) -> dict:
+    """
+    ITS CCTV 스트림 URL 을 HTTP GET 으로 탐침해 진단 정보를 반환한다.
+    cv2.VideoCapture 가 실패한 이유를 파악하기 위해 사용한다.
+
+    탐침 항목:
+        url              — 입력 URL (그대로 반환)
+        http_status      — HTTP 응답 코드 (200, 403, 404 …)
+        content_type     — Content-Type 헤더 값
+        content_length   — Content-Length 헤더 값 (없으면 '(없음)')
+        server           — Server 헤더 값
+        first_bytes_hex  — 응답 첫 16바이트 16진수 문자열
+        first_bytes_ascii— 응답 첫 16바이트 ASCII 가시 문자열 (비가시 → '.')
+        stream_format    — 'mpegts' | 'm3u8' | 'unknown'
+        http_error       — HTTP 연결 실패 시 예외 메시지 (접속 성공 시 미포함)
+
+    Returns:
+        dict  위 항목들로 이루어진 진단 딕셔너리
+    """
+    result: dict = {'url': url}
+
+    # ITS 스트리밍 서버는 브라우저 UA(Mozilla/5.0)를 403으로 막는다.
+    # cv2.VideoCapture 가 내부적으로 쓰는 FFMPEG UA 를 그대로 사용해야
+    # 실제 cv2 동작과 같은 조건으로 탐침할 수 있다.
+    _FFMPEG_UA = 'Lavf/58.76.100'
+
+    try:
+        resp = requests.get(
+            url,
+            stream=True,     # 전체 다운로드 없이 헤더+첫 바이트만 읽음
+            timeout=5,       # 5초 이내 응답 없으면 포기
+            headers={'User-Agent': _FFMPEG_UA},
+        )
+
+        result['http_status']    = resp.status_code
+        result['content_type']   = resp.headers.get('Content-Type',   '(없음)')
+        result['content_length'] = resp.headers.get('Content-Length', '(없음)')
+        result['server']         = resp.headers.get('Server',         '(없음)')
+
+        # 첫 16바이트로 스트림 포맷 추정 (이후 바이트는 읽지 않아 대역폭 절약)
+        first = next(resp.iter_content(chunk_size=16), b'')
+        result['first_bytes_hex']   = first.hex()
+        result['first_bytes_ascii'] = ''.join(
+            chr(b) if 32 <= b < 127 else '.' for b in first
+        )
+        result['stream_format'] = _detect_format(first)
+
+        resp.close()
+
+    except Exception as exc:
+        # 연결 자체가 실패한 경우 (타임아웃, DNS 실패, 접속 거부 등)
+        result['http_error'] = str(exc)
+
+    return result
+
+
+def probe_batch(cameras: list) -> dict:
+    """
+    카메라 목록 전체를 순서대로 HTTP 탐침해 결과를 집계한다.
+    단일 카메라 탐침(probe_stream_url)을 반복 호출하고,
+    stream_format 별로 카운트를 집계해 패턴 파악을 돕는다.
+
+    Args:
+        cameras: [{'camera_id': str, 'name': str, 'url': str, ...}, ...]
+                 get_cctv_list() 또는 get_cameras_in_range() 반환값과 동일한 구조
+
+    Returns:
+        {
+          'total':   int,             — 탐침한 카메라 수
+          'summary': {format: count}  — 포맷별 집계 (mpegts/m3u8/unknown/error)
+          'cameras': [                — 카메라별 상세 결과
+            {
+              'camera_id':     str,
+              'name':          str,
+              'url':           str,
+              'http_status':   int,    (HTTP 실패 시 없음)
+              'content_type':  str,    (HTTP 실패 시 없음)
+              'stream_format': str,    (HTTP 실패 시 'error')
+              'first_bytes_hex': str,  (HTTP 실패 시 없음)
+              'diagnosis':     str,
+              'http_error':    str,    (접속 실패 시만 포함)
+            },
+            ...
+          ]
+        }
+    """
+    summary: dict = {}   # stream_format → 카운트
+    cam_results   = []   # 카메라별 탐침 결과 목록
+
+    for cam in cameras:
+        url   = cam.get('url', '')
+        probe = probe_stream_url(url)   # HTTP 탐침 실행
+
+        # HTTP 접속 실패 시 포맷을 'error' 로 분류
+        fmt = 'error' if 'http_error' in probe else probe.get('stream_format', 'unknown')
+
+        # 포맷별 집계
+        summary[fmt] = summary.get(fmt, 0) + 1
+
+        # 카메라 ID / 이름을 탐침 결과에 병합해 한 눈에 볼 수 있게 한다
+        entry = {
+            'camera_id': cam.get('camera_id', ''),
+            'name':      cam.get('name',      ''),
+            'url':       url,
+        }
+        entry.update(probe)                   # http_status, content_type 등 탐침 결과 전부 포함
+        entry['stream_format'] = fmt          # 'error' 오버라이드 반영
+        cam_results.append(entry)
+
+    return {
+        'total':   len(cameras),   # 탐침 대상 총 카메라 수
+        'summary': summary,        # 포맷 패턴 집계
+        'cameras': cam_results,    # 카메라별 상세 결과
+    }
