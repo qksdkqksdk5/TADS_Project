@@ -25,6 +25,7 @@ openai==2.32.0
 
 # LangChain & Vector DB
 langchain==1.2.15
+langchain-chroma==1.1.0
 langchain-classic==1.0.4
 langchain-community==0.4.1
 langchain-core==1.2.31
