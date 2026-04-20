@@ -32,28 +32,26 @@ engine = create_engine(
 # ============================================================
 # [설정 2] MongoDB 연결 (실패해도 서버 다운 방지)
 # ============================================================
-try:
-    MONGO_URI = os.getenv("MONGO_URI")
-    from gevent import monkey
-    if monkey.is_module_patched('socket'):  # gevent 패치 감지
-        from pymongo.pool import PoolOptions
-        mongo_client = MongoClient(
-            MONGO_URI,
-            serverSelectionTimeoutMS=3000,
-            connectTimeoutMS=3000,
-            socketTimeoutMS=5000,
-            maxPoolSize=10,
-            waitQueueTimeoutMS=2000
-        )
-    else:
-        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-    mongo_client.server_info()  # 실제 연결 확인
-    mongo_db = mongo_client["TADS_DB"]
-    history_col = mongo_db["chat_history"]
-    print("MongoDB 연결 성공")
-except Exception as e:
-    print(f"MongoDB 연결 실패 (대화 기록 비활성화): {e}")
-    history_col = None  # 🔴 수정: None으로 두고 아래에서 분기 처리
+history_col = None
+mongo_client = None
+
+def get_mongo_collection():
+    global history_col, mongo_client
+    if history_col is not None:
+        return history_col
+        
+    try:
+        MONGO_URI = os.getenv("MONGO_URI")
+        # gevent 호환성을 위해 waitQueueMultiple 옵션 추가 추천
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, waitQueueMultiple=10)
+        mongo_client.server_info()
+        history_col = mongo_client["TADS_DB"]["chat_history"]
+        print("MongoDB 연결 성공")
+    except Exception as e:
+        print(f"MongoDB 연결 실패: {e}")
+        history_col = None
+        
+    return history_col
 
 # ============================================================
 # [설정 3] OpenAI 클라이언트
@@ -140,9 +138,11 @@ def ask_tads():
         last_intent_for_prompt = 'UNKNOWN'
         prev_info = ""
 
+        current_history_col = get_mongo_collection()
+
         # 🔴 수정: history_col이 None이면 스킵 (MongoDB 연결 실패 시 크래시 방지)
-        if history_col is not None:
-            last_log = history_col.find_one(
+        if current_history_col is not None:
+            last_log = current_history_col.find_one(
                 {"user_name": user_name},
                 sort=[("timestamp", -1)]
             )
@@ -291,7 +291,7 @@ def ask_tads():
                 }
                 if query:
                     doc["sql_query"] = query
-                history_col.insert_one(doc)
+                current_history_col.insert_one(doc)
             except Exception as mongo_err:
                 print(f"MongoDB 저장 실패: {mongo_err}")
 

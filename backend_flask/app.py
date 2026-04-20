@@ -3,6 +3,8 @@ from gevent import monkey
 monkey.patch_all()
 
 import os
+os.environ["MONGO_USE_GEVENT"] = "1"
+
 import warnings
 import atexit
 from dotenv import load_dotenv
