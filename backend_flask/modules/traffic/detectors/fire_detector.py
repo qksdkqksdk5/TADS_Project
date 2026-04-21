@@ -63,14 +63,14 @@ class FireDetector(BaseDetector):
         self._consecutive_count = 0
         self._alarm_active      = False
 
-        if url == 0 or url == "0":
-            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        else:
-            self.cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # if url == 0 or url == "0":
+        #     self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        #     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        #     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        #     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # else:
+        #     self.cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        #     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.is_alerting = False
 
@@ -186,6 +186,17 @@ class FireDetector(BaseDetector):
             print(f"❌ 화재 비동기 저장 에러: {e}")
 
     def run(self):
+
+        # ✅ [추가] 실제 분석 스레드 내부에서 VideoCapture를 생성합니다.
+        if self.url == 0 or self.url == "0":
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        else:
+            # 💡 환경변수 OPENCV_FFMPEG_THREADS=1과 함께 작동하여 충돌을 방지합니다.
+            self.cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+
+            
         session_key = self.video_origin if self.video_origin in shared.alert_sent_session else None
         mode_str    = "GPU" if _USE_GPU else "CPU(OpenVINO)"
 

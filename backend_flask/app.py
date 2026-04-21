@@ -3,6 +3,7 @@
 # monkey.patch_all()
 
 import os
+os.environ["OPENCV_FFMPEG_THREADS"] = "1"
 
 import warnings
 import atexit
