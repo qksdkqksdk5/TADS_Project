@@ -186,6 +186,10 @@ class DetectorConfig:
     # ==================== 프레임 스킵(신호 끊김) 감지 ====================
     frame_skip_jump_px:    float = 80.0  # 차량 1대 순간이동 판정 픽셀 (1프레임 최대 이동)
                                          # 6fps 기준 정상 고속차 120km/h≈30px/f → 80px 초과는 이상
+    frame_skip_jump_px_max: float = 200.0  # jump 임계값 동적 조정 상한 (픽셀)
+                                           # ITS CCTV 실제 6fps 인데 OpenCV fps=30 리포트 시
+                                           # scale=5 → threshold=400px 이 돼 감지 불가해지는 문제 방지
+                                           # 200px = 화면 너비(640px) 의 31% — 프레임 간 최대 이동 허용치
     frame_skip_ratio:      float = 0.5   # 전체 추적 차량 중 이 비율 이상이 jump면 스킵 프레임 확정
                                          # 0.5 = 절반 이상 동시 jump → 신호 끊김으로 판단
 
