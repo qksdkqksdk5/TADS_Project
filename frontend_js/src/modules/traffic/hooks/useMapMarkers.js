@@ -6,14 +6,26 @@ import { useRef } from 'react';
 export function useMapMarkers(mapRef) {
   const markersRef = useRef({});
 
+  const clearMarkersRef = () => {
+    markersRef.current = {};
+  };
+
   const createMarker = (alert, resolveEmergency) => {
-    if (!mapRef.current || markersRef.current[alert.id] || !window.kakao) return;
+    // window.kakao 체크 및 지도 존재 확인
+    if (!mapRef.current || !window.kakao) return;
+    
+    // 이미 이 지도 인스턴스에 마커가 있다면 중복 생성 방지
+    if (markersRef.current[alert.id]) return;
 
     const coord = new window.kakao.maps.LatLng(alert.lat, alert.lng);
-
-    // ✅ 마커마다 고유 함수명 사용 (덮어쓰기 방지)
     const fnName = `resolveFromMap_${alert.id}`;
-    window[fnName] = () => resolveEmergency(alert.id, alert.type, alert.address, alert.origin);
+    
+    // resolveEmergency가 넘어왔는지 확인 후 할당
+    window[fnName] = () => {
+      if (typeof resolveEmergency === 'function') {
+        resolveEmergency(alert.id, alert.type, alert.address, alert.origin);
+      }
+    };
 
     const content = `
       <div style="position: relative; bottom: 50px; background: white; border-radius: 12px; border: 2px solid #ff4d4f; box-shadow: 0 4px 12px rgba(0,0,0,0.2); padding: 10px; min-width: 140px;">
@@ -45,5 +57,5 @@ export function useMapMarkers(mapRef) {
     }
   };
 
-  return { markersRef, createMarker, removeMarker };
+  return { markersRef, createMarker, removeMarker, clearMarkersRef };
 }

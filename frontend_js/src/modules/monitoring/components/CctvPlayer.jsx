@@ -43,9 +43,14 @@ function ItsProxyPlayer({ host, cam }) {
 
   if (!cam) return <Placeholder icon="📷" text="카메라를 선택하세요" />;
 
+<<<<<<< HEAD
   // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
   const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
   const proxyUrl = `${proto}://${host}/api/monitoring/its/view_feed`
+=======
+  // const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
+  const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
     + `?camera_id=${encodeURIComponent(cam.camera_id)}`
     + `&url=${encodeURIComponent(cam.url)}`;
 
@@ -88,9 +93,14 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
   const [imgError,  setImgError]  = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
+<<<<<<< HEAD
   // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
   const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
   const streamUrl = `${proto}://${host}/api/monitoring/video_feed/${cameraId}`;
+=======
+  // const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
+  const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
 
   useEffect(() => {
     tracksRef.current = [];
@@ -105,7 +115,12 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     const poll = setInterval(async () => {
       try {
         const res = await axios.get(
+<<<<<<< HEAD
           `${(host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https'}://${host}/api/monitoring/tracks/${cameraId}`,
+=======
+          // `https://${host}/api/monitoring/tracks/${cameraId}`,
+          `http://${host}:5000/api/monitoring/tracks/${cameraId}`,
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
           { timeout: 400 },
         );
         tracksRef.current = Array.isArray(res.data) ? res.data : [];

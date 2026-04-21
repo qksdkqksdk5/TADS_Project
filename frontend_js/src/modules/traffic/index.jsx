@@ -1,23 +1,19 @@
 /* eslint-disable */
-// src/modules/traffic/index.jsx
-// 역할: CCTV/웹캠/시뮬레이션 탭 UI + 긴급알림 + 지도
-// 탭 라우팅/사이드바는 dashboard/index.jsx가 담당
-
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAnomalyDetection } from './hooks/useAnomalyDetection';
 import VideoPanel   from './components/VideoPanel';
 import MapPanel     from './components/MapPanel';
 import ControlPanel from './components/ControlPanel';
 import { fetchCctvUrl, startSimulation, stopSimulation } from './api';
-import axios from 'axios';
 
-export default function TrafficModule({ socket, user, activeTab, isMobile, host }) {
+export default function TrafficModule({ socket, user, activeTab, isMobile, host,
+  isEmergency, pendingAlerts, logs, mapRef, resolveEmergency, resolveAllAlertsAction, moveToAlert,
+  videoUrl, setVideoUrl, createMarker, clearMarkersRef }) {
+
   const navigate = useNavigate();
-
-  const [videoUrl, setVideoUrl] = useState("");
   const [cctvData, setCctvData] = useState([]);
   const [showMap, setShowMap]   = useState(true);
+  const prevTabRef = useRef(activeTab);
 
   const loadCctvUrl = async () => {
     try {
@@ -26,15 +22,6 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host 
     } catch (err) { console.error("CCTV API 호출 실패:", err); }
   };
 
-  const { isEmergency, pendingAlerts, logs, mapRef,
-          resolveEmergency, resolveAllAlertsAction, moveToAlert } =
-    useAnomalyDetection(
-      socket, activeTab,
-      (newTab) => navigate(`/dashboard/${newTab}`),
-      setVideoUrl, host, user?.name
-    );
-
-  // 탭 변경 시 videoUrl 초기화 (URL 직접 접근 포함)
   useEffect(() => {
     if (activeTab === "webcam") {
       setTimeout(() => {
@@ -42,26 +29,19 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host 
       }, 100);
     } else if (activeTab === "cctv") {
       setVideoUrl("");
-      // 데이터가 아예 없을 때만 호출
-      if (cctvData.length === 0) {
-        loadCctvUrl();
-      }
+      if (cctvData.length === 0) loadCctvUrl();
     }
-  }, [activeTab, host]); // host가 바뀔 때도 대응할 수 있게 포함
-
-  useEffect(() => {
-    // 컴포넌트가 아예 사라지거나(언마운트), 
-    // 사용자가 'sim' 탭을 보다가 다른 탭으로 이동할 때만 실행됨
-    return () => {
-      if (host) {
-        // 💡 서버에 '연결 끊김 감지' 로직을 넣으셨다면 
-        // 사실 이 아래 stopSimulation은 아예 지워도 무방합니다.
-        stopSimulation(host);
-      }
-    };
   }, [activeTab, host]);
 
-  // 지도 relayout
+  // sim 탭에서 다른 탭으로 이동할 때만 stop
+  useEffect(() => {
+    const prevTab = prevTabRef.current;
+    prevTabRef.current = activeTab;
+    if (prevTab === "sim" && activeTab !== "sim") {
+      stopSimulation(host);
+    }
+  }, [activeTab, host]);
+
   useEffect(() => {
     if (!mapRef.current) return;
     mapRef.current.relayout();
@@ -77,7 +57,16 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host 
   }, [activeTab, isEmergency, pendingAlerts.length]);
 
   const startSim = (type) => {
-    startSimulation(host, type).catch(err => console.error("시뮬레이션 시작 실패:", err));
+    startSimulation(host, type)
+      .then(() => {
+        // 본인은 직접 탭 이동 + 영상 세팅
+        navigate(`/dashboard/sim`);
+        const encodedType = encodeURIComponent(type);
+        setTimeout(() => {
+          setVideoUrl(`http://${host}:5000/api/video_feed?type=${encodedType}&v=${Date.now()}`);
+        }, 500);
+      })
+      .catch(err => console.error("시뮬레이션 시작 실패:", err));
   };
 
   const resolveAllAlerts = () => {
@@ -106,7 +95,6 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host 
     }}>
       <style>{pulseAnimation}</style>
 
-      {/* 영상 + 지도 */}
       <div style={{ flex: 3.2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ ...panelWrapper, flex: 1, marginBottom: (isEmergency && showMap) ? (isMobile ? '10px' : '20px') : '0px', transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}>
           <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} host={host} user={user} />
@@ -131,11 +119,10 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host 
           borderStyle: 'solid',
           borderColor: (isEmergency && showMap) ? '#1e293b' : 'transparent',
         }}>
-          <MapPanel activeTab={activeTab} isEmergency={isEmergency} mapRef={mapRef} onHide={() => setShowMap(false)} />
+          <MapPanel activeTab={activeTab} isEmergency={isEmergency} mapRef={mapRef} onHide={() => setShowMap(false)} pendingAlerts={pendingAlerts} createMarker={createMarker} resolveEmergency={resolveEmergency} clearMarkersRef={clearMarkersRef} />
         </div>
       </div>
 
-      {/* 제어 + 알림 */}
       <div style={{ flex: 0.8, display: 'flex', flexDirection: 'column', gap: isMobile ? '10px' : '20px', minHeight: 0 }}>
         <div style={{ flex: 1, minHeight: isMobile ? '300px' : 0 }}>
           <ControlPanel activeTab={activeTab} startSim={startSim} logs={logs} />
