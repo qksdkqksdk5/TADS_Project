@@ -1,9 +1,12 @@
+from multiprocessing import dummy
+
 import cv2
 import os
 import time
 import threading
 from datetime import datetime
 from ultralytics import YOLO
+import numpy as np
 
 from shared.discord_helper import send_discord_notification
 from .base_detector import BaseDetector
@@ -47,6 +50,9 @@ class FireDetector(BaseDetector):
 
         self.model = get_shared_fire_model()
         print(f"💻 [{cctv_name}] FireDetector 준비 완료 (공유 모델 사용)")
+
+        dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+        self.model.predict(dummy, imgsz=320, verbose=False)
 
         self._class_names       = self.model.names
         self.FIRE_THRESHOLD     = 0.10
