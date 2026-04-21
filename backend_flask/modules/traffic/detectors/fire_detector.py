@@ -43,6 +43,8 @@ class FireDetector(BaseDetector):
                  video_origin="realtime_its"):
         super().__init__(cctv_name, url, app=app, socketio=socketio, db=db, ResultModel=ResultModel)
 
+        self.url = url
+        self.cap = None
         self.lat           = lat
         self.lng           = lng
         self.is_simulation = is_simulation
@@ -196,7 +198,7 @@ class FireDetector(BaseDetector):
             # 💡 환경변수 OPENCV_FFMPEG_THREADS=1과 함께 작동하여 충돌을 방지합니다.
             self.cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
 
-            
+
         session_key = self.video_origin if self.video_origin in shared.alert_sent_session else None
         mode_str    = "GPU" if _USE_GPU else "CPU(OpenVINO)"
 
@@ -267,5 +269,8 @@ class FireDetector(BaseDetector):
 
     def stop(self):
         super().stop()
-        if self.cap.isOpened():
-            self.cap.release()
+        # ✅ [수정] self.cap이 존재할 때만 닫기 작업을 수행합니다.
+        if self.cap is not None:
+            if self.cap.isOpened():
+                self.cap.release()
+            self.cap = None # 깔끔하게 비워줍니다.
