@@ -33,22 +33,21 @@ from gevent.threadpool import ThreadPool as _GeventThreadPool
 from datetime import datetime
 from pathlib import Path
 
-# ── final_pj 모듈 경로 등록 ──────────────────────────────────────────────
+# ── 모듈 경로 등록 ───────────────────────────────────────────────────────
 # monitoring_detector.py 기준: monitoring/
 _BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-# detector_modules/
+# detector_modules/ — flow_map_matcher 포함한 모든 감지기 서브모듈 위치
 _MODULES_DIR = os.path.join(_BASE_DIR, 'detector_modules')
-# final_pj AI 소스 (flow_map_matcher.py 위치)
-_FINAL_PJ_SRC = r'C:\final_pj\src'
 
-for _p in (_BASE_DIR, _MODULES_DIR, _FINAL_PJ_SRC):
+for _p in (_BASE_DIR, _MODULES_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 # ── flow_map_matcher 임포트 ───────────────────────────────────────────────
 # 저장된 flow_map 중 현재 카메라 화면과 가장 유사한 것을 자동 선택한다.
 # 학습 결과 재사용으로 서버 재시작 시 매번 학습하는 비효율을 제거한다.
-from flow_map_matcher import FlowMapMatcher, save_ref_frame
+# (이전: C:\final_pj\src → 현재: detector_modules/ 로 이전)
+from detector_modules.flow_map_matcher import FlowMapMatcher, save_ref_frame
 
 # ── flow_map 캐시 저장 루트 ────────────────────────────────────────────────
 # {_FLOW_MAPS_ROOT}/{camera_id}/flow_map.npy  — 학습 결과 저장
@@ -87,6 +86,97 @@ _YOLO_MODEL      = os.path.join(_BASE_DIR, 'best.pt')
 _EMIT_INTERVAL   = 30    # 30프레임마다 traffic_update emit (약 1초@30fps) — Socket.IO 주기는 유지
 _LOG_INTERVAL    = 300   # 콘솔 상태 출력 주기 (약 10초@30fps) — 터미널 노이즈 억제
 _SKIP_LOG_COOL   = 300   # 프레임 스킵 로그 쿨타임 (같은 카메라 300프레임 이내 중복 출력 방지)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 프레임 스킵·단독 점프 리셋 헬퍼 (모듈 레벨 순수 함수 — 단독 테스트 가능)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_frame_skip_reset(st, tracks, frame_num):
+    """전역 프레임 스킵 감지 시 모든 추적 차량의 상태를 현재 위치로 초기화한다.
+
+    전역 프레임 스킵이란 HLS 스트림 끊김으로 추적 차량의 절반 이상이
+    한 프레임 사이에 비정상적으로 큰 변위를 보이는 상황을 말한다.
+
+    수행 동작:
+    1. post_reconnect_frame = frame_num 설정
+       → judge.py 의 _reconnect_guard 를 활성화해
+         스킵 이후 새로 등장한 차량(ByteTrack 신규 ID)의 fast-track 오탐을 차단.
+    2. 각 차량 궤적을 현재 위치로 전부 덮어씀
+       → velocity 계산(traj[-window]→traj[-1])에서 점프 전 좌표를 제거.
+    3. last_velocity, wrong_way_count, direction_change_frame, wrong_way_ids 초기화
+       → 스킵 전 누적된 역주행 의심·확정 상태를 모두 리셋.
+
+    Args:
+        st        : DetectorState — 수정 대상 상태 객체
+        tracks    : 현재 프레임 추적 결과 [{"id": int, "cx": float, "cy": float}, ...]
+        frame_num : 현재 프레임 번호 (st.frame_num 과 동일해야 함)
+    """
+    # ① reconnect_guard 활성화 — 기존 ID 보호(direction_change_frame)만으로는
+    #   스킵 후 새로 발급된 ByteTrack ID 가 보호되지 않는다.
+    #   post_reconnect_frame 을 설정해야 judge.py 의 _reconnect_guard 가 발동되어
+    #   direction_change_guard_frames 동안 fast-track 과 최종 확정을 모두 차단한다.
+    st.post_reconnect_frame = frame_num  # 재연결 이벤트 프레임 기록
+
+    for t in tracks:
+        tid = t["id"]                          # 추적 ID
+
+        # ② 궤적 전체를 현재 위치로 초기화
+        # 마지막 점만 바꾸면 이전 점(점프 전 좌표)이 남아 있어
+        # velocity 계산 시 "순간이동 벡터"가 계속 사용되어 오탐이 이어진다.
+        if st.trajectories[tid]:               # 기존 궤적이 있을 때만 초기화
+            cur_pos = (t["cx"], t["cy"])        # 현재(점프 후) 위치
+            st.trajectories[tid] = [cur_pos] * len(st.trajectories[tid])
+
+        # ③ 점프 전 방향 벡터 제거 — dir_jump 필터 오작동 방지
+        st.last_velocity.pop(tid, None)
+
+        # ④ 역주행 의심 카운트 초기화 — 점프 전 누적된 의심 횟수 제거
+        st.wrong_way_count[tid] = 0
+
+        # ⑤ direction_change_guard 발동 — 이 ID 가 다음 guard_frames 동안 판정 차단
+        st.direction_change_frame[tid] = frame_num
+
+        # ⑥ 스킵 직전 오탐으로 확정된 역주행 취소
+        st.wrong_way_ids.discard(tid)
+
+
+def _apply_solo_jump_reset(st, tid, cur_pos, frame_num):
+    """단독 차량 점프 감지 시 해당 차량의 상태를 현재 위치로 초기화한다.
+
+    "단독 점프"란 전역 프레임 스킵으로 분류되지 않지만
+    특정 차량 1대의 프레임 간 변위가 임계값(jump_px × 1.5)을 초과하는 상황이다.
+    ByteTrack 이 해당 차량 ID 를 놓쳤다가 재할당하는 경우가 많다.
+
+    수행 동작:
+    1. post_reconnect_frame = frame_num 설정
+       → 점프 후 등장한 신규 ID 도 reconnect_guard 보호 범위에 포함.
+    2~6. _apply_frame_skip_reset 과 동일한 단일 차량 초기화.
+
+    Args:
+        st        : DetectorState — 수정 대상 상태 객체
+        tid       : 단독 점프가 감지된 차량의 추적 ID
+        cur_pos   : 점프 후 현재 위치 (fx, fy) 튜플
+        frame_num : 현재 프레임 번호
+    """
+    # ① reconnect_guard 활성화 (전역 스킵과 동일한 이유로 필요)
+    st.post_reconnect_frame = frame_num  # 재연결 이벤트 프레임 기록
+
+    # ② 궤적 전체를 현재 위치로 초기화
+    st.trajectories[tid] = [cur_pos] * len(st.trajectories[tid])
+
+    # ③ 점프 전 방향 벡터 제거
+    st.last_velocity.pop(tid, None)
+
+    # ④ 역주행 의심 카운트 초기화
+    st.wrong_way_count[tid] = 0
+
+    # ⑤ direction_change_guard 발동
+    st.direction_change_frame[tid] = frame_num
+
+    # ⑥ 스킵 직전 확정된 역주행 취소
+    st.wrong_way_ids.discard(tid)
+
 
 # ── gevent 호환 OS 스레드 풀 ──────────────────────────────────────────────
 # cap.read() / tracker.track() 등 C 익스텐션 블로킹 호출을 실제 OS 스레드에서
@@ -804,7 +894,11 @@ class MonitoringDetector(BaseDetector):
                 _avg_interval = sum(_proc_fps_samples) / len(_proc_fps_samples)
                 _proc_fps = 1.0 / max(_avg_interval, 0.01)
                 _scale = max(1.0, fps / max(_proc_fps, 1.0))
-                _jump_thr_dynamic = _base_jump_px * min(_scale, 5.0)
+                # ITS CCTV 는 실제 6fps 인데 OpenCV 가 fps=30 을 리포트해
+                # scale=5, threshold=400px 이 되는 문제 방지.
+                # 200px 상한 = 차량이 1프레임에 화면 너비의 ~31% 를 이동해야 감지 → 충분한 여유.
+                _jump_thr_dynamic = min(_base_jump_px * min(_scale, 5.0),
+                                        getattr(cfg, 'frame_skip_jump_px_max', 200.0))
 
             # YOLO+ByteTrack: 추론도 C 익스텐션 블로킹 → OS 스레드로 실행
             tracks = _FRAME_POOL.apply(self.tracker.track, (frame,))
@@ -840,15 +934,9 @@ class MonitoringDetector(BaseDetector):
                 if st.frame_num - _last_skip_log_frame >= _SKIP_LOG_COOL:
                     print(f"[{self.camera_id}] ⚠️ 프레임 스킵 감지 ({_jump_count}/{_jump_total}대 jump) → 스킵")
                     _last_skip_log_frame = st.frame_num
-                for _t in tracks:
-                    _tid = _t["id"]
-                    if st.trajectories[_tid]:
-                        _cur_pos = (_t["cx"], _t["cy"])
-                        st.trajectories[_tid] = [_cur_pos] * len(st.trajectories[_tid])
-                    st.last_velocity.pop(_tid, None)
-                    st.wrong_way_count[_tid] = 0
-                    st.direction_change_frame[_tid] = st.frame_num
-                    st.wrong_way_ids.discard(_tid)
+                # 전역 리셋 헬퍼 호출:
+                # post_reconnect_frame 포함 모든 상태 초기화 (Bug #1 수정)
+                _apply_frame_skip_reset(st, tracks, st.frame_num)
 
             # ── 카메라 전환 감지 (3-state 상태 머신) ──────────────────────
             # 탐지 중 → (전환 감지) → waiting_stable → (안정 확인) → 재학습 → 탐지 중
@@ -1002,16 +1090,13 @@ class MonitoringDetector(BaseDetector):
                 # ── 개별 차량 단독 jump 체크 (프레임 스킵 미감지 시에도 1대가 튀는 경우) ──
                 _solo_jump = False
                 if st.trajectories[tid]:
-                    _prev_fx, _prev_fy = st.trajectories[tid][-1]
-                    _solo_dist = ((fx - _prev_fx)**2 + (fy - _prev_fy)**2) ** 0.5
-                    if _solo_dist > _jump_thr * 1.5:   # 단독 jump는 더 엄격한 기준
+                    _prev_fx, _prev_fy = st.trajectories[tid][-1]                    # 직전 위치
+                    _solo_dist = ((fx - _prev_fx)**2 + (fy - _prev_fy)**2) ** 0.5   # 변위 거리
+                    if _solo_dist > _jump_thr * 1.5:   # 단독 jump는 더 엄격한 기준 (전역 스킵의 1.5배)
                         _solo_jump = True
-                        _cur_pos = (fx, fy)
-                        st.trajectories[tid] = [_cur_pos] * len(st.trajectories[tid])
-                        st.last_velocity.pop(tid, None)
-                        st.wrong_way_count[tid] = 0
-                        st.direction_change_frame[tid] = st.frame_num
-                        st.wrong_way_ids.discard(tid)
+                        # 단독 리셋 헬퍼 호출:
+                        # post_reconnect_frame 포함 해당 차량 상태 초기화 (Bug #2 수정)
+                        _apply_solo_jump_reset(st, tid, (fx, fy), st.frame_num)
 
                 # 궤적 갱신 (3프레임 이상 된 트랙만, EMA 스무딩 적용, 스킵 시 건너뜀)
                 age = st.frame_num - st.first_seen_frame.get(tid, st.frame_num)

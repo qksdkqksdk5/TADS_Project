@@ -6,7 +6,7 @@
 #     pytest tests/test_flow_map_cache.py -v
 #
 # 섹션별 범위:
-#   A. FlowMapMatcher 단위 테스트 (final_pj/src/flow_map_matcher.py)
+#   A. FlowMapMatcher 단위 테스트 (detector_modules/flow_map_matcher.py)
 #   B. FlowMap.eroded_mask 저장/로드 검증 (flow_map.py 수정 필요 → Red)
 #   C. MonitoringDetector._try_load_cache 계약 검증 (신규 메서드 → Red)
 #   D. MonitoringDetector._save_cache 계약 검증 (신규 메서드 → Red)
@@ -42,9 +42,7 @@ _HERE             = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_DIR      = os.path.normpath(os.path.join(_HERE, '..'))
 _MONITORING_DIR   = os.path.join(_BACKEND_DIR, 'modules', 'monitoring')
 _DETECTOR_MODULES = os.path.join(_MONITORING_DIR, 'detector_modules')
-_FINAL_PJ_SRC     = r'C:\final_pj\src'
-
-for _p in (_BACKEND_DIR, _MONITORING_DIR, _DETECTOR_MODULES, _FINAL_PJ_SRC):
+for _p in (_BACKEND_DIR, _MONITORING_DIR, _DETECTOR_MODULES):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -104,8 +102,8 @@ sys.modules['modules.traffic.detectors.base_detector'].BaseDetector = _BaseDetec
 # detector_modules 는 순수 Python+numpy+cv2 → 실제 모듈 로드 가능
 from detector_modules.flow_map import FlowMap
 
-# flow_map_matcher 는 C:\final_pj\src 에 위치 → 실제 로드
-from flow_map_matcher import FlowMapMatcher, save_ref_frame, score_frames
+# flow_map_matcher 는 detector_modules/ 에 위치 → 실제 로드
+from detector_modules.flow_map_matcher import FlowMapMatcher, save_ref_frame, score_frames
 
 # MonitoringDetector: 위 스텁 처리 후 로드
 from modules.monitoring.monitoring_detector import MonitoringDetector

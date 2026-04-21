@@ -2,10 +2,18 @@
 // src/modules/monitoring/api.js
 import axios from 'axios';
 
+// localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
+const getProto = (host) =>
+  (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
+
 // ✅ 헤더가 포함된 인스턴스 생성
 const createClient = (host) => axios.create({
+<<<<<<< HEAD
+  baseURL: `${getProto(host)}://${host}/api/monitoring`,
+=======
   // baseURL: `https://${host}/api/monitoring`,
   baseURL: `http://${host}:5000/api/monitoring`,
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
   headers: {
     'ngrok-skip-browser-warning': 'true'
   }

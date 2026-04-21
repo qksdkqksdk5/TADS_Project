@@ -43,8 +43,14 @@ function ItsProxyPlayer({ host, cam }) {
 
   if (!cam) return <Placeholder icon="📷" text="카메라를 선택하세요" />;
 
+<<<<<<< HEAD
+  // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
+  const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
+  const proxyUrl = `${proto}://${host}/api/monitoring/its/view_feed`
+=======
   // const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
   const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
     + `?camera_id=${encodeURIComponent(cam.camera_id)}`
     + `&url=${encodeURIComponent(cam.url)}`;
 
@@ -87,8 +93,14 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
   const [imgError,  setImgError]  = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
+<<<<<<< HEAD
+  // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
+  const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
+  const streamUrl = `${proto}://${host}/api/monitoring/video_feed/${cameraId}`;
+=======
   // const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
   const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
 
   useEffect(() => {
     tracksRef.current = [];
@@ -103,8 +115,12 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     const poll = setInterval(async () => {
       try {
         const res = await axios.get(
+<<<<<<< HEAD
+          `${(host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https'}://${host}/api/monitoring/tracks/${cameraId}`,
+=======
           // `https://${host}/api/monitoring/tracks/${cameraId}`,
           `http://${host}:5000/api/monitoring/tracks/${cameraId}`,
+>>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
           { timeout: 400 },
         );
         tracksRef.current = Array.isArray(res.data) ? res.data : [];
@@ -149,8 +165,15 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
             const cy_    = t.cy * scale + offY;
 
             // 궤적 선 (오래된 점은 투명, 최신 점은 불투명)
+            // 연속 두 점의 거리가 화면 짧은 변의 8% 초과이면 해당 구간을 그리지 않는다.
+            // → 신호 끊김 후 차량이 순간이동한 것처럼 보이는 긴 선(꼬리) 제거.
             if (trail.length >= 2) {
+              const maxSeg = Math.min(dw, dh) * 0.08; // 순간이동 판정 거리 (픽셀)
+              const maxSeg2 = maxSeg * maxSeg;         // 제곱 비교로 sqrt 생략
               for (let i = 1; i < trail.length; i++) {
+                const dx = trail[i][0] - trail[i - 1][0];
+                const dy = trail[i][1] - trail[i - 1][1];
+                if (dx * dx + dy * dy > maxSeg2) continue; // 순간이동 구간 skip
                 ctx.globalAlpha = (i / trail.length) * 0.85;
                 ctx.strokeStyle = color;
                 ctx.lineWidth   = 1.5;

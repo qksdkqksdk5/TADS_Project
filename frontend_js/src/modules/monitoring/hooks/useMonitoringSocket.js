@@ -44,7 +44,9 @@ export function useMonitoringSocket(host, callbacks = {}) {
   useEffect(() => {
     if (!host) return;
 
-    const sock = io(`https://${host}`, {
+    // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
+    const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
+    const sock = io(`${proto}://${host}`, {
       transports: ['polling', 'websocket'],
       reconnectionAttempts: 5,
       timeout: 5000,
