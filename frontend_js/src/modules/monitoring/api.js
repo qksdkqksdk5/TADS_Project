@@ -4,7 +4,8 @@ import axios from 'axios';
 
 // ✅ 헤더가 포함된 인스턴스 생성
 const createClient = (host) => axios.create({
-  baseURL: `https://${host}/api/monitoring`,
+  // baseURL: `https://${host}/api/monitoring`,
+  baseURL: `http://${host}:5000/api/monitoring`,
   headers: {
     'ngrok-skip-browser-warning': 'true'
   }

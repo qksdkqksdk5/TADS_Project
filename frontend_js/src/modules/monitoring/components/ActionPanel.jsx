@@ -56,7 +56,8 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
 
     setLoadingMap(prev => ({ ...prev, [actionId]: true }));
     try {
-      await axios.post(`https://${host}/api/monitoring/action`, {
+      // await axios.post(`https://${host}/api/monitoring/action`, {
+      await axios.post(`http://${host}:5000/api/monitoring/action`, {
         camera_id:   cameraId,
         action_type: actionId,
         acted_by:    actedBy,

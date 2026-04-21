@@ -43,7 +43,8 @@ function ItsProxyPlayer({ host, cam }) {
 
   if (!cam) return <Placeholder icon="📷" text="카메라를 선택하세요" />;
 
-  const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
+  // const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
+  const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
     + `?camera_id=${encodeURIComponent(cam.camera_id)}`
     + `&url=${encodeURIComponent(cam.url)}`;
 
@@ -86,7 +87,8 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
   const [imgError,  setImgError]  = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
-  const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
+  // const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
+  const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
 
   useEffect(() => {
     tracksRef.current = [];
@@ -101,7 +103,8 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     const poll = setInterval(async () => {
       try {
         const res = await axios.get(
-          `https://${host}/api/monitoring/tracks/${cameraId}`,
+          // `https://${host}/api/monitoring/tracks/${cameraId}`,
+          `http://${host}:5000/api/monitoring/tracks/${cameraId}`,
           { timeout: 400 },
         );
         tracksRef.current = Array.isArray(res.data) ? res.data : [];

@@ -222,3 +222,8 @@ frontend_js/build/
 
 # Docker & DB Data
 mysql_data/
+
+# Chroma DB 로컬 데이터 제외
+**/chroma_db/
+*.sqlite3
+*.bin
