@@ -4,6 +4,8 @@ os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["OPENVINO_NUM_THREADS"] = "2"
 os.environ["KMP_BLOCKTIME"] = "1"
 
+import uuid
+import queue
 import threading
 import cv2
 import re
@@ -32,9 +34,49 @@ plate_pattern = re.compile(r'^([가-힣]{1,2})?\d{2,3}[가-힣]\d{4}$')
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 _shared_alpr_model = None
-_alpr_model_lock = threading.Lock()
+_alpr_model_lock   = threading.Lock()
+
+# ── IO 워커 ───────────────────────────────────────────────────────────────────
+# 워커는 프로세스 종료 시까지 계속 살아있음 (영상 전환해도 재시작 안 함)
+# 토큰이 다르면 이전 영상의 작업을 스킵 → 새 영상 DB에 섞이지 않음
+io_queue             = queue.Queue(maxsize=200)
+_current_video_token = None
+_video_token_lock    = threading.Lock()
 
 
+def _io_worker():
+    print("👷 [IO Worker] 시작")
+    while True:
+        task = io_queue.get()
+        if task is None:  # 프로세스 종료 시에만 보내는 신호
+            print("👷 [IO Worker] 종료")
+            io_queue.task_done()
+            break
+        try:
+            img_path, plate_img, db_func, db_params, token = task
+
+            # 토큰이 다르면 이전 영상 작업 → 스킵
+            with _video_token_lock:
+                valid = (token == _current_video_token)
+
+            if not valid:
+                print(f"⚠️ [IO Worker] 구버전 작업 스킵")
+            else:
+                os.makedirs(os.path.dirname(img_path), exist_ok=True)
+                cv2.imwrite(img_path, plate_img)
+                db_func(**db_params)
+
+        except Exception as e:
+            print(f"❌ [IO Worker] {e}")
+        finally:
+            io_queue.task_done()
+
+
+# 프로세스 시작 시 1회만 실행
+threading.Thread(target=_io_worker, daemon=True, name="IOWorker").start()
+
+
+# ── ALPR 모델 ─────────────────────────────────────────────────────────────────
 def get_shared_alpr_model():
     global _shared_alpr_model
     if _shared_alpr_model is None:
@@ -46,19 +88,22 @@ def get_shared_alpr_model():
 
 
 def _yolo_track(model, frame, conf, img_size):
-    """
-    gevent threadpool에서 실행되는 순수 함수.
-    lambda 클로저를 쓰지 않아 Linux에서 _limbo KeyError가 발생하지 않음.
-    """
     return model.track(
         source=frame, conf=conf,
         persist=True, verbose=False, imgsz=img_size
     )
 
 
+# ── 메인 영상 처리 ────────────────────────────────────────────────────────────
 def process_video():
+    global _current_video_token
 
-    print("🚀 영상 처리 스레드 시작")
+    # ✅ 새 토큰 발급 → 이전 영상의 큐 작업 자동 무효화
+    my_token = str(uuid.uuid4())
+    with _video_token_lock:
+        _current_video_token = my_token
+    print(f"🚀 영상 처리 스레드 시작 (token={my_token[:8]})")
+
     model = get_shared_alpr_model()
 
     with state_lock:
@@ -95,13 +140,11 @@ def process_video():
     plate_confs         = {}
     start_times         = {}
 
-    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    cap            = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+    video_fps      = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_interval = 1.0 / video_fps
-
-    frame_count = 0
-    fps_buf     = []
-    fps_start   = time.time()
+    frame_count    = 0
+    fps_buf        = []
 
     try:
         while True:
@@ -115,10 +158,7 @@ def process_video():
             frame_count += 1
             t0          = time.time()
 
-            # if frame_count % 2 != 0:
-            #     continue
-
-            results = model.track(frame, conf=CONF, imgsz=YOLO_IMG_SIZE, persist=True, verbose=False, device='cpu')
+            results   = model.track(frame, conf=CONF, imgsz=YOLO_IMG_SIZE, persist=True, verbose=False, device='cpu')
             annotated = frame.copy()
 
             if results[0].boxes.id is not None:
@@ -129,7 +169,7 @@ def process_video():
                 for box, tid, conf in zip(boxes, ids, confs):
                     x1, y1, x2, y2 = box
                     is_fixed = best_samples.get(tid, {}).get('is_fixed', False)
-                    color = (0, 255, 0) if is_fixed else (255, 165, 0)
+                    color    = (0, 255, 0) if is_fixed else (255, 165, 0)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
 
                     center_y = (y1 + y2) / 2
@@ -140,30 +180,29 @@ def process_video():
                                 ocr_input_queue.put((tid, crop.copy()))
                                 queued_ids.add(tid)
                                 start_times[tid] = time.time()
-                                plate_confs[tid] = conf
+                                plate_confs[tid]  = conf
 
             while not ocr_result_queue.empty():
                 try:
                     tid, p_img, p_text = ocr_result_queue.get_nowait()
                     queued_ids.discard(tid)
-                except: break
+                except:
+                    break
 
                 if p_text is None or p_img is None:
                     continue
                 if plate_pattern.match(p_text):
                     if tid not in plate_votes: plate_votes[tid] = []
                     plate_votes[tid].append(p_text)
-                    
-                    vote_counter = Counter(plate_votes[tid])
-                    voted_text, count = Counter(plate_votes[tid]).most_common(1)[0]
-                    is_now_fixed = count >= VOTE_THRESHOLD
 
-                    candidates = [{'text': k, 'count': v} for k, v in vote_counter.most_common()]
+                    vote_counter      = Counter(plate_votes[tid])
+                    voted_text, count = vote_counter.most_common(1)[0]
+                    is_now_fixed      = count >= VOTE_THRESHOLD
+                    candidates        = [{'text': k, 'count': v} for k, v in vote_counter.most_common()]
+                    elapsed_ms        = int((time.time() - start_times.get(tid, time.time())) * 1000)
+                    current_conf      = plate_confs.get(tid, 0.0)
 
-                    elapsed_ms = int((time.time() - start_times.get(tid, time.time())) * 1000)
-                    current_conf = plate_confs.get(tid, 0.0)
-
-                    best_samples[tid] = {'is_fixed': is_now_fixed}
+                    best_samples[tid]        = {'is_fixed': is_now_fixed}
                     plate_history_texts[tid] = voted_text
 
                     if tid in plate_history_ids: plate_history_ids.remove(tid)
@@ -176,7 +215,8 @@ def process_video():
                         saved_first, saved_fixed,
                         conf=current_conf, vote_count=count, elapsed=elapsed_ms,
                         operator_name=state.get('operator_name'),
-                        candidates=candidates
+                        candidates=candidates,
+                        token=my_token,
                     )
                     if img_url: plate_img_urls[tid] = img_url
 
@@ -185,70 +225,66 @@ def process_video():
                 state['latest_frame'] = resized
                 state['plates'] = [
                     {
-                        'id': int(t_id),
-                        'text': plate_history_texts.get(t_id, '인식 중...'),
-                        'is_fixed': best_samples.get(t_id, {}).get('is_fixed', False),
+                        'id':         int(t_id),
+                        'text':       plate_history_texts.get(t_id, '인식 중...'),
+                        'is_fixed':   best_samples.get(t_id, {}).get('is_fixed', False),
                         'vote_count': len(plate_votes.get(t_id, [])),
-                        'img_url': plate_img_urls.get(t_id),
+                        'img_url':    plate_img_urls.get(t_id),
                     } for t_id in plate_history_ids
                 ]
 
             fps_buf.append(time.time() - t0)
             time.sleep(max(0.01, frame_interval - (time.time() - t0)))
-            # time.sleep(0.005)
+
     finally:
         cap.release()
+        # ✅ 워커는 죽이지 않음 — 다음 영상에서도 계속 사용
         ocr_input_queue.put(None)
-        print("🏁 [plate] process_video 종료 → OCR 종료 신호 전송")
+        print(f"🏁 [plate] process_video 종료 (token={my_token[:8]})")
 
 
+# ── UI 동기화 + IO 큐 등록 ────────────────────────────────────────────────────
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
-                    video_filename, video_save_dir,
-                    saved_first: set, saved_fixed: set,
-                    conf, vote_count, elapsed, operator_name=None, candidates=None) -> str | None:
+                      video_filename, video_save_dir,
+                      saved_first: set, saved_fixed: set,
+                      conf, vote_count, elapsed,
+                      operator_name=None, candidates=None,
+                      token=None) -> str | None:
 
     video_subfolder = os.path.basename(video_save_dir)
-    # 지역명 포함 시 길이를 10자까지 허용
     if len(clean_text) > 10: is_fixed = False
 
-    suffix = "fixed" if is_fixed else "first"
-    img_filename = f"id_{track_id}_{suffix}.jpg"
-    rel_img_path = f"{video_subfolder}/{img_filename}"
-    img_path = os.path.join(SAVE_DIR, rel_img_path)
+    suffix          = "fixed" if is_fixed else "first"
+    img_filename    = f"id_{track_id}_{suffix}.jpg"
+    rel_img_path    = f"{video_subfolder}/{img_filename}"
+    img_path        = os.path.join(SAVE_DIR, rel_img_path)
     current_img_url = f"/api/plate/image/{rel_img_path}"
 
-    os.makedirs(os.path.dirname(img_path), exist_ok=True)
-    cv2.imwrite(img_path, plate_img)
-
     data_payload = {
-        'id': int(track_id),
-        'text': clean_text,
-        'is_fixed': is_fixed,
-        'detected_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'img_url': current_img_url,
-        'img_filename': rel_img_path,
-        'video': video_filename,
-        'conf': round(float(conf), 4),
-        'vote_count': vote_count,
-        'elapsed_ms': elapsed,
+        'id':                int(track_id),
+        'text':              clean_text,
+        'is_fixed':          is_fixed,
+        'detected_at':       datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'img_url':           current_img_url,
+        'img_filename':      rel_img_path,
+        'video':             video_filename,
+        'conf':              round(float(conf), 4),
+        'vote_count':        vote_count,
+        'elapsed_ms':        elapsed,
         'preprocess_results': {},
     }
 
     with state_lock:
-        vid_name = os.path.basename(str(video_filename))
-        norm_text = clean_text.replace(" ", "")  # 비교용 공백 제거
+        vid_name  = os.path.basename(str(video_filename))
+        norm_text = clean_text.replace(" ", "")
 
-        # 1. 기존 데이터가 있는지 검색 (텍스트 우선 -> 그 다음 ID)
-        # ID가 7에서 8로 바뀌었어도 텍스트가 '경기92바8588'로 같으면 기존 7번 인덱스를 찾습니다.
         existing_idx = next(
             (i for i, r in enumerate(state['all_results'])
              if os.path.basename(str(r.get('video', ''))) == vid_name
              and r['text'].replace(" ", "") == norm_text),
             None
         )
-
         if existing_idx is None:
-            # 텍스트로 못 찾았다면 같은 ID가 있는지 확인
             existing_idx = next(
                 (i for i, r in enumerate(state['all_results'])
                  if os.path.basename(str(r.get('video', ''))) == vid_name
@@ -257,42 +293,39 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
             )
 
         if existing_idx is not None:
-            # --- [업데이트 모드] ---
             existing = state['all_results'][existing_idx]
-            
-            # 이미 '확정'된 좋은 데이터를 '미확정' 데이터가 덮어쓰지 못하게 방어
+
+            # 확정 데이터를 미확정이 덮어쓰지 못하게 방어
             if existing.get('is_fixed') and not is_fixed:
                 return current_img_url
 
-            # 메모리(State) 업데이트
             state['all_results'][existing_idx].update(data_payload)
-            
-            # 🔥 [DB 수정] 무조건 save_result를 호출하지 않고 update_result를 호출합니다.
-            # update_result 내부에서 번호판 텍스트나 ID를 기준으로 WHERE 쿼리가 돌아야 합니다.
-            update_result(
-                plate_number=clean_text, 
-                video_filename=video_filename,
-                conf=conf,
-                vote_count=vote_count,
-                is_fixed=is_fixed,
-                img_path=current_img_url
-            )
+
+            db_params = {
+                'plate_number':   clean_text,
+                'video_filename': video_filename,
+                'conf':           conf,
+                'vote_count':     vote_count,
+                'is_fixed':       is_fixed,
+                'img_path':       current_img_url,
+            }
+            io_queue.put((img_path, plate_img.copy(), update_result, db_params, token))
+
         else:
-            # --- [신규 저장 모드] ---
-            # 텍스트도 처음 보고 ID도 처음 보는 경우에만 새로 추가합니다.
             state['all_results'].insert(0, data_payload)
             saved_first.add(track_id)
-            
-            save_result(
-                plate_number=clean_text,
-                video_filename=video_filename,
-                conf=conf,
-                vote_count=vote_count,
-                is_fixed=is_fixed,
-                img_path=current_img_url,
-                elapsed_ms=elapsed,
-                operator_name=operator_name
-            )
+
+            db_params = {
+                'plate_number':   clean_text,
+                'video_filename': video_filename,
+                'conf':           conf,
+                'vote_count':     vote_count,
+                'is_fixed':       is_fixed,
+                'img_path':       current_img_url,
+                'elapsed_ms':     elapsed,
+                'operator_name':  operator_name,
+            }
+            io_queue.put((img_path, plate_img.copy(), save_result, db_params, token))
 
             if len(state['all_results']) > 100:
                 state['all_results'].pop()
