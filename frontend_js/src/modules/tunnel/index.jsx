@@ -29,7 +29,7 @@ const FIXED_CCTV_LIST = [
   },
 ];
 
-function TunnelModule({host})
+function TunnelModule({host}){
   const [status, setStatus] = useState({
     state: "READY",
     avg_speed: 0,
