@@ -37,6 +37,7 @@ function TunnelModule() {
     accident: false,
     lane_count: 0,
     events: [],
+    event_logs: [],
     frame_id: 0,
     cctv_name: "-",
     cctv_url: "",
@@ -58,10 +59,8 @@ function TunnelModule() {
 
     const initialize = async () => {
       try {
-        // 1) 백엔드에 고정 후보 리스트 저장
         await setTunnelCctvList(BACKEND_URL, FIXED_CCTV_LIST);
 
-        // 2) 상태 최초 로드
         const data = await fetchTunnelStatus(BACKEND_URL);
         if (!mounted) return;
 
@@ -72,6 +71,7 @@ function TunnelModule() {
           accident: Boolean(data?.accident ?? false),
           lane_count: Number(data?.lane_count ?? 0),
           events: Array.isArray(data?.events) ? data.events : [],
+          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
           frame_id: Number(data?.frame_id ?? 0),
           cctv_name: data?.cctv_name ?? "-",
           cctv_url: data?.cctv_url ?? "",
@@ -96,6 +96,7 @@ function TunnelModule() {
           accident: Boolean(data?.accident ?? false),
           lane_count: Number(data?.lane_count ?? 0),
           events: Array.isArray(data?.events) ? data.events : [],
+          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
           frame_id: Number(data?.frame_id ?? 0),
           cctv_name: data?.cctv_name ?? "-",
           cctv_url: data?.cctv_url ?? "",
@@ -117,11 +118,15 @@ function TunnelModule() {
     };
   }, []);
 
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   const handleRandom = async () => {
     try {
       setLoading(true);
       setError("");
+
       await selectRandomCctv(BACKEND_URL);
+      await sleep(1200);
       setVideoKey(Date.now());
     } catch (err) {
       console.error(err);
@@ -135,11 +140,38 @@ function TunnelModule() {
     try {
       setLoading(true);
       setError("");
+
       await selectCctvByName(BACKEND_URL, keyword);
+      await sleep(1200);
       setVideoKey(Date.now());
     } catch (err) {
       console.error(err);
       setError("이름으로 CCTV 선택 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefreshVideo = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const currentName = (status.cctv_name || "").trim();
+
+      if (currentName && currentName !== "-") {
+        await selectCctvByName(BACKEND_URL, currentName);
+      } else if (keyword.trim()) {
+        await selectCctvByName(BACKEND_URL, keyword.trim());
+      } else {
+        await selectRandomCctv(BACKEND_URL);
+      }
+
+      await sleep(1200);
+      setVideoKey(Date.now());
+    } catch (err) {
+      console.error("refresh video error:", err);
+      setError("영상 새로고침 실패");
     } finally {
       setLoading(false);
     }
@@ -185,18 +217,27 @@ function TunnelModule() {
             <input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="터널명 입력"
+              placeholder="예: 필봉산터널(동탄)"
               className="search-input"
             />
-            <button className="action-btn primary" onClick={handleSelectByName}>
+            <button
+              className="action-btn primary"
+              onClick={handleSelectByName}
+              disabled={loading}
+            >
               이름 선택
             </button>
-            <button className="action-btn" onClick={handleRandom}>
+            <button
+              className="action-btn"
+              onClick={handleRandom}
+              disabled={loading}
+            >
               랜덤 선택
             </button>
             <button
               className="action-btn"
-              onClick={() => setVideoKey(Date.now())}
+              onClick={handleRefreshVideo}
+              disabled={loading}
             >
               영상 새로고침
             </button>
@@ -248,7 +289,16 @@ function TunnelModule() {
 
             <div className="section-subtitle">📌 이벤트 로그</div>
             <div className="event-log">
-              {status.events.length > 0 ? (
+              {status.event_logs && status.event_logs.length > 0 ? (
+                status.event_logs
+                  .slice()
+                  .reverse()
+                  .map((event, idx) => (
+                    <div key={`${event}-${idx}`} className="event-item">
+                      {event}
+                    </div>
+                  ))
+              ) : status.events.length > 0 ? (
                 status.events.map((event, idx) => (
                   <div key={`${event}-${idx}`} className="event-item">
                     {event}

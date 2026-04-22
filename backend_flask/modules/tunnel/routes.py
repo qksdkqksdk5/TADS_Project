@@ -3,8 +3,10 @@
 # 위치: backend_flask/modules/tunnel/routes.py
 # 역할:
 # - health
-# - CCTV 목록 조회
+# - 캐시된 CCTV 목록 조회
+# - 프론트에서 CCTV 후보 리스트 저장
 # - 랜덤 CCTV 선택
+# - 이름으로 CCTV 선택
 # - 상태 조회
 # - 실시간 영상 스트리밍
 # ==========================================
@@ -16,6 +18,7 @@ tunnel_bp = Blueprint("tunnel", __name__, url_prefix="/api/tunnel")
 
 service = TunnelLiveService()
 
+
 @tunnel_bp.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -26,11 +29,30 @@ def health():
 
 @tunnel_bp.route("/cctv-list", methods=["GET"])
 def cctv_list():
-    data = service.refresh_cctv_list()
+    data = service.get_cctv_list()
     return jsonify({
         "ok": True,
         "count": len(data),
         "items": data
+    })
+
+
+@tunnel_bp.route("/set-cctv-list", methods=["POST"])
+def set_cctv_list():
+    data = request.get_json(silent=True) or {}
+    items = data.get("items", [])
+
+    ok = service.set_cctv_list(items)
+    if not ok:
+        return jsonify({
+            "ok": False,
+            "message": "유효한 CCTV 리스트가 아닙니다."
+        }), 400
+
+    return jsonify({
+        "ok": True,
+        "message": "CCTV 리스트 저장 완료",
+        "count": len(service.get_cctv_list())
     })
 
 
@@ -41,7 +63,7 @@ def select_random():
     if not cctv:
         return jsonify({
             "ok": False,
-            "message": "터널 CCTV 없음"
+            "message": "캐시된 터널 CCTV 없음"
         }), 404
 
     return jsonify({
@@ -54,6 +76,7 @@ def select_random():
 @tunnel_bp.route("/status", methods=["GET"])
 def status():
     return jsonify(service.get_status())
+
 
 @tunnel_bp.route("/select-cctv", methods=["GET"])
 def select_cctv():
