@@ -56,11 +56,16 @@ export default function RaspiModule() {
   // ✅ 의존성 없음 — 마운트 시 딱 한 번만 생성, BASE_URL은 closure로 캡처
   const fetchStatus = useCallback(async (gcode = null, mode = null) => {
     try {
-      const params = {};
-      if (gcode) params.cmd  = gcode;
-      if (mode)  params.mode = mode;
-      const response = await client.get(`/control`, { params, timeout: 2000 });
+      let url = `/control?`;
+      if (gcode) url += `cmd=${encodeURIComponent(gcode)}&`;
+      if (mode) url += `mode=${mode}&`;
+
+      console.log(`[FRONT-DEBUG] 최종 요청 URL: ${url}`);
+
+      const response = await client.get(url, { timeout: 2000 });
+      
       if (response.data) {
+        console.log(`[FRONT-RECEIVE] 응답:`, response.data); // 응답 로그
         setFireAlert(!!response.data.fire_alert);
         setIsAutoTracking(!!response.data.auto);
         setIsDetecting(!!response.data.detect);
@@ -68,28 +73,37 @@ export default function RaspiModule() {
       }
       setIsConnecting(false);
     } catch (err) {
+      console.error(`[FRONT-ERROR] API 요청 실패:`, err); // 에러 상세 로깅
       setIsConnecting(true);
     }
-  }, []); // ✅ 의존성 배열 비움
+  }, [client]); // client 의존성 추가
 
+
+  const initialized = useRef(false);
   // ✅ 의존성 없음 — 마운트/언마운트 시 딱 한 번만 실행
   useEffect(() => {
+    if (initialized.current) return;
+    initialized.current = true;
+
     client.post(`/start`).catch(() => {});
 
     const init = async () => {
-      await fetchStatus("M211 S0");
-      await fetchStatus("M17");
-      await fetchStatus("G91");
+      await fetchStatus("M17");           // 1. 모터 활성화
+      await new Promise(r => setTimeout(r, 500));
+      await fetchStatus("M211 S0");       // 2. 소프트 엔드스탑 해제
+      await new Promise(r => setTimeout(r, 500));
+      await fetchStatus("G92 X0 Y0 Z0"); // 3. 현재 위치를 0,0,0으로 강제 설정
+      await new Promise(r => setTimeout(r, 500));
+      await fetchStatus("G91");           // 4. 상대좌표 모드
     };
     init();
 
     const timer = setInterval(() => fetchStatus(), 1000);
-
     return () => {
       clearInterval(timer);
       client.post(`/stop`).catch(() => {});
     };
-  }, []); // ✅ 의존성 배열 비움
+  }, []);
 
   const move = (x = 0, y = 0) => {
     if (isAutoTracking) {
