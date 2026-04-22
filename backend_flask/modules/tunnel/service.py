@@ -459,6 +459,15 @@ class TunnelLiveService:
                 fail_count = 0
                 frame_id += 1
 
+                # --------------------------------------------------
+                # 현재 선택된 CCTV 이름을 pipeline_adapter에 전달
+                # 이유:
+                # - lane_template에서 같은 터널의 memory(json)를 찾으려면
+                #   현재 CCTV 이름이 필요함
+                # - 이 값을 pipeline_adapter -> pipeline_core -> lane_template까지 넘김
+                # --------------------------------------------------
+                self.pipeline.current_cctv_name = selected_cctv["name"]
+
                 annotated, result = self.pipeline.process_frame(frame, frame_id)
 
                 result["cctv_name"] = selected_cctv["name"]

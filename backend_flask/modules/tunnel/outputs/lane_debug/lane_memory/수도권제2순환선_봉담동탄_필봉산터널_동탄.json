@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수도권제2순환선(봉담동탄)] 필봉산터널(동탄)",
+  "memory_key": "수도권제2순환선_봉담동탄_필봉산터널_동탄",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.9184993505477905,
+          783.747314453125
+        ]
+      },
+      "x_mid": -10.511416673660278,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        11
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.0904799699783325,
+          767.70458984375
+        ]
+      },
+      "x_mid": 316.24588227272034,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        8
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-22 14:33:07"
+}

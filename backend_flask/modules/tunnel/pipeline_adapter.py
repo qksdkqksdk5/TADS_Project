@@ -43,6 +43,7 @@ class TunnelPipelineAdapter:
 
         self.pipeline = None
         self.frame_height = 720
+        self.current_cctv_name = None
 
         self.last_result = {
             "state": "READY",
@@ -74,6 +75,7 @@ class TunnelPipelineAdapter:
         # 내부 파이프라인도 완전 초기화
         self.pipeline = None
         self.frame_height = 720
+        self.current_cctv_name = None
 
         self.last_result = {
             "state": "READY",
@@ -548,7 +550,7 @@ class TunnelPipelineAdapter:
                 self.last_result = ready_result
                 return annotated, ready_result
 
-            result = self.pipeline.process(frame_id, tracks)
+            result = self.pipeline.process(frame_id, tracks, frame.shape[1], cctv_name=self.current_cctv_name)
             merged = result.get("analysis", {})
 
             lane_y1 = int(
@@ -572,7 +574,7 @@ class TunnelPipelineAdapter:
                 )
 
             self._draw_tracks(annotated, tracks, merged)
-            self._draw_summary(annotated, result, frame_id)
+            # self._draw_summary(annotated, result, frame_id) # 화면 속 정보 패널 제거
 
             front_status = self._build_front_status(result, frame_id, tracks)
             self.last_result = front_status
