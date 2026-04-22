@@ -8,7 +8,6 @@ import {
 } from "./api";
 
 
-
 // 발표/테스트용 고정 후보
 const FIXED_CCTV_LIST = [
   {
@@ -29,6 +28,61 @@ const FIXED_CCTV_LIST = [
   },
 ];
 
+
+/* =========================================================
+ * 평균속도 -> 현실 속도 설명
+ * ========================================================= */
+function getSpeedHintText(avgSpeed) {
+  const speed = Number(avgSpeed || 0);
+
+  if (speed <= 1.3) {
+    return "실제속도 : 30km/h 이하 추정";
+  }
+  if (speed <= 2.6) {
+    return "실제속도 : 30km/h 초과 ~ 50km/h 이하 추정";
+  }
+  return "실제속도 : 50km/h 이상 추정";
+}
+
+/* =========================================================
+ * 차선 재추정 상태 문자열
+ * ========================================================= */
+function getLaneReestimateText(status) {
+  const s = status?.lane_reestimate_status || "idle";
+  const count = Number(status?.lane_reestimate_frame_count || 0);
+  const total = Number(status?.lane_reestimate_window || 50);
+
+  if (s === "reestimating") return `재추정 중 (${count}/${total})`;
+  if (s === "reestimated") return "재추정 완료";
+  if (s === "confirmed") return "확정";
+  return "대기";
+}
+
+const handleLaneSave = async () => {
+  try {
+    setError("");
+
+    const res = await fetch(`${BACKEND_URL}/api/tunnel/lane/save`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const data = await res.json();
+
+    if (!data?.ok) {
+      setError(data?.message || "차선 저장 실패");
+      return;
+    }
+
+    alert("현재 차선을 저장했습니다.");
+  } catch (err) {
+    console.error("lane save error:", err);
+    setError("차선 저장 요청 실패");
+  }
+};
+
 function TunnelModule({host}){
   const [status, setStatus] = useState({
     state: "READY",
@@ -43,6 +97,14 @@ function TunnelModule({host}){
     cctv_url: "",
     dwell_times: {},
     vehicles: [],
+
+    // [추가] 차선 재추정 상태
+    lane_reestimate_status: "idle",
+    lane_reestimate_frame_count: 0,
+    lane_reestimate_window: 50,
+
+    // [추가] 최근 1분 누적 차량수
+    minute_vehicle_count: 0,
   });
 
   // ---------------------------------------------------------
@@ -57,39 +119,46 @@ function TunnelModule({host}){
   // ---------------------------------------------------------
   // videoLoading:
   // - 영상 연결 준비 중인지 표시
-  // - true이면 "연결 중입니다..." 오버레이를 보여줌
-  // - img onLoad에서 false로 바뀜
-  // - img onError에서 false로 바뀌고 실패 문구를 띄움
   // ---------------------------------------------------------
   const [videoLoading, setVideoLoading] = useState(true);
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [reestimateLoading, setReestimateLoading] = useState(false);
 
   // ---------------------------------------------------------
   // videoSrc:
-  // - videoKey가 있을 때만 실제 /video-feed URL 생성
-  // - videoKey가 null이면 영상 요청 자체를 하지 않음
   // ---------------------------------------------------------
   const videoSrc = useMemo(() => {
     if (!videoKey) return "";
     return `${BACKEND_URL}/api/tunnel/video-feed?ts=${videoKey}`;
   }, [videoKey]);
 
+  // ---------------------------------------------------------
+  // 속도 설명 문자열
+  // ---------------------------------------------------------
+  const speedHintText = useMemo(() => {
+    return getSpeedHintText(status.avg_speed);
+  }, [status.avg_speed]);
+
+  // ---------------------------------------------------------
+  // 차선 재추정 상태 문자열
+  // ---------------------------------------------------------
+  const laneReestimateText = useMemo(() => {
+    return getLaneReestimateText(status);
+  }, [
+    status.lane_reestimate_status,
+    status.lane_reestimate_frame_count,
+    status.lane_reestimate_window,
+  ]);
+
   useEffect(() => {
     let mounted = true;
 
     const initialize = async () => {
       try {
-        // ---------------------------------------------------
-        // 1) 백엔드에 고정 CCTV 후보 리스트 저장
-        //    이 단계가 끝나기 전에는 video-feed를 요청하지 않음
-        // ---------------------------------------------------
         await setTunnelCctvList(BACKEND_URL, FIXED_CCTV_LIST);
 
-        // ---------------------------------------------------
-        // 2) 상태 1회 읽기
-        // ---------------------------------------------------
         const data = await fetchTunnelStatus(BACKEND_URL);
         if (!mounted) return;
 
@@ -106,13 +175,12 @@ function TunnelModule({host}){
           cctv_url: data?.cctv_url ?? "",
           dwell_times: data?.dwell_times ?? {},
           vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
+          lane_reestimate_status: data?.lane_reestimate_status ?? "idle",
+          lane_reestimate_frame_count: Number(data?.lane_reestimate_frame_count ?? 0),
+          lane_reestimate_window: Number(data?.lane_reestimate_window ?? 50),
+          minute_vehicle_count: Number(data?.minute_vehicle_count ?? 0),
         });
 
-        // ---------------------------------------------------
-        // 3) 이제서야 영상 요청 시작
-        //    초반 race condition(영상 먼저 요청)을 막기 위해
-        //    set-cctv-list가 끝난 뒤에만 videoKey를 세팅
-        // ---------------------------------------------------
         setVideoLoading(true);
         setVideoKey(Date.now());
       } catch (err) {
@@ -140,6 +208,10 @@ function TunnelModule({host}){
           cctv_url: data?.cctv_url ?? "",
           dwell_times: data?.dwell_times ?? {},
           vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
+          lane_reestimate_status: data?.lane_reestimate_status ?? "idle",
+          lane_reestimate_frame_count: Number(data?.lane_reestimate_frame_count ?? 0),
+          lane_reestimate_window: Number(data?.lane_reestimate_window ?? 50),
+          minute_vehicle_count: Number(data?.minute_vehicle_count ?? 0),
         });
       } catch (err) {
         console.error("status fetch error:", err);
@@ -158,8 +230,6 @@ function TunnelModule({host}){
 
   // ---------------------------------------------------------
   // sleep:
-  // - 스트림 교체 직후 바로 새 요청을 보내면 기존 스트림 락과 겹칠 수 있음
-  // - 그래서 랜덤선택/새로고침 뒤 잠깐 기다렸다가 videoKey를 갱신
   // ---------------------------------------------------------
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -170,11 +240,7 @@ function TunnelModule({host}){
       setVideoLoading(true);
 
       await selectRandomCctv(BACKEND_URL);
-
-      // 기존 스트림 정리 시간을 약간 줌
       await sleep(1200);
-
-      // 새 스트림 요청
       setVideoKey(Date.now());
     } catch (err) {
       console.error(err);
@@ -193,11 +259,6 @@ function TunnelModule({host}){
 
       const currentName = (status.cctv_name || "").trim();
 
-      // ---------------------------------------------------
-      // 현재 선택된 CCTV가 있으면 그 이름으로 다시 선택 요청
-      // 없으면 단순히 videoKey만 갱신해도 되지만,
-      // 지금은 현재 CCTV 기준으로 재연결을 시도
-      // ---------------------------------------------------
       if (currentName && currentName !== "-") {
         await selectCctvByName(BACKEND_URL, currentName);
         await sleep(1200);
@@ -210,6 +271,57 @@ function TunnelModule({host}){
       setError("영상 새로고침 실패");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ---------------------------------------------------------
+  // [추가] 차선 재추정 버튼
+  // ---------------------------------------------------------
+  const handleLaneReestimate = async () => {
+    try {
+      setReestimateLoading(true);
+      setError("");
+
+      const res = await fetch(`${BACKEND_URL}/api/tunnel/lane/reestimate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const data = await res.json();
+      console.log("lane reestimate response:", data);
+
+      if (!data?.ok) {
+        setError(data?.message || "차선 재추정 요청 실패");
+        return;
+      }
+
+      // 버튼 누른 직후 상태 한 번 갱신
+      const refreshed = await fetchTunnelStatus(BACKEND_URL);
+      setStatus({
+        state: refreshed?.state ?? "READY",
+        avg_speed: Number(refreshed?.avg_speed ?? 0),
+        vehicle_count: Number(refreshed?.vehicle_count ?? 0),
+        accident: Boolean(refreshed?.accident ?? false),
+        lane_count: Number(refreshed?.lane_count ?? 0),
+        events: Array.isArray(refreshed?.events) ? refreshed.events : [],
+        event_logs: Array.isArray(refreshed?.event_logs) ? refreshed.event_logs : [],
+        frame_id: Number(refreshed?.frame_id ?? 0),
+        cctv_name: refreshed?.cctv_name ?? "-",
+        cctv_url: refreshed?.cctv_url ?? "",
+        dwell_times: refreshed?.dwell_times ?? {},
+        vehicles: Array.isArray(refreshed?.vehicles) ? refreshed.vehicles : [],
+        lane_reestimate_status: refreshed?.lane_reestimate_status ?? "idle",
+        lane_reestimate_frame_count: Number(refreshed?.lane_reestimate_frame_count ?? 0),
+        lane_reestimate_window: Number(refreshed?.lane_reestimate_window ?? 50),
+        minute_vehicle_count: Number(refreshed?.minute_vehicle_count ?? 0),
+      });
+    } catch (err) {
+      console.error("lane reestimate error:", err);
+      setError("차선 재추정 요청 실패");
+    } finally {
+      setReestimateLoading(false);
     }
   };
 
@@ -232,6 +344,7 @@ function TunnelModule({host}){
             >
               랜덤 선택
             </button>
+
             <button
               className="action-btn"
               onClick={handleRefreshVideo}
@@ -239,6 +352,23 @@ function TunnelModule({host}){
             >
               영상 새로고침
             </button>
+
+            {/* [추가] 차선 재추정 버튼 */}
+            <button
+              className="action-btn"
+              onClick={handleLaneReestimate}
+              disabled={reestimateLoading}
+            >
+              {reestimateLoading ? "재추정 요청중..." : "차선 재추정"}
+            </button>
+            
+            <button
+              className="action-btn"
+              onClick={handleLaneSave}
+            >
+              차선 저장
+            </button>
+
           </div>
         </section>
 
@@ -250,22 +380,12 @@ function TunnelModule({host}){
             <div className="section-title">📹 CCTV</div>
 
             <div className="video-wrap">
-              {/* ---------------------------------------------
-                  연결 중 오버레이
-                  - 영상 준비 중일 때 먼저 보여줌
-                  - 초반 실패처럼 보이지 않게 UX 개선
-                 --------------------------------------------- */}
               {videoLoading && (
                 <div className="video-overlay-message">
                   연결 중입니다...
                 </div>
               )}
 
-              {/* ---------------------------------------------
-                  videoKey가 있을 때만 영상 요청
-                  - 초기 렌더 때는 videoKey=null 이므로 요청 안 나감
-                  - set-cctv-list 완료 후에만 영상 시작
-                 --------------------------------------------- */}
               {videoKey && (
                 <img
                   key={videoKey}
@@ -273,12 +393,10 @@ function TunnelModule({host}){
                   alt="cctv"
                   className="video-image"
                   onLoad={() => {
-                    // 영상이 실제로 브라우저에 로드되면 연결중 문구 제거
                     setVideoLoading(false);
                     setError("");
                   }}
                   onError={() => {
-                    // 진짜 실패한 경우에만 실패 문구 표시
                     setVideoLoading(false);
                     setError("영상 스트리밍 연결 실패");
                   }}
@@ -301,13 +419,86 @@ function TunnelModule({host}){
               <div className="status-value">
                 {status.avg_speed.toFixed(2)} px/s
               </div>
+
+              {/* [추가] 현실 속도 설명 */}
+              <div
+                style={{
+                  marginTop: "6px",
+                  fontSize: "13px",
+                  color: "#cbd5e1",
+                  lineHeight: "1.4",
+                }}
+              >
+                ({speedHintText})
+              </div>
             </div>
 
+            {/* [수정] 카드형 표시판 */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "10px",
+                marginTop: "14px",
+                marginBottom: "14px",
+              }}
+            >
+              <div
+                style={{
+                  background: "#1f2937",
+                  border: "1px solid #374151",
+                  borderRadius: "10px",
+                  padding: "12px 8px",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
+                  차선수
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
+                  {status.lane_count}차선
+                </div>
+              </div>
+
+              <div
+                style={{
+                  background: "#1f2937",
+                  border: "1px solid #374151",
+                  borderRadius: "10px",
+                  padding: "12px 8px",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
+                  차량 수
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
+                  {status.vehicle_count}대
+                </div>
+              </div>
+
+              <div
+                style={{
+                  background: "#1f2937",
+                  border: "1px solid #374151",
+                  borderRadius: "10px",
+                  padding: "12px 8px",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
+                  누적 차량수(1분)
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
+                  {status.minute_vehicle_count}대
+                </div>
+              </div>
+            </div>
+
+            {/* [수정] 사고 여부 제거, 차선 재추정 상태 표시 */}
             <div className="status-mini-box">
               <div>Frame ID: {status.frame_id}</div>
-              <div>차량 수: {status.vehicle_count}</div>
-              <div>차선 수: {status.lane_count}</div>
-              <div>사고 여부: {status.accident ? "True" : "False"}</div>
+              <div>차선 재추정: {laneReestimateText}</div>
             </div>
 
             <div className="divider" />
@@ -394,6 +585,7 @@ function getStateClass(state) {
   if (state === "NORMAL") return "normal";
   if (state === "CONGESTION") return "congestion";
   if (state === "JAM") return "jam";
+  if (state === "ERROR") return "jam";
   return "ready";
 }
 

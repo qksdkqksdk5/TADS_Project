@@ -9,12 +9,17 @@
 # - 영상 스트리밍
 # - 최신 상태 저장
 # - 단일 스트림 보호
+# - lane_template 수동 재추정 요청 연결
+# - [추가] 사고 이벤트 캡처/저장
 # ==========================================
 
+import os
+import json
 import random
 import threading
 import cv2
 import time
+from datetime import datetime
 
 from .pipeline_adapter import TunnelPipelineAdapter
 
@@ -40,6 +45,10 @@ class TunnelLiveService:
         # CCTV 연결 상태 관리
         self.cctv_health = {}
 
+        # --------------------------------------------------
+        # 최신 상태 캐시
+        # 프론트 status API에서 그대로 내려갈 값들
+        # --------------------------------------------------
         self.latest_status = {
             "state": "READY",
             "avg_speed": 0.0,
@@ -50,7 +59,29 @@ class TunnelLiveService:
             "frame_id": 0,
             "cctv_name": "-",
             "cctv_url": "",
+
+            # [추가] 차선 재추정 상태
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
+
+            # [추가] 최근 1분 누적 차량수 (없으면 0 유지)
+            "minute_vehicle_count": 0,
         }
+
+        # ==================================================
+        # [추가] 사고 이벤트 저장 폴더
+        # ==================================================
+        self.event_root = os.path.join(os.path.dirname(__file__), "event_storage")
+        self.event_snapshot_dir = os.path.join(self.event_root, "snapshots")
+        self.event_log_dir = os.path.join(self.event_root, "logs")
+
+        os.makedirs(self.event_snapshot_dir, exist_ok=True)
+        os.makedirs(self.event_log_dir, exist_ok=True)
+
+        # 최근 사고 이벤트 중복 저장 방지용
+        self.last_saved_accident_frame = -999999
+        self.accident_save_cooldown = 180   # 180프레임 내 중복 저장 방지
 
     # =========================================================
     # 1) CCTV 목록 관리
@@ -101,12 +132,199 @@ class TunnelLiveService:
     # 2) 상태 업데이트
     # =========================================================
     def get_status(self):
+        """
+        프론트 /api/tunnel/status 응답용
+        """
         with self.lock:
-            return dict(self.latest_status)
+            data = dict(self.latest_status)
+
+        # 안전하게 기본값 보정
+        data.setdefault("lane_reestimate_status", "idle")
+        data.setdefault("lane_reestimate_frame_count", 0)
+        data.setdefault("lane_reestimate_window", 50)
+        data.setdefault("minute_vehicle_count", 0)
+
+        return data
 
     def _update_status(self, data):
+        """
+        pipeline 결과나 service 내부 상태를 latest_status에 반영
+        """
         with self.lock:
             self.latest_status.update(data)
+
+            # 혹시 일부 키가 빠져 들어와도 기본값 유지
+            self.latest_status.setdefault("lane_reestimate_status", "idle")
+            self.latest_status.setdefault("lane_reestimate_frame_count", 0)
+            self.latest_status.setdefault("lane_reestimate_window", 50)
+            self.latest_status.setdefault("minute_vehicle_count", 0)
+
+    # =========================================================
+    # 2-1) 차선 재추정 요청
+    # =========================================================
+    def request_lane_reestimate(self):
+        """
+        관제사가 버튼을 누르면 routes.py에서 이 메서드를 호출한다.
+        """
+        frame_id = self.latest_status.get("frame_id", 0)
+
+        lane_template = None
+
+        if hasattr(self.pipeline, "get_lane_template"):
+            lane_template = self.pipeline.get_lane_template()
+
+        if lane_template is None:
+            return {
+                "ok": False,
+                "message": "lane_template 객체를 찾지 못했습니다."
+            }
+
+        if not hasattr(lane_template, "request_reestimate"):
+            return {
+                "ok": False,
+                "message": "lane_template에 request_reestimate() 메서드가 없습니다."
+            }
+
+        lane_template.request_reestimate(frame_id=frame_id)
+
+        self._update_status({
+            "lane_reestimate_status": "reestimating",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
+            "events": [f"차선 재추정 요청 접수 (frame={frame_id})"]
+        })
+
+        print(f"🔄 service 차선 재추정 요청 완료: frame_id={frame_id}")
+
+        return {
+            "ok": True,
+            "message": "차선 재추정 요청 접수",
+            "frame_id": frame_id,
+            "window": 50
+        }
+    
+    def save_current_lane_memory(self):
+        lane_template = None
+
+        if hasattr(self.pipeline, "get_lane_template"):
+            lane_template = self.pipeline.get_lane_template()
+
+        if lane_template is None:
+            return {
+                "ok": False,
+                "message": "lane_estimator 객체를 찾지 못했습니다."
+            }
+
+        if not hasattr(lane_template, "save_lane_memory"):
+            return {
+                "ok": False,
+                "message": "save_lane_memory() 메서드가 없습니다."
+            }
+
+        cctv_name = self.latest_status.get("cctv_name", "")
+        save_path = lane_template.save_lane_memory(cctv_name=cctv_name)
+
+        if not save_path:
+            return {
+                "ok": False,
+                "message": "차선 저장 실패"
+            }
+
+        self._update_status({
+            "events": [f"차선 저장 완료: {cctv_name}"]
+        })
+
+        return {
+            "ok": True,
+            "message": "현재 차선 저장 완료",
+            "path": save_path
+        }
+
+    # =========================================================
+    # 2-2) [추가] 사고 이벤트 캡처/저장
+    # =========================================================
+    def _save_accident_event(self, frame, status_data):
+        """
+        사고 감지 시 현재 프레임(annotated)을 저장한다.
+
+        저장 내용:
+        1) jpg 스냅샷
+        2) json 메타데이터
+
+        주의:
+        - 지금은 뼈대 단계이므로 파일 저장만 수행
+        - 너무 자주 저장되지 않게 cooldown 적용
+        """
+        accident_flag = bool(status_data.get("accident", False))
+        frame_id = int(status_data.get("frame_id", 0))
+
+        if not accident_flag:
+            return
+
+        # 너무 자주 같은 사고를 저장하지 않게 방지
+        if frame_id - self.last_saved_accident_frame < self.accident_save_cooldown:
+            return
+
+        self.last_saved_accident_frame = frame_id
+
+        now = datetime.now()
+        ts_compact = now.strftime("%Y%m%d_%H%M%S")
+        ts_text = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        event_id = f"accident_{ts_compact}_{frame_id}"
+
+        # 1) 이미지 저장
+        image_path = os.path.join(self.event_snapshot_dir, f"{event_id}.jpg")
+        cv2.imwrite(image_path, frame)
+
+        # 2) 메타 저장
+        payload = {
+            "event_id": event_id,
+            "timestamp": ts_text,
+            "frame_id": frame_id,
+            "type": "accident",
+            "state": "pending",   # 이후 dismissed / confirmed 확장 가능
+            "cctv_name": status_data.get("cctv_name", "-"),
+            "cctv_url": status_data.get("cctv_url", ""),
+            "avg_speed": float(status_data.get("avg_speed", 0.0)),
+            "vehicle_count": int(status_data.get("vehicle_count", 0)),
+            "lane_count": int(status_data.get("lane_count", 0)),
+            "snapshot_path": image_path,
+            "events": status_data.get("events", []),
+        }
+
+        json_path = os.path.join(self.event_log_dir, f"{event_id}.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        print(f"📸 사고 이벤트 저장 완료: {event_id}")
+
+    # =========================================================
+    # 2-3) [추가] 저장된 이벤트 목록 조회 뼈대
+    # =========================================================
+    def get_saved_event_list(self):
+        """
+        저장된 사고 json 목록을 최근순으로 반환
+        """
+        items = []
+
+        if not os.path.exists(self.event_log_dir):
+            return items
+
+        for name in os.listdir(self.event_log_dir):
+            if not name.endswith(".json"):
+                continue
+
+            path = os.path.join(self.event_log_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    items.append(data)
+            except Exception:
+                continue
+
+        items.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return items
 
     # =========================================================
     # 3) health 관리
@@ -173,6 +391,10 @@ class TunnelLiveService:
             "frame_id": 0,
             "cctv_name": self.current_cctv["name"],
             "cctv_url": self.current_cctv["url"],
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
+            "minute_vehicle_count": 0,
         })
 
         print(f"✅ 랜덤 선택 CCTV(캐시): {self.current_cctv['name']}")
@@ -201,6 +423,10 @@ class TunnelLiveService:
                     "frame_id": 0,
                     "cctv_name": self.current_cctv["name"],
                     "cctv_url": self.current_cctv["url"],
+                    "lane_reestimate_status": "idle",
+                    "lane_reestimate_frame_count": 0,
+                    "lane_reestimate_window": 50,
+                    "minute_vehicle_count": 0,
                 })
 
                 print(f"✅ 정확 이름으로 선택 CCTV: {self.current_cctv['name']}")
@@ -224,6 +450,10 @@ class TunnelLiveService:
                     "frame_id": 0,
                     "cctv_name": self.current_cctv["name"],
                     "cctv_url": self.current_cctv["url"],
+                    "lane_reestimate_status": "idle",
+                    "lane_reestimate_frame_count": 0,
+                    "lane_reestimate_window": 50,
+                    "minute_vehicle_count": 0,
                 })
 
                 print(f"✅ 부분 이름으로 선택 CCTV: {self.current_cctv['name']}")
@@ -249,6 +479,10 @@ class TunnelLiveService:
                     "frame_id": 0,
                     "cctv_name": self.current_cctv["name"],
                     "cctv_url": self.current_cctv["url"],
+                    "lane_reestimate_status": "idle",
+                    "lane_reestimate_frame_count": 0,
+                    "lane_reestimate_window": 50,
+                    "minute_vehicle_count": 0,
                 })
 
                 print(f"✅ 정규화 이름으로 선택 CCTV: {self.current_cctv['name']}")
@@ -461,19 +695,36 @@ class TunnelLiveService:
 
                 # --------------------------------------------------
                 # 현재 선택된 CCTV 이름을 pipeline_adapter에 전달
-                # 이유:
-                # - lane_template에서 같은 터널의 memory(json)를 찾으려면
-                #   현재 CCTV 이름이 필요함
-                # - 이 값을 pipeline_adapter -> pipeline_core -> lane_template까지 넘김
                 # --------------------------------------------------
                 self.pipeline.current_cctv_name = selected_cctv["name"]
 
                 annotated, result = self.pipeline.process_frame(frame, frame_id)
 
+                # pipeline 결과에 현재 CCTV 정보 덧붙임
                 result["cctv_name"] = selected_cctv["name"]
                 result["cctv_url"] = selected_cctv["url"]
 
+                # lane reestimate 기본값 보정
+                if "lane_reestimate_status" not in result:
+                    result["lane_reestimate_status"] = self.latest_status.get("lane_reestimate_status", "idle")
+
+                if "lane_reestimate_frame_count" not in result:
+                    result["lane_reestimate_frame_count"] = self.latest_status.get("lane_reestimate_frame_count", 0)
+
+                if "lane_reestimate_window" not in result:
+                    result["lane_reestimate_window"] = self.latest_status.get("lane_reestimate_window", 50)
+
+                # minute_vehicle_count 기본값 보정
+                if "minute_vehicle_count" not in result:
+                    result["minute_vehicle_count"] = self.latest_status.get("minute_vehicle_count", 0)
+
                 self._update_status(result)
+
+                # --------------------------------------------------
+                # [추가] 사고 감지 시 현재 annotated 프레임 저장
+                # - annotated를 저장하면 박스/차선/상태가 그려진 화면 그대로 보관 가능
+                # --------------------------------------------------
+                self._save_accident_event(annotated, result)
 
                 ok, buffer = cv2.imencode(".jpg", annotated)
                 if not ok:
