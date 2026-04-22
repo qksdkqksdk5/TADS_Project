@@ -14,6 +14,8 @@ import sys
 import cv2
 import traceback
 from ultralytics import YOLO
+import time
+from collections import deque
 
 
 class TunnelPipelineAdapter:
@@ -53,6 +55,13 @@ class TunnelPipelineAdapter:
             "analysis": {},
         }
 
+        self.track_first_seen = {}
+        self.event_logs = deque(maxlen=10)
+        self.prev_state_text = None
+        self.prev_accident_flag = False
+        self.prev_roi_fallback = None
+        self.prev_template_confirmed = None
+
     # =========================================================
     # 1) CCTV 변경 시 full reset
     # =========================================================
@@ -76,6 +85,13 @@ class TunnelPipelineAdapter:
             "frame_id": 0,
             "analysis": {},
         }
+
+        self.track_first_seen = {}
+        self.event_logs = deque(maxlen=10)
+        self.prev_state_text = None
+        self.prev_accident_flag = False
+        self.prev_roi_fallback = None
+        self.prev_template_confirmed = None
 
     # =========================================================
     # 2) 파이프라인 lazy init
@@ -364,6 +380,17 @@ class TunnelPipelineAdapter:
                 2
             )
 
+    def _append_event_log(self, message):
+        if not message:
+            return
+
+        timestamp = time.strftime("%H:%M:%S")
+        log_text = f"[{timestamp}] {message}"
+
+        # 완전 같은 메시지가 연속으로 쌓이지 않게만 방지
+        if len(self.event_logs) == 0 or self.event_logs[-1] != log_text:
+            self.event_logs.append(log_text)
+
     # =========================================================
     # 5) 프론트(status API)용 값 정리
     # =========================================================
@@ -391,12 +418,91 @@ class TunnelPipelineAdapter:
 
         lane_count = merged.get("lane_count", 0)
 
+        speeds = merged.get("speeds", {})
+        lane_map = merged.get("lane_map", {})
+        raw_lane_map = merged.get("raw_lane_map", {})
+        boxes = merged.get("boxes", {})
+
+    # -----------------------------
+    # 1) vehicles + dwell_times 생성
+    # -----------------------------
+        now_ts = time.time()
+        current_ids = set()
+        vehicles = []
+        dwell_times = {}
+
+        for t in tracks:
+            tid = int(t["id"])
+            current_ids.add(tid)
+
+            if tid not in self.track_first_seen:
+                self.track_first_seen[tid] = now_ts
+
+            dwell_sec = round(now_ts - self.track_first_seen[tid], 2)
+            dwell_times[str(tid)] = dwell_sec
+
+            bbox = boxes.get(tid, t.get("bbox"))
+            speed = float(speeds.get(tid, 0.0))
+            lane = lane_map.get(tid, None)
+            raw_lane = raw_lane_map.get(tid, None)
+
+            vehicles.append({
+                "id": tid,
+                "speed": round(speed, 2),
+                "lane": lane,
+                "raw_lane": raw_lane,
+                "dwell_time": dwell_sec,
+                "bbox": bbox,
+            })
+
+    # 현재 화면에서 사라진 차량은 추적 시간 메모리에서 제거
+        stale_ids = [tid for tid in list(self.track_first_seen.keys()) if tid not in current_ids]
+        for tid in stale_ids:
+            del self.track_first_seen[tid]
+
+    # -----------------------------
+    # 2) 이벤트 로그 생성
+    # -----------------------------
+        roi_fallback = bool(merged.get("roi_used_fallback", False))
+        template_confirmed = bool(merged.get("template_confirmed", False))
+
+        if self.prev_state_text is None:
+            self.prev_state_text = state_text
+        elif self.prev_state_text != state_text:
+            self._append_event_log(f"상태 변경: {self.prev_state_text} → {state_text}")
+            self.prev_state_text = state_text
+
+        if (not self.prev_accident_flag) and accident_flag:
+            self._append_event_log("사고 감지")
+        self.prev_accident_flag = accident_flag
+
+        if self.prev_roi_fallback is None:
+            self.prev_roi_fallback = roi_fallback
+        elif self.prev_roi_fallback != roi_fallback:
+            if roi_fallback:
+                self._append_event_log("ROI fallback 사용")
+            else:
+                self._append_event_log("ROI 자동설정 정상 복귀")
+            self.prev_roi_fallback = roi_fallback
+
+        if self.prev_template_confirmed is None:
+            self.prev_template_confirmed = template_confirmed
+        elif self.prev_template_confirmed != template_confirmed:
+            if template_confirmed:
+                self._append_event_log("차선 bootstrap 완료")
+            else:
+                self._append_event_log("차선 bootstrap 중")
+            self.prev_template_confirmed = template_confirmed
+
+    # -----------------------------
+    # 3) 기존 events 유지
+    # -----------------------------
         events = []
-        if merged.get("roi_used_fallback", False):
+        if roi_fallback:
             events.append("ROI fallback 사용")
         if accident_flag:
             events.append("사고 감지")
-        if not merged.get("template_confirmed", False):
+        if not template_confirmed:
             events.append("차선 bootstrap 중")
 
         return {
@@ -406,6 +512,9 @@ class TunnelPipelineAdapter:
             "accident": accident_flag,
             "lane_count": lane_count,
             "events": events,
+            "event_logs": list(self.event_logs),
+            "vehicles": vehicles,
+            "dwell_times": dwell_times,
             "frame_id": frame_id,
             "analysis": merged,
         }

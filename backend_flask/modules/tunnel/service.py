@@ -2,13 +2,13 @@
 # 파일명: service.py
 # 위치: backend_flask/modules/tunnel/service.py
 # 역할:
-# - 화이트리스트 CCTV 목록 관리
-# - 랜덤 CCTV 선택
-# - 이름으로 CCTV 선택
+# - 프론트에서 받은 CCTV 후보 리스트 캐시
+# - 캐시된 리스트 기반 랜덤 선택 / 이름 선택
 # - CCTV 변경 시 이전 스트림 종료 + 파이프라인 reset
 # - 연결 가능한 CCTV health 관리
 # - 영상 스트리밍
 # - 최신 상태 저장
+# - 단일 스트림 보호
 # ==========================================
 
 import random
@@ -17,12 +17,15 @@ import cv2
 import time
 
 from .pipeline_adapter import TunnelPipelineAdapter
-from .cctv_whitelist import TEST_CCTV_LIST
 
 
 class TunnelLiveService:
     def __init__(self):
         self.lock = threading.Lock()
+
+        # 프론트가 넘겨준 CCTV 후보 리스트
+        self.cached_cctv_list = []
+
         self.current_cctv = None
         self.pipeline = TunnelPipelineAdapter()
         self.active_cctv_name = None
@@ -30,14 +33,12 @@ class TunnelLiveService:
         # CCTV 변경 시 이전 스트림 종료용 토큰
         self.stream_token = 0
 
+        # 단일 스트림 보호용
+        self.stream_lock = threading.Lock()
+        self.stream_active = False
+
         # CCTV 연결 상태 관리
-        # url 기준으로 최근 성공/실패 기록
         self.cctv_health = {}
-        for cctv in TEST_CCTV_LIST:
-            self.cctv_health[cctv["url"]] = {
-                "ok": None,
-                "fail_count": 0,
-            }
 
         self.latest_status = {
             "state": "READY",
@@ -52,13 +53,49 @@ class TunnelLiveService:
         }
 
     # =========================================================
-    # 1) CCTV 목록
+    # 1) CCTV 목록 관리
     # =========================================================
     def get_cctv_list(self):
-        return TEST_CCTV_LIST
+        return self.cached_cctv_list
 
     def refresh_cctv_list(self):
-        return TEST_CCTV_LIST
+        return self.cached_cctv_list
+
+    def set_cctv_list(self, cctv_list):
+        if not isinstance(cctv_list, list):
+            return False
+
+        cleaned = []
+        for item in cctv_list:
+            if not isinstance(item, dict):
+                continue
+
+            name = str(item.get("name", "")).strip()
+            url = str(item.get("url", "")).strip()
+
+            if not name or not url:
+                continue
+
+            cleaned.append({
+                "name": name,
+                "url": url
+            })
+
+        if not cleaned:
+            return False
+
+        self.cached_cctv_list = cleaned
+
+        # health 초기화
+        self.cctv_health = {}
+        for cctv in self.cached_cctv_list:
+            self.cctv_health[cctv["url"]] = {
+                "ok": None,
+                "fail_count": 0,
+            }
+
+        print(f"📡 [최초 캐시 저장] {len(self.cached_cctv_list)}개 CCTV 고정 완료")
+        return True
 
     # =========================================================
     # 2) 상태 업데이트
@@ -95,12 +132,12 @@ class TunnelLiveService:
     def _get_healthy_candidates(self):
         healthy = []
 
-        for cctv in TEST_CCTV_LIST:
+        for cctv in self.cached_cctv_list:
             url = cctv["url"]
             health = self.cctv_health.get(url, {})
             fail_count = health.get("fail_count", 0)
 
-            # 10회 이상 연속 실패한 CCTV는 우선 제외
+            # 너무 빨리 제외하지 않게 10회 기준
             if fail_count < 10:
                 healthy.append(cctv)
 
@@ -113,14 +150,17 @@ class TunnelLiveService:
         candidates = self._get_healthy_candidates()
 
         if not candidates:
-            print("⚠️ 건강한 CCTV 후보 없음 → 전체 화이트리스트 사용")
-            candidates = TEST_CCTV_LIST
+            print("⚠️ 건강한 CCTV 후보 없음 → 전체 캐시 리스트 사용")
+            candidates = self.cached_cctv_list
 
         if not candidates:
             return None
 
         self.current_cctv = random.choice(candidates)
         self.active_cctv_name = None
+
+        # 기존 스트림 종료 유도
+        self.stream_active = False
         self.stream_token += 1
 
         self._update_status({
@@ -135,7 +175,7 @@ class TunnelLiveService:
             "cctv_url": self.current_cctv["url"],
         })
 
-        print(f"✅ 랜덤 선택 CCTV(화이트리스트): {self.current_cctv['name']}")
+        print(f"✅ 랜덤 선택 CCTV(캐시): {self.current_cctv['name']}")
         return self.current_cctv
 
     def select_cctv_by_name(self, name):
@@ -143,10 +183,12 @@ class TunnelLiveService:
         if not keyword:
             return None
 
-        for cctv in TEST_CCTV_LIST:
-            if keyword in cctv["name"]:
+        # 1) 정확 일치 우선
+        for cctv in self.cached_cctv_list:
+            if keyword == cctv["name"]:
                 self.current_cctv = cctv
                 self.active_cctv_name = None
+                self.stream_active = False
                 self.stream_token += 1
 
                 self._update_status({
@@ -161,15 +203,40 @@ class TunnelLiveService:
                     "cctv_url": self.current_cctv["url"],
                 })
 
-                print(f"✅ 이름으로 선택 CCTV: {self.current_cctv['name']}")
+                print(f"✅ 정확 이름으로 선택 CCTV: {self.current_cctv['name']}")
                 return self.current_cctv
 
+        # 2) 부분 일치
+        for cctv in self.cached_cctv_list:
+            if keyword in cctv["name"]:
+                self.current_cctv = cctv
+                self.active_cctv_name = None
+                self.stream_active = False
+                self.stream_token += 1
+
+                self._update_status({
+                    "state": "READY",
+                    "avg_speed": 0.0,
+                    "vehicle_count": 0,
+                    "accident": False,
+                    "lane_count": 0,
+                    "events": ["CCTV 변경됨 - 분석 초기화 중"],
+                    "frame_id": 0,
+                    "cctv_name": self.current_cctv["name"],
+                    "cctv_url": self.current_cctv["url"],
+                })
+
+                print(f"✅ 부분 이름으로 선택 CCTV: {self.current_cctv['name']}")
+                return self.current_cctv
+
+        # 3) 공백 제거 후 부분 일치
         normalized_keyword = keyword.replace(" ", "")
-        for cctv in TEST_CCTV_LIST:
+        for cctv in self.cached_cctv_list:
             normalized_name = cctv["name"].replace(" ", "")
             if normalized_keyword in normalized_name:
                 self.current_cctv = cctv
                 self.active_cctv_name = None
+                self.stream_active = False
                 self.stream_token += 1
 
                 self._update_status({
@@ -184,14 +251,13 @@ class TunnelLiveService:
                     "cctv_url": self.current_cctv["url"],
                 })
 
-                print(f"✅ 이름(정규화)으로 선택 CCTV: {self.current_cctv['name']}")
+                print(f"✅ 정규화 이름으로 선택 CCTV: {self.current_cctv['name']}")
                 return self.current_cctv
 
         return None
 
     # =========================================================
     # 5) CCTV 열기 테스트
-    # - isOpened()만 보지 않고 첫 프레임까지 확인
     # =========================================================
     def _try_open_cctv(self, cctv):
         name = cctv["name"]
@@ -200,12 +266,11 @@ class TunnelLiveService:
         print(f"🎥 CCTV 연결 시도: {name}")
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 
-        # 1) open 자체를 몇 번 여유 있게 확인
+        # open 자체를 조금 여유 있게 확인
         open_ok = False
-        for _ in range(20):
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                frame_ok = True
+        for _ in range(10):
+            if cap.isOpened():
+                open_ok = True
                 break
             time.sleep(0.15)
 
@@ -215,7 +280,7 @@ class TunnelLiveService:
             cap.release()
             return None
 
-        # 2) 첫 프레임도 여러 번 시도
+        # 첫 프레임도 여러 번 시도
         frame_ok = False
         for _ in range(20):
             ok, frame = cap.read()
@@ -244,11 +309,11 @@ class TunnelLiveService:
         candidates = self._get_healthy_candidates()
 
         if not candidates:
-            print("⚠️ 건강한 CCTV 후보 없음 → 전체 화이트리스트 사용")
-            candidates = TEST_CCTV_LIST
+            print("⚠️ 건강한 CCTV 후보 없음 → 전체 캐시 리스트 사용")
+            candidates = self.cached_cctv_list
 
         if not candidates:
-            print("❌ 화이트리스트 CCTV 목록 비어있음")
+            print("❌ 캐시된 CCTV 목록 비어있음")
             return None, None
 
         candidates = [c for c in candidates if c["url"] not in tried_urls]
@@ -275,64 +340,77 @@ class TunnelLiveService:
     # 7) 스트리밍
     # =========================================================
     def generate_frames(self):
+        # 동시에 2개 이상 스트림이 돌지 않게 보호
+        if not self.stream_lock.acquire(blocking=False):
+            print("⚠️ 기존 스트림 실행 중 → 새 요청 거절")
+            self._update_status({
+                "state": "READY",
+                "events": ["기존 스트림 종료 후 다시 시도"],
+            })
+            return
+
+        self.stream_active = True
         tried_urls = set()
+        cap = None
 
         # 현재 스트림 세션 토큰 고정
         my_token = self.stream_token
 
-        if self.current_cctv is not None:
-            selected_cctv = self.current_cctv
-            print(f"🎯 선택된 CCTV 우선 사용: {selected_cctv['name']}")
-            cap = self._try_open_cctv(selected_cctv)
+        try:
+            if self.current_cctv is not None:
+                selected_cctv = self.current_cctv
+                print(f"🎯 선택된 CCTV 우선 사용: {selected_cctv['name']}")
+                cap = self._try_open_cctv(selected_cctv)
 
-            if cap is None:
-                print(f"❌ 선택된 CCTV 열기 실패: {selected_cctv['name']}")
+                if cap is None:
+                    print(f"❌ 선택된 CCTV 열기 실패: {selected_cctv['name']}")
+                    self._update_status({
+                        "state": "ERROR",
+                        "events": [f"선택한 CCTV 연결 실패: {selected_cctv['name']}"],
+                        "cctv_name": selected_cctv["name"],
+                        "cctv_url": selected_cctv["url"],
+                    })
+                    return
+            else:
+                selected_cctv = None
+
+            if cap is None or selected_cctv is None:
+                cap, selected_cctv = self._open_stream_with_retry(
+                    tried_urls=tried_urls,
+                    max_retry=5
+                )
+
+            if selected_cctv is not None:
+                if self.active_cctv_name != selected_cctv["name"]:
+                    self.pipeline.reset_pipeline()
+                    self.active_cctv_name = selected_cctv["name"]
+                    print(f"♻️ 스트림 시작 시 reset 완료: {self.active_cctv_name}")
+
+            if cap is None or selected_cctv is None:
                 self._update_status({
                     "state": "ERROR",
-                    "events": [f"선택한 CCTV 연결 실패: {selected_cctv['name']}"],
-                    "cctv_name": selected_cctv["name"],
-                    "cctv_url": selected_cctv["url"],
+                    "events": ["실시간 CCTV 연결 실패"],
+                    "cctv_name": "-",
+                    "cctv_url": "",
                 })
                 return
-        else:
-            cap = None
-            selected_cctv = None
 
-        if cap is None or selected_cctv is None:
-            cap, selected_cctv = self._open_stream_with_retry(
-                tried_urls=tried_urls,
-                max_retry=5
-            )
+            frame_id = 0
+            fail_count = 0
 
-        if selected_cctv is not None:
-            if self.active_cctv_name != selected_cctv["name"]:
-                self.pipeline.reset_pipeline()
-                self.active_cctv_name = selected_cctv["name"]
-                print(f"♻️ 스트림 시작 시 reset 완료: {self.active_cctv_name}")
-
-        if cap is None or selected_cctv is None:
             self._update_status({
-                "state": "ERROR",
-                "events": ["실시간 CCTV 연결 실패"],
-                "cctv_name": "-",
-                "cctv_url": "",
+                "cctv_name": selected_cctv["name"],
+                "cctv_url": selected_cctv["url"],
+                "events": [f"{selected_cctv['name']} 연결 완료"],
             })
-            return
 
-        frame_id = 0
-        fail_count = 0
-
-        self._update_status({
-            "cctv_name": selected_cctv["name"],
-            "cctv_url": selected_cctv["url"],
-            "events": [f"{selected_cctv['name']} 연결 완료"],
-        })
-
-        try:
             while True:
-                # 새 CCTV가 선택되면 이전 스트림 즉시 종료
                 if my_token != self.stream_token:
                     print("🛑 새 CCTV 선택됨 → 이전 스트림 종료")
+                    break
+
+                if not self.stream_active:
+                    print("🛑 stream_active=False → 스트림 종료")
                     break
 
                 ok, frame = cap.read()
@@ -344,6 +422,7 @@ class TunnelLiveService:
                     if fail_count >= 20:
                         print("⚠️ 스트림 재연결 시도")
                         cap.release()
+                        cap = None
 
                         if self.current_cctv is not None:
                             print(f"🔁 현재 CCTV 재연결 시도: {self.current_cctv['name']}")
@@ -409,6 +488,12 @@ class TunnelLiveService:
                 "events": [f"stream error: {e}"],
             })
         finally:
+            self.stream_active = False
+
             if cap is not None:
                 cap.release()
+
+            if self.stream_lock.locked():
+                self.stream_lock.release()
+
             print("🛑 CCTV 스트리밍 종료")
