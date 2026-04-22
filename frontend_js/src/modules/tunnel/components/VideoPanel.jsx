@@ -23,7 +23,7 @@ export default function VideoPanel({ host, active }) {
             fontSize: 18
           }}
         >
-          서비스 시작 중...
+          터널 탭 비활성화 또는 서비스 정지 상태
         </div>
       ) : (
         <img

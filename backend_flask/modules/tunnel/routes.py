@@ -1,61 +1,88 @@
-from flask import Blueprint, jsonify, Response, stream_with_context
-from .service_V5_1 import tunnel_service
-import time
+# ==========================================
+# 파일명: routes.py
+# 위치: backend_flask/modules/tunnel/routes.py
+# 역할:
+# - health
+# - CCTV 목록 조회
+# - 랜덤 CCTV 선택
+# - 상태 조회
+# - 실시간 영상 스트리밍
+# ==========================================
 
-tunnel_bp = Blueprint("tunnel", __name__)
+from flask import Blueprint, jsonify, Response, request
+from .service import TunnelLiveService
+
+tunnel_bp = Blueprint("tunnel", __name__, url_prefix="/api/tunnel")
+
+service = TunnelLiveService()
+
+@tunnel_bp.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "ok": True,
+        "module": "tunnel"
+    })
+
+
+@tunnel_bp.route("/cctv-list", methods=["GET"])
+def cctv_list():
+    data = service.refresh_cctv_list()
+    return jsonify({
+        "ok": True,
+        "count": len(data),
+        "items": data
+    })
+
+
+@tunnel_bp.route("/select-random", methods=["GET"])
+def select_random():
+    cctv = service.select_random_cctv()
+
+    if not cctv:
+        return jsonify({
+            "ok": False,
+            "message": "터널 CCTV 없음"
+        }), 404
+
+    return jsonify({
+        "ok": True,
+        "message": "랜덤 CCTV 선택 완료",
+        "cctv": cctv
+    })
 
 
 @tunnel_bp.route("/status", methods=["GET"])
-def get_status():
-    return jsonify(tunnel_service.get_status())
+def status():
+    return jsonify(service.get_status())
 
+@tunnel_bp.route("/select-cctv", methods=["GET"])
+def select_cctv():
+    name = request.args.get("name", "").strip()
 
-@tunnel_bp.route("/start", methods=["POST"])
-def start_tunnel():
-    tunnel_service.start()
+    if not name:
+        return jsonify({
+            "ok": False,
+            "message": "name 파라미터가 필요합니다."
+        }), 400
+
+    cctv = service.select_cctv_by_name(name)
+
+    if not cctv:
+        return jsonify({
+            "ok": False,
+            "message": f"'{name}' 에 해당하는 CCTV를 찾지 못했습니다."
+        }), 404
+
     return jsonify({
-        "message": "tunnel service started",
-        "running": True
-    }), 200
+        "ok": True,
+        "message": "CCTV 선택 완료",
+        "cctv": cctv
+    })
 
 
-@tunnel_bp.route("/stop", methods=["POST"])
-def stop_tunnel():
-    tunnel_service.stop()
-    return jsonify({
-        "message": "tunnel service stopped",
-        "running": False
-    }), 200
-
-
-def generate_frames():
-    while True:
-        frame_bytes = tunnel_service.get_jpeg_frame()
-
-        if frame_bytes is None:
-            time.sleep(0.05)
-            continue
-
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n"
-            b"Cache-Control: no-cache\r\n\r\n" +
-            frame_bytes +
-            b"\r\n"
-        )
-
-        time.sleep(0.03)
-
-
-@tunnel_bp.route("/video_feed", methods=["GET"])
+@tunnel_bp.route("/video-feed", methods=["GET"])
 def video_feed():
     return Response(
-        stream_with_context(generate_frames()),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-        direct_passthrough=True,
+        service.generate_frames(),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
     )
