@@ -29,7 +29,7 @@ const FIXED_CCTV_LIST = [
   },
 ];
 
-function TunnelModule({host})
+function TunnelModule({host}){
   const [status, setStatus] = useState({
     state: "READY",
     avg_speed: 0,
@@ -50,8 +50,8 @@ function TunnelModule({host})
   // - /video-feed 요청 URL을 강제로 바꿔서 새 스트림을 요청하기 위한 키
   // - 처음에는 null로 두고, CCTV 리스트 세팅이 끝난 뒤에만 영상 요청 시작
   // ---------------------------------------------------------
-  const BACKEND_URL = "http://${host}:5000";
-  // const BACKEND_URL = "https://${host}";
+  const BACKEND_URL = `http://${host}:5000`;
+  // const BACKEND_URL = `https://${host}`;
   const [videoKey, setVideoKey] = useState(null);
 
   // ---------------------------------------------------------
