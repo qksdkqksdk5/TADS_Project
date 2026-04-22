@@ -101,11 +101,19 @@ def thermal_receiver_worker():
 
 # --- [3. 모터 제어 로직] ---
 def send_motor_command(gcode):
+    if not gcode: 
+        print("[MOTOR-SKIP] 명령어가 비어있어 전송하지 않습니다.")
+        return
+        
     try:
+        # 이 주소가 EC2에서 접속 가능한 주소인지 확인이 필요합니다!
         url = f"{RASPI_BACKEND_URL}/api/raspi/control"
-        requests.get(url, params={"cmd": gcode}, timeout=0.2)
-    except:
-        pass
+        print(f"[MOTOR-SEND] {url}?cmd={gcode}")
+        
+        response = requests.get(url, params={"cmd": gcode}, timeout=1.0)
+        print(f"[MOTOR-RESULT] 응답코드: {response.status_code}")
+    except Exception as e:
+        print(f"[MOTOR-FATAL] 라즈베리파이로 전송 실패: {e}")
 
 def track_object(cx, cy):
     if not tracking_enabled: return
@@ -274,23 +282,32 @@ def video_feed():
 def control():
     global tracking_enabled, detection_enabled, fire_detected
     mode = request.args.get('mode')
+    cmd = request.args.get('cmd')
+    
+    # 로그 추가: 어떤 요청이 들어왔는지 확인
+    print(f"[API-REQUEST] mode: {mode}, cmd: {cmd}")
+
     if mode == 'detect_on':
         detection_enabled = True
+        print("[STATE] Detection Enabled")
     elif mode == 'detect_off':
         detection_enabled = False
-        fire_detected     = False
+        fire_detected = False
+        print("[STATE] Detection Disabled")
     elif mode == 'auto_on':
         tracking_enabled = True
+        print("[STATE] Auto-Tracking Enabled")
     elif mode == 'auto_off':
         tracking_enabled = False
+        print("[STATE] Auto-Tracking Disabled")
 
-    cmd = request.args.get('cmd')
-    if cmd: send_motor_command(cmd)
+    if cmd:
+        send_motor_command(cmd)
 
     return jsonify({
-        "status":     "ok",
-        "detect":     detection_enabled,
-        "auto":       tracking_enabled,
+        "status": "ok",
+        "detect": detection_enabled,
+        "auto": tracking_enabled,
         "fire_alert": fire_detected
     })
 
@@ -298,3 +315,18 @@ def control():
 @raspi_bp.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "module": "raspi"}), 200
+
+
+@raspi_bp.route('/snapshot_rgb')
+def snapshot_rgb():
+    with frame_lock:
+        if raw_frame:
+            return Response(raw_frame, mimetype='image/jpeg')
+    return "", 204
+
+@raspi_bp.route('/snapshot_thermal')
+def snapshot_thermal():
+    with frame_lock:
+        if processed_frame:
+            return Response(processed_frame, mimetype='image/jpeg')
+    return "", 204
