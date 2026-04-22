@@ -8,6 +8,7 @@ import {
 } from "./api";
 
 
+
 // 발표/테스트용 고정 후보
 const FIXED_CCTV_LIST = [
   {
@@ -28,7 +29,7 @@ const FIXED_CCTV_LIST = [
   },
 ];
 
-function TunnelModule({host}) {
+function TunnelModule({host})
   const [status, setStatus] = useState({
     state: "READY",
     avg_speed: 0,
@@ -36,6 +37,7 @@ function TunnelModule({host}) {
     accident: false,
     lane_count: 0,
     events: [],
+    event_logs: [],
     frame_id: 0,
     cctv_name: "-",
     cctv_url: "",
@@ -43,14 +45,34 @@ function TunnelModule({host}) {
     vehicles: [],
   });
 
+  // ---------------------------------------------------------
+  // videoKey:
+  // - /video-feed 요청 URL을 강제로 바꿔서 새 스트림을 요청하기 위한 키
+  // - 처음에는 null로 두고, CCTV 리스트 세팅이 끝난 뒤에만 영상 요청 시작
+  // ---------------------------------------------------------
   const BACKEND_URL = `http://${host}:5000`;
   // const BACKEND_URL = `https://${host}`;
-  const [keyword, setKeyword] = useState("필봉산터널(동탄)");
-  const [videoKey, setVideoKey] = useState(Date.now());
+  const [videoKey, setVideoKey] = useState(null);
+
+  // ---------------------------------------------------------
+  // videoLoading:
+  // - 영상 연결 준비 중인지 표시
+  // - true이면 "연결 중입니다..." 오버레이를 보여줌
+  // - img onLoad에서 false로 바뀜
+  // - img onError에서 false로 바뀌고 실패 문구를 띄움
+  // ---------------------------------------------------------
+  const [videoLoading, setVideoLoading] = useState(true);
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // ---------------------------------------------------------
+  // videoSrc:
+  // - videoKey가 있을 때만 실제 /video-feed URL 생성
+  // - videoKey가 null이면 영상 요청 자체를 하지 않음
+  // ---------------------------------------------------------
   const videoSrc = useMemo(() => {
+    if (!videoKey) return "";
     return `${BACKEND_URL}/api/tunnel/video-feed?ts=${videoKey}`;
   }, [videoKey]);
 
@@ -59,10 +81,15 @@ function TunnelModule({host}) {
 
     const initialize = async () => {
       try {
-        // 1) 백엔드에 고정 후보 리스트 저장
+        // ---------------------------------------------------
+        // 1) 백엔드에 고정 CCTV 후보 리스트 저장
+        //    이 단계가 끝나기 전에는 video-feed를 요청하지 않음
+        // ---------------------------------------------------
         await setTunnelCctvList(BACKEND_URL, FIXED_CCTV_LIST);
 
-        // 2) 상태 최초 로드
+        // ---------------------------------------------------
+        // 2) 상태 1회 읽기
+        // ---------------------------------------------------
         const data = await fetchTunnelStatus(BACKEND_URL);
         if (!mounted) return;
 
@@ -73,14 +100,24 @@ function TunnelModule({host}) {
           accident: Boolean(data?.accident ?? false),
           lane_count: Number(data?.lane_count ?? 0),
           events: Array.isArray(data?.events) ? data.events : [],
+          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
           frame_id: Number(data?.frame_id ?? 0),
           cctv_name: data?.cctv_name ?? "-",
           cctv_url: data?.cctv_url ?? "",
           dwell_times: data?.dwell_times ?? {},
           vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
         });
+
+        // ---------------------------------------------------
+        // 3) 이제서야 영상 요청 시작
+        //    초반 race condition(영상 먼저 요청)을 막기 위해
+        //    set-cctv-list가 끝난 뒤에만 videoKey를 세팅
+        // ---------------------------------------------------
+        setVideoLoading(true);
+        setVideoKey(Date.now());
       } catch (err) {
         console.error("initialize error:", err);
+        setVideoLoading(false);
         setError("초기 CCTV 리스트 설정 실패");
       }
     };
@@ -97,6 +134,7 @@ function TunnelModule({host}) {
           accident: Boolean(data?.accident ?? false),
           lane_count: Number(data?.lane_count ?? 0),
           events: Array.isArray(data?.events) ? data.events : [],
+          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
           frame_id: Number(data?.frame_id ?? 0),
           cctv_name: data?.cctv_name ?? "-",
           cctv_url: data?.cctv_url ?? "",
@@ -118,29 +156,58 @@ function TunnelModule({host}) {
     };
   }, []);
 
+  // ---------------------------------------------------------
+  // sleep:
+  // - 스트림 교체 직후 바로 새 요청을 보내면 기존 스트림 락과 겹칠 수 있음
+  // - 그래서 랜덤선택/새로고침 뒤 잠깐 기다렸다가 videoKey를 갱신
+  // ---------------------------------------------------------
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   const handleRandom = async () => {
     try {
       setLoading(true);
       setError("");
+      setVideoLoading(true);
+
       await selectRandomCctv(BACKEND_URL);
+
+      // 기존 스트림 정리 시간을 약간 줌
+      await sleep(1200);
+
+      // 새 스트림 요청
       setVideoKey(Date.now());
     } catch (err) {
       console.error(err);
+      setVideoLoading(false);
       setError("랜덤 CCTV 선택 실패");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSelectByName = async () => {
+  const handleRefreshVideo = async () => {
     try {
       setLoading(true);
       setError("");
-      await selectCctvByName(BACKEND_URL, keyword);
+      setVideoLoading(true);
+
+      const currentName = (status.cctv_name || "").trim();
+
+      // ---------------------------------------------------
+      // 현재 선택된 CCTV가 있으면 그 이름으로 다시 선택 요청
+      // 없으면 단순히 videoKey만 갱신해도 되지만,
+      // 지금은 현재 CCTV 기준으로 재연결을 시도
+      // ---------------------------------------------------
+      if (currentName && currentName !== "-") {
+        await selectCctvByName(BACKEND_URL, currentName);
+        await sleep(1200);
+      }
+
       setVideoKey(Date.now());
     } catch (err) {
-      console.error(err);
-      setError("이름으로 CCTV 선택 실패");
+      console.error("refresh video error:", err);
+      setVideoLoading(false);
+      setError("영상 새로고침 실패");
     } finally {
       setLoading(false);
     }
@@ -154,24 +221,21 @@ function TunnelModule({host}) {
         <section className="panel panel-header">
           <div className="panel-header-left">
             <div className="panel-title">🚨 스마트 터널 시스템</div>
+            <div className="panel-subtitle">{status.cctv_name || "-"}</div>
           </div>
 
           <div className="panel-header-right">
-            <input
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              placeholder="터널명 입력"
-              className="search-input"
-            />
-            <button className="action-btn primary" onClick={handleSelectByName}>
-              이름 선택
-            </button>
-            <button className="action-btn" onClick={handleRandom}>
+            <button
+              className="action-btn"
+              onClick={handleRandom}
+              disabled={loading}
+            >
               랜덤 선택
             </button>
             <button
               className="action-btn"
-              onClick={() => setVideoKey(Date.now())}
+              onClick={handleRefreshVideo}
+              disabled={loading}
             >
               영상 새로고침
             </button>
@@ -186,13 +250,40 @@ function TunnelModule({host}) {
             <div className="section-title">📹 CCTV</div>
 
             <div className="video-wrap">
-              <img
-                key={videoKey}
-                src={videoSrc}
-                alt="cctv"
-                className="video-image"
-                onError={() => setError("영상 스트리밍 연결 실패")}
-              />
+              {/* ---------------------------------------------
+                  연결 중 오버레이
+                  - 영상 준비 중일 때 먼저 보여줌
+                  - 초반 실패처럼 보이지 않게 UX 개선
+                 --------------------------------------------- */}
+              {videoLoading && (
+                <div className="video-overlay-message">
+                  연결 중입니다...
+                </div>
+              )}
+
+              {/* ---------------------------------------------
+                  videoKey가 있을 때만 영상 요청
+                  - 초기 렌더 때는 videoKey=null 이므로 요청 안 나감
+                  - set-cctv-list 완료 후에만 영상 시작
+                 --------------------------------------------- */}
+              {videoKey && (
+                <img
+                  key={videoKey}
+                  src={videoSrc}
+                  alt="cctv"
+                  className="video-image"
+                  onLoad={() => {
+                    // 영상이 실제로 브라우저에 로드되면 연결중 문구 제거
+                    setVideoLoading(false);
+                    setError("");
+                  }}
+                  onError={() => {
+                    // 진짜 실패한 경우에만 실패 문구 표시
+                    setVideoLoading(false);
+                    setError("영상 스트리밍 연결 실패");
+                  }}
+                />
+              )}
             </div>
 
             <div className="video-caption">{status.cctv_name || "-"}</div>
@@ -222,8 +313,17 @@ function TunnelModule({host}) {
             <div className="divider" />
 
             <div className="section-subtitle">📌 이벤트 로그</div>
-            <div className="event-log">
-              {status.events.length > 0 ? (
+            <div className="event-log scrollable-log">
+              {status.event_logs && status.event_logs.length > 0 ? (
+                status.event_logs
+                  .slice()
+                  .reverse()
+                  .map((event, idx) => (
+                    <div key={`${event}-${idx}`} className="event-item">
+                      {event}
+                    </div>
+                  ))
+              ) : status.events.length > 0 ? (
                 status.events.map((event, idx) => (
                   <div key={`${event}-${idx}`} className="event-item">
                     {event}
@@ -301,7 +401,9 @@ function calcAvgDwell(dwellTimes) {
   const values = Object.values(dwellTimes || {})
     .map(Number)
     .filter((v) => !Number.isNaN(v));
+
   if (values.length === 0) return "0.00";
+
   const avg = values.reduce((a, b) => a + b, 0) / values.length;
   return avg.toFixed(2);
 }
