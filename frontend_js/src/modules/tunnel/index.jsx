@@ -150,32 +150,6 @@ function TunnelModule({host}) {
 
   return (
     <div className="smart-page">
-      <aside className="smart-sidebar">
-        <div className="sidebar-logo">
-          <div className="logo-box">T</div>
-          <div>
-            <div className="logo-title">TADS</div>
-            <div className="logo-sub">관제 시스템</div>
-          </div>
-        </div>
-
-        <div className="sidebar-menu-title">메인 메뉴</div>
-
-        <nav className="sidebar-menu">
-          <button className="sidebar-item">CCTV 모니터링</button>
-          <button className="sidebar-item">교통 정체 흐름</button>
-          <button className="sidebar-item active">스마트 터널 시스템</button>
-          <button className="sidebar-item">번호판 인식</button>
-          <button className="sidebar-item">라즈베리파이 CCTV</button>
-          <button className="sidebar-item">통계 데이터</button>
-        </nav>
-
-        <div className="sidebar-bottom">
-          <div className="sidebar-status">● 시스템 온라인</div>
-          <button className="logout-btn">로그아웃</button>
-        </div>
-      </aside>
-
       <main className="smart-main">
         <section className="panel panel-header">
           <div className="panel-header-left">
