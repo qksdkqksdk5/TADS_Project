@@ -1,106 +1,334 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
+import React, { useEffect, useMemo, useState } from "react";
+import "./index.css";
+import {
+  fetchTunnelStatus,
+  selectRandomCctv,
+  selectCctvByName,
+  setTunnelCctvList,
+} from "./api";
 
-import VideoPanel from "./components/VideoPanel";
-import StatusPanel from "./components/StatusPanel";
-import EventLog from "./components/EventLog";
-import SpeedChart from "./components/SpeedChart";
-import DwellChart from "./components/DwellChart";
+const BACKEND_URL = "http://localhost:5000";
 
-export default function TunnelModule({ host }) {
-  const BASE = `http://${host || window.location.hostname}:5000/api/tunnel`;
+// 발표/테스트용 고정 후보
+const FIXED_CCTV_LIST = [
+  {
+    name: "[수도권제2순환선(봉담동탄)] 필봉산터널(동탄)",
+    url: "http://cctvsec.ktict.co.kr/8327/JdqIr+tRRcj6oVvFQnzIvtzHkUDVhJZY9XY+eGNGobDo55Y5O5qOjHvT6ff9uRudnQ7jtswETvv+M/fs9ia+cqNyXt2YgXEmO36dKnPo3bg=",
+  },
+  {
+    name: "[수도권제2순환선(봉담동탄)] 필봉산터널(봉담)",
+    url: "http://cctvsec.ktict.co.kr/8326/tD+wiAbI/YfgrvESpV516dvSLQqee4qTAwt2mAYU6ROZ7nh6OHstwhRYnwIwYTgEBu1iZT4VTFyIa6Vwg+cVI3dUhm82yl2i+tDPTipVH3E=",
+  },
+  {
+    name: "[수원광명선] 광명 구봉산터널",
+    url: "http://cctvsec.ktict.co.kr/5176/kbe5SBsTXBbX0i4hdDuuSE5ZilAFwOQmPbMJch63jW/B6gwf4akV/GlpTDH8JL4t/G5lf7MncT+kRWOa3OYBqw6Z3vofjYfuMlcSlyaEZOM=",
+  },
+  {
+    name: "[수원광명선] 수원 구봉산터널",
+    url: "http://cctvsec.ktict.co.kr/5177/L9EzbfGXilhFTE5N63a8MH4UBqXrd/O8w9zGEaMHxxXrSB8CltpTYSaeQyPLaD56cv5laU25qOVvX/lysxfETzs2eLrDnmQgOnI9h6OcJD8=",
+  },
+];
 
-  const [data, setData] = useState({
-    state: "NORMAL",
+function TunnelModule() {
+  const [status, setStatus] = useState({
+    state: "READY",
     avg_speed: 0,
-    vehicles: [],
-    dwell_times: {},
     vehicle_count: 0,
-    events: [],
     accident: false,
-    accident_label: "NONE",
-    lane_count_estimated: 0,
+    lane_count: 0,
+    events: [],
     frame_id: 0,
-    source_name: "idle"
+    cctv_name: "-",
+    cctv_url: "",
+    dwell_times: {},
+    vehicles: [],
   });
 
-  // 탭 진입/이탈 시 service 제어
+  const [keyword, setKeyword] = useState("필봉산터널(동탄)");
+  const [videoKey, setVideoKey] = useState(Date.now());
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const videoSrc = useMemo(() => {
+    return `${BACKEND_URL}/api/tunnel/video-feed?ts=${videoKey}`;
+  }, [videoKey]);
+
   useEffect(() => {
-    const startService = async () => {
+    let mounted = true;
+
+    const initialize = async () => {
       try {
-        await axios.post(`${BASE}/start`);
-      } catch (e) {
-        console.log("start 실패", e);
+        // 1) 백엔드에 고정 후보 리스트 저장
+        await setTunnelCctvList(BACKEND_URL, FIXED_CCTV_LIST);
+
+        // 2) 상태 최초 로드
+        const data = await fetchTunnelStatus(BACKEND_URL);
+        if (!mounted) return;
+
+        setStatus({
+          state: data?.state ?? "READY",
+          avg_speed: Number(data?.avg_speed ?? 0),
+          vehicle_count: Number(data?.vehicle_count ?? 0),
+          accident: Boolean(data?.accident ?? false),
+          lane_count: Number(data?.lane_count ?? 0),
+          events: Array.isArray(data?.events) ? data.events : [],
+          frame_id: Number(data?.frame_id ?? 0),
+          cctv_name: data?.cctv_name ?? "-",
+          cctv_url: data?.cctv_url ?? "",
+          dwell_times: data?.dwell_times ?? {},
+          vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
+        });
+      } catch (err) {
+        console.error("initialize error:", err);
+        setError("초기 CCTV 리스트 설정 실패");
       }
     };
 
-    const stopService = async () => {
+    const loadStatus = async () => {
       try {
-        await axios.post(`${BASE}/stop`);
-      } catch (e) {
-        console.log("stop 실패", e);
+        const data = await fetchTunnelStatus(BACKEND_URL);
+        if (!mounted) return;
+
+        setStatus({
+          state: data?.state ?? "READY",
+          avg_speed: Number(data?.avg_speed ?? 0),
+          vehicle_count: Number(data?.vehicle_count ?? 0),
+          accident: Boolean(data?.accident ?? false),
+          lane_count: Number(data?.lane_count ?? 0),
+          events: Array.isArray(data?.events) ? data.events : [],
+          frame_id: Number(data?.frame_id ?? 0),
+          cctv_name: data?.cctv_name ?? "-",
+          cctv_url: data?.cctv_url ?? "",
+          dwell_times: data?.dwell_times ?? {},
+          vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
+        });
+      } catch (err) {
+        console.error("status fetch error:", err);
       }
     };
 
-    startService();
+    initialize();
+
+    const timer = setInterval(loadStatus, 1000);
 
     return () => {
-      stopService();
+      mounted = false;
+      clearInterval(timer);
     };
-  }, [BASE]);
+  }, []);
 
-  // 상태 polling
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        const res = await axios.get(`${BASE}/status`);
-        setData(res.data);
-      } catch (e) {
-        console.log("status 실패", e);
-      }
-    };
+  const handleRandom = async () => {
+    try {
+      setLoading(true);
+      setError("");
+      await selectRandomCctv(BACKEND_URL);
+      setVideoKey(Date.now());
+    } catch (err) {
+      console.error(err);
+      setError("랜덤 CCTV 선택 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 2000);
+  const handleSelectByName = async () => {
+    try {
+      setLoading(true);
+      setError("");
+      await selectCctvByName(BACKEND_URL, keyword);
+      setVideoKey(Date.now());
+    } catch (err) {
+      console.error(err);
+      setError("이름으로 CCTV 선택 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    return () => clearInterval(interval);
-  }, [BASE]);
-
-  const isRunning = data.source_name === "running" || data.source_name === "test_accident.mp4";
+  const stateClass = getStateClass(status.state);
 
   return (
-    <div style={{ padding: 20, background: "#0f0f1a", minHeight: "100vh", color: "#fff" }}>
-      <h2>🚇 스마트 터널 시스템</h2>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "2fr 1fr",
-          gridTemplateRows: "auto 300px",
-          gap: 20
-        }}
-      >
-        <div style={{ gridRow: "1 / 2" }}>
-          <VideoPanel host={host} active={isRunning} />
+    <div className="smart-page">
+      <aside className="smart-sidebar">
+        <div className="sidebar-logo">
+          <div className="logo-box">T</div>
+          <div>
+            <div className="logo-title">TADS</div>
+            <div className="logo-sub">관제 시스템</div>
+          </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <StatusPanel state={data.state} avgSpeed={data.avg_speed} />
-          <EventLog events={data.events} />
-        </div>
+        <div className="sidebar-menu-title">메인 메뉴</div>
 
-        <div
-          style={{
-            gridColumn: "1 / 3",
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 20
-          }}
-        >
-          <SpeedChart vehicles={data.vehicles} count={data.vehicle_count} />
-          <DwellChart dwell={data.dwell_times} />
+        <nav className="sidebar-menu">
+          <button className="sidebar-item">CCTV 모니터링</button>
+          <button className="sidebar-item">교통 정체 흐름</button>
+          <button className="sidebar-item active">스마트 터널 시스템</button>
+          <button className="sidebar-item">번호판 인식</button>
+          <button className="sidebar-item">라즈베리파이 CCTV</button>
+          <button className="sidebar-item">통계 데이터</button>
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="sidebar-status">● 시스템 온라인</div>
+          <button className="logout-btn">로그아웃</button>
         </div>
-      </div>
+      </aside>
+
+      <main className="smart-main">
+        <section className="panel panel-header">
+          <div className="panel-header-left">
+            <div className="panel-title">🚨 스마트 터널 시스템</div>
+          </div>
+
+          <div className="panel-header-right">
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="터널명 입력"
+              className="search-input"
+            />
+            <button className="action-btn primary" onClick={handleSelectByName}>
+              이름 선택
+            </button>
+            <button className="action-btn" onClick={handleRandom}>
+              랜덤 선택
+            </button>
+            <button
+              className="action-btn"
+              onClick={() => setVideoKey(Date.now())}
+            >
+              영상 새로고침
+            </button>
+          </div>
+        </section>
+
+        {loading && <div className="top-notice">처리 중...</div>}
+        {error && <div className="top-error">{error}</div>}
+
+        <section className="top-grid">
+          <div className="panel panel-video">
+            <div className="section-title">📹 CCTV</div>
+
+            <div className="video-wrap">
+              <img
+                key={videoKey}
+                src={videoSrc}
+                alt="cctv"
+                className="video-image"
+                onError={() => setError("영상 스트리밍 연결 실패")}
+              />
+            </div>
+
+            <div className="video-caption">{status.cctv_name || "-"}</div>
+          </div>
+
+          <div className="panel panel-status">
+            <div className="section-title">🚦 상태</div>
+
+            <div className={`state-badge ${stateClass}`}>
+              {status.state}
+            </div>
+
+            <div className="status-block">
+              <div className="status-label">⚡ 평균 속도</div>
+              <div className="status-value">
+                {status.avg_speed.toFixed(2)} px/s
+              </div>
+            </div>
+
+            <div className="status-mini-box">
+              <div>Frame ID: {status.frame_id}</div>
+              <div>차량 수: {status.vehicle_count}</div>
+              <div>차선 수: {status.lane_count}</div>
+              <div>사고 여부: {status.accident ? "True" : "False"}</div>
+            </div>
+
+            <div className="divider" />
+
+            <div className="section-subtitle">📌 이벤트 로그</div>
+            <div className="event-log">
+              {status.events.length > 0 ? (
+                status.events.map((event, idx) => (
+                  <div key={`${event}-${idx}`} className="event-item">
+                    {event}
+                  </div>
+                ))
+              ) : (
+                <div className="event-empty">이상 징후 없음 (정상 흐름 유지)</div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="bottom-grid">
+          <div className="panel panel-chart">
+            <div className="section-title">📊 차량 속도 (ROI)</div>
+            <div className="chart-summary">총 차량 수 {status.vehicle_count}</div>
+
+            <div className="chart-placeholder">
+              <div className="axis axis-y" />
+              <div className="axis axis-x" />
+
+              {status.vehicles.slice(0, 6).map((v, idx) => (
+                <div
+                  key={idx}
+                  className="chart-bar"
+                  style={{
+                    left: `${70 + idx * 50}px`,
+                    height: `${Math.max(20, Math.min(140, (v.speed || 0) * 8))}px`,
+                  }}
+                  title={`ID:${v.id} / speed:${v.speed}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="panel panel-chart">
+            <div className="section-title">📊 체류시간</div>
+            <div className="chart-summary">
+              평균 체류시간: {calcAvgDwell(status.dwell_times)} sec
+            </div>
+
+            <div className="chart-placeholder">
+              <div className="axis axis-y" />
+              <div className="axis axis-x" />
+
+              {Object.entries(status.dwell_times)
+                .slice(0, 6)
+                .map(([id, time], idx) => (
+                  <div
+                    key={id}
+                    className="chart-bar green"
+                    style={{
+                      left: `${70 + idx * 50}px`,
+                      height: `${Math.max(20, Math.min(140, Number(time) * 8))}px`,
+                    }}
+                    title={`ID:${id} / dwell:${time}`}
+                  />
+                ))}
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }
+
+function getStateClass(state) {
+  if (state === "NORMAL") return "normal";
+  if (state === "CONGESTION") return "congestion";
+  if (state === "JAM") return "jam";
+  return "ready";
+}
+
+function calcAvgDwell(dwellTimes) {
+  const values = Object.values(dwellTimes || {})
+    .map(Number)
+    .filter((v) => !Number.isNaN(v));
+  if (values.length === 0) return "0.00";
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  return avg.toFixed(2);
+}
+
+export default TunnelModule;
