@@ -1,33 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./index.css";
 import {
   fetchTunnelStatus,
+  fetchTunnelCctvUrl,
   selectRandomCctv,
   selectCctvByName,
-  setTunnelCctvList,
 } from "./api";
-
-
-// 발표/테스트용 고정 후보
-const FIXED_CCTV_LIST = [
-  {
-    name: "[수도권제2순환선(봉담동탄)] 필봉산터널(동탄)",
-    url: "http://cctvsec.ktict.co.kr/8327/JdqIr+tRRcj6oVvFQnzIvtzHkUDVhJZY9XY+eGNGobDo55Y5O5qOjHvT6ff9uRudnQ7jtswETvv+M/fs9ia+cqNyXt2YgXEmO36dKnPo3bg=",
-  },
-  {
-    name: "[수도권제2순환선(봉담동탄)] 필봉산터널(봉담)",
-    url: "http://cctvsec.ktict.co.kr/8326/tD+wiAbI/YfgrvESpV516dvSLQqee4qTAwt2mAYU6ROZ7nh6OHstwhRYnwIwYTgEBu1iZT4VTFyIa6Vwg+cVI3dUhm82yl2i+tDPTipVH3E=",
-  },
-  {
-    name: "[수원광명선] 광명 구봉산터널",
-    url: "http://cctvsec.ktict.co.kr/5176/kbe5SBsTXBbX0i4hdDuuSE5ZilAFwOQmPbMJch63jW/B6gwf4akV/GlpTDH8JL4t/G5lf7MncT+kRWOa3OYBqw6Z3vofjYfuMlcSlyaEZOM=",
-  },
-  {
-    name: "[수원광명선] 수원 구봉산터널",
-    url: "http://cctvsec.ktict.co.kr/5177/L9EzbfGXilhFTE5N63a8MH4UBqXrd/O8w9zGEaMHxxXrSB8CltpTYSaeQyPLaD56cv5laU25qOVvX/lysxfETzs2eLrDnmQgOnI9h6OcJD8=",
-  },
-];
-
 
 /* =========================================================
  * 평균속도 -> 현실 속도 설명
@@ -36,12 +14,12 @@ function getSpeedHintText(avgSpeed) {
   const speed = Number(avgSpeed || 0);
 
   if (speed <= 1.3) {
-    return "실제속도 : 30km/h 이하 추정";
+    return "실제속도 30km/h 이하 추정";
   }
   if (speed <= 2.6) {
-    return "실제속도 : 30km/h 초과 ~ 50km/h 이하 추정";
+    return "실제속도 30km/h 초과 ~ 50km/h 이하 추정";
   }
-  return "실제속도 : 50km/h 이상 추정";
+  return "실제속도 50km/h 이상 추정";
 }
 
 /* =========================================================
@@ -58,35 +36,30 @@ function getLaneReestimateText(status) {
   return "대기";
 }
 
-const handleLaneSave = async () => {
-  try {
-    setError("");
+/* =========================================================
+ * 환기 위험도 표시
+ * ========================================================= */
+function getVentRiskLabel(level) {
+  if (level === "NORMAL") return "🟢 정상";
+  if (level === "CAUTION") return "🟡 주의";
+  if (level === "WARNING") return "🟠 경고";
+  if (level === "DANGER") return "🔴 위험";
+  return "⚪ 미정";
+}
 
-    const res = await fetch(`${BACKEND_URL}/api/tunnel/lane/save`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+function getVentRiskClass(level) {
+  if (level === "NORMAL") return "vent-normal";
+  if (level === "CAUTION") return "vent-caution";
+  if (level === "WARNING") return "vent-warning";
+  if (level === "DANGER") return "vent-danger";
+  return "vent-normal";
+}
 
-    const data = await res.json();
-
-    if (!data?.ok) {
-      setError(data?.message || "차선 저장 실패");
-      return;
-    }
-
-    alert("현재 차선을 저장했습니다.");
-  } catch (err) {
-    console.error("lane save error:", err);
-    setError("차선 저장 요청 실패");
-  }
-};
-
-function TunnelModule({host}){
+function TunnelModule({ host }) {
   const [status, setStatus] = useState({
     state: "READY",
     avg_speed: 0,
+    avg_speed_roi: 0,
     vehicle_count: 0,
     accident: false,
     lane_count: 0,
@@ -97,53 +70,43 @@ function TunnelModule({host}){
     cctv_url: "",
     dwell_times: {},
     vehicles: [],
-
-    // [추가] 차선 재추정 상태
+    vehicles_in_roi: [],
     lane_reestimate_status: "idle",
     lane_reestimate_frame_count: 0,
     lane_reestimate_window: 50,
-
-    // [추가] 최근 1분 누적 차량수
     minute_vehicle_count: 0,
+    ventilation: {
+      risk_score_base: 0,
+      risk_score_final: 0,
+      risk_level: "NORMAL",
+      alarm: false,
+      message: "공기질 상태 정상",
+      vehicle_count_roi: 0,
+      weighted_vehicle_count: 0,
+      traffic_density: 0,
+      avg_dwell_time_roi: 0,
+      avg_speed_roi: 0,
+    },
   });
 
-  // ---------------------------------------------------------
-  // videoKey:
-  // - /video-feed 요청 URL을 강제로 바꿔서 새 스트림을 요청하기 위한 키
-  // - 처음에는 null로 두고, CCTV 리스트 세팅이 끝난 뒤에만 영상 요청 시작
-  // ---------------------------------------------------------
   const BACKEND_URL = `http://${host}:5000`;
-  // const BACKEND_URL = `https://${host}`;
   const [videoKey, setVideoKey] = useState(null);
-
-  // ---------------------------------------------------------
-  // videoLoading:
-  // - 영상 연결 준비 중인지 표시
-  // ---------------------------------------------------------
   const [videoLoading, setVideoLoading] = useState(true);
-
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [reestimateLoading, setReestimateLoading] = useState(false);
 
-  // ---------------------------------------------------------
-  // videoSrc:
-  // ---------------------------------------------------------
+  const prevVentLevelRef = useRef("NORMAL");
+
   const videoSrc = useMemo(() => {
     if (!videoKey) return "";
     return `${BACKEND_URL}/api/tunnel/video-feed?ts=${videoKey}`;
-  }, [videoKey]);
+  }, [videoKey, BACKEND_URL]);
 
-  // ---------------------------------------------------------
-  // 속도 설명 문자열
-  // ---------------------------------------------------------
   const speedHintText = useMemo(() => {
     return getSpeedHintText(status.avg_speed);
   }, [status.avg_speed]);
 
-  // ---------------------------------------------------------
-  // 차선 재추정 상태 문자열
-  // ---------------------------------------------------------
   const laneReestimateText = useMemo(() => {
     return getLaneReestimateText(status);
   }, [
@@ -152,35 +115,66 @@ function TunnelModule({host}){
     status.lane_reestimate_window,
   ]);
 
+  const vent = status.ventilation || {};
+  const ventRiskLabel = useMemo(
+    () => getVentRiskLabel(vent.risk_level),
+    [vent.risk_level]
+  );
+  const ventRiskClass = useMemo(
+    () => getVentRiskClass(vent.risk_level),
+    [vent.risk_level]
+  );
+
+  const applyStatusData = (data) => {
+    setStatus({
+      state: data?.state ?? "READY",
+      avg_speed: Number(data?.avg_speed ?? 0),
+      avg_speed_roi: Number(data?.avg_speed_roi ?? 0),
+      vehicle_count: Number(data?.vehicle_count ?? 0),
+      accident: Boolean(data?.accident ?? false),
+      lane_count: Number(data?.lane_count ?? 0),
+      events: Array.isArray(data?.events) ? data.events : [],
+      event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
+      frame_id: Number(data?.frame_id ?? 0),
+      cctv_name: data?.cctv_name ?? "-",
+      cctv_url: data?.cctv_url ?? "",
+      dwell_times: data?.dwell_times ?? {},
+      vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
+      vehicles_in_roi: Array.isArray(data?.vehicles_in_roi) ? data.vehicles_in_roi : [],
+      lane_reestimate_status: data?.lane_reestimate_status ?? "idle",
+      lane_reestimate_frame_count: Number(data?.lane_reestimate_frame_count ?? 0),
+      lane_reestimate_window: Number(data?.lane_reestimate_window ?? 50),
+      minute_vehicle_count: Number(data?.minute_vehicle_count ?? 0),
+      ventilation: data?.ventilation ?? {
+        risk_score_base: 0,
+        risk_score_final: 0,
+        risk_level: "NORMAL",
+        alarm: false,
+        message: "공기질 상태 정상",
+        vehicle_count_roi: 0,
+        weighted_vehicle_count: 0,
+        traffic_density: 0,
+        avg_dwell_time_roi: 0,
+        avg_speed_roi: 0,
+      },
+    });
+  };
+
   useEffect(() => {
     let mounted = true;
 
     const initialize = async () => {
       try {
-        await setTunnelCctvList(BACKEND_URL, FIXED_CCTV_LIST);
+        const cctvRes = await fetchTunnelCctvUrl(host);
+
+        if (!cctvRes?.ok || !Array.isArray(cctvRes?.items) || cctvRes.items.length === 0) {
+          throw new Error("CCTV 리스트를 불러오지 못했습니다.");
+        }
 
         const data = await fetchTunnelStatus(BACKEND_URL);
         if (!mounted) return;
 
-        setStatus({
-          state: data?.state ?? "READY",
-          avg_speed: Number(data?.avg_speed ?? 0),
-          vehicle_count: Number(data?.vehicle_count ?? 0),
-          accident: Boolean(data?.accident ?? false),
-          lane_count: Number(data?.lane_count ?? 0),
-          events: Array.isArray(data?.events) ? data.events : [],
-          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
-          frame_id: Number(data?.frame_id ?? 0),
-          cctv_name: data?.cctv_name ?? "-",
-          cctv_url: data?.cctv_url ?? "",
-          dwell_times: data?.dwell_times ?? {},
-          vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
-          lane_reestimate_status: data?.lane_reestimate_status ?? "idle",
-          lane_reestimate_frame_count: Number(data?.lane_reestimate_frame_count ?? 0),
-          lane_reestimate_window: Number(data?.lane_reestimate_window ?? 50),
-          minute_vehicle_count: Number(data?.minute_vehicle_count ?? 0),
-        });
-
+        applyStatusData(data);
         setVideoLoading(true);
         setVideoKey(Date.now());
       } catch (err) {
@@ -194,25 +188,7 @@ function TunnelModule({host}){
       try {
         const data = await fetchTunnelStatus(BACKEND_URL);
         if (!mounted) return;
-
-        setStatus({
-          state: data?.state ?? "READY",
-          avg_speed: Number(data?.avg_speed ?? 0),
-          vehicle_count: Number(data?.vehicle_count ?? 0),
-          accident: Boolean(data?.accident ?? false),
-          lane_count: Number(data?.lane_count ?? 0),
-          events: Array.isArray(data?.events) ? data.events : [],
-          event_logs: Array.isArray(data?.event_logs) ? data.event_logs : [],
-          frame_id: Number(data?.frame_id ?? 0),
-          cctv_name: data?.cctv_name ?? "-",
-          cctv_url: data?.cctv_url ?? "",
-          dwell_times: data?.dwell_times ?? {},
-          vehicles: Array.isArray(data?.vehicles) ? data.vehicles : [],
-          lane_reestimate_status: data?.lane_reestimate_status ?? "idle",
-          lane_reestimate_frame_count: Number(data?.lane_reestimate_frame_count ?? 0),
-          lane_reestimate_window: Number(data?.lane_reestimate_window ?? 50),
-          minute_vehicle_count: Number(data?.minute_vehicle_count ?? 0),
-        });
+        applyStatusData(data);
       } catch (err) {
         console.error("status fetch error:", err);
       }
@@ -226,11 +202,19 @@ function TunnelModule({host}){
       mounted = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [BACKEND_URL, host]);
 
-  // ---------------------------------------------------------
-  // sleep:
-  // ---------------------------------------------------------
+  useEffect(() => {
+    const currentLevel = status?.ventilation?.risk_level || "NORMAL";
+    const prevLevel = prevVentLevelRef.current;
+
+    if (currentLevel === "DANGER" && prevLevel !== "DANGER") {
+      alert("🔴 공기질 위험 단계입니다.\n환기 대응 조치가 필요합니다.");
+    }
+
+    prevVentLevelRef.current = currentLevel;
+  }, [status?.ventilation?.risk_level]);
+
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const handleRandom = async () => {
@@ -274,9 +258,6 @@ function TunnelModule({host}){
     }
   };
 
-  // ---------------------------------------------------------
-  // [추가] 차선 재추정 버튼
-  // ---------------------------------------------------------
   const handleLaneReestimate = async () => {
     try {
       setReestimateLoading(true);
@@ -290,38 +271,44 @@ function TunnelModule({host}){
       });
 
       const data = await res.json();
-      console.log("lane reestimate response:", data);
 
       if (!data?.ok) {
         setError(data?.message || "차선 재추정 요청 실패");
         return;
       }
 
-      // 버튼 누른 직후 상태 한 번 갱신
       const refreshed = await fetchTunnelStatus(BACKEND_URL);
-      setStatus({
-        state: refreshed?.state ?? "READY",
-        avg_speed: Number(refreshed?.avg_speed ?? 0),
-        vehicle_count: Number(refreshed?.vehicle_count ?? 0),
-        accident: Boolean(refreshed?.accident ?? false),
-        lane_count: Number(refreshed?.lane_count ?? 0),
-        events: Array.isArray(refreshed?.events) ? refreshed.events : [],
-        event_logs: Array.isArray(refreshed?.event_logs) ? refreshed.event_logs : [],
-        frame_id: Number(refreshed?.frame_id ?? 0),
-        cctv_name: refreshed?.cctv_name ?? "-",
-        cctv_url: refreshed?.cctv_url ?? "",
-        dwell_times: refreshed?.dwell_times ?? {},
-        vehicles: Array.isArray(refreshed?.vehicles) ? refreshed.vehicles : [],
-        lane_reestimate_status: refreshed?.lane_reestimate_status ?? "idle",
-        lane_reestimate_frame_count: Number(refreshed?.lane_reestimate_frame_count ?? 0),
-        lane_reestimate_window: Number(refreshed?.lane_reestimate_window ?? 50),
-        minute_vehicle_count: Number(refreshed?.minute_vehicle_count ?? 0),
-      });
+      applyStatusData(refreshed);
     } catch (err) {
       console.error("lane reestimate error:", err);
       setError("차선 재추정 요청 실패");
     } finally {
       setReestimateLoading(false);
+    }
+  };
+
+  const handleLaneSave = async () => {
+    try {
+      setError("");
+
+      const res = await fetch(`${BACKEND_URL}/api/tunnel/lane/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const data = await res.json();
+
+      if (!data?.ok) {
+        setError(data?.message || "차선 저장 실패");
+        return;
+      }
+
+      alert("현재 차선을 저장했습니다.");
+    } catch (err) {
+      console.error("lane save error:", err);
+      setError("차선 저장 요청 실패");
     }
   };
 
@@ -342,7 +329,7 @@ function TunnelModule({host}){
               onClick={handleRandom}
               disabled={loading}
             >
-              랜덤 선택
+              랜덤선택
             </button>
 
             <button
@@ -350,25 +337,8 @@ function TunnelModule({host}){
               onClick={handleRefreshVideo}
               disabled={loading}
             >
-              영상 새로고침
+              영상새로고침
             </button>
-
-            {/* [추가] 차선 재추정 버튼 */}
-            <button
-              className="action-btn"
-              onClick={handleLaneReestimate}
-              disabled={reestimateLoading}
-            >
-              {reestimateLoading ? "재추정 요청중..." : "차선 재추정"}
-            </button>
-            
-            <button
-              className="action-btn"
-              onClick={handleLaneSave}
-            >
-              차선 저장
-            </button>
-
           </div>
         </section>
 
@@ -408,97 +378,49 @@ function TunnelModule({host}){
           </div>
 
           <div className="panel panel-status">
-            <div className="section-title">🚦 상태</div>
+            <div className="section-title">🚦 교통흐름 상태</div>
 
             <div className={`state-badge ${stateClass}`}>
               {status.state}
             </div>
 
-            <div className="status-block">
-              <div className="status-label">⚡ 평균 속도</div>
-              <div className="status-value">
-                {status.avg_speed.toFixed(2)} px/s
-              </div>
-
-              {/* [추가] 현실 속도 설명 */}
-              <div
-                style={{
-                  marginTop: "6px",
-                  fontSize: "13px",
-                  color: "#cbd5e1",
-                  lineHeight: "1.4",
-                }}
-              >
+            <div className="status-speed-line">
+              <span className="status-speed-main">
+                평균속도 : {status.avg_speed.toFixed(2)} px/s
+              </span>
+              <span className="status-speed-sub">
                 ({speedHintText})
-              </div>
+              </span>
             </div>
 
-            {/* [수정] 카드형 표시판 */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "10px",
-                marginTop: "14px",
-                marginBottom: "14px",
-              }}
-            >
-              <div
-                style={{
-                  background: "#1f2937",
-                  border: "1px solid #374151",
-                  borderRadius: "10px",
-                  padding: "12px 8px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
-                  차선수
-                </div>
-                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
-                  {status.lane_count}차선
-                </div>
+            <div className="traffic-summary-grid">
+              <div className="summary-card">
+                <div className="summary-card-label">차선수</div>
+                <div className="summary-card-value">{status.lane_count}차선</div>
               </div>
 
-              <div
-                style={{
-                  background: "#1f2937",
-                  border: "1px solid #374151",
-                  borderRadius: "10px",
-                  padding: "12px 8px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
-                  차량 수
-                </div>
-                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
-                  {status.vehicle_count}대
-                </div>
+              <div className="summary-card">
+                <div className="summary-card-label">차선재추정</div>
+                <div className="summary-card-value small">{laneReestimateText}</div>
+                <button
+                  className="summary-mini-btn"
+                  onClick={handleLaneReestimate}
+                  disabled={reestimateLoading}
+                >
+                  {reestimateLoading ? "요청중..." : "재추정"}
+                </button>
               </div>
 
-              <div
-                style={{
-                  background: "#1f2937",
-                  border: "1px solid #374151",
-                  borderRadius: "10px",
-                  padding: "12px 8px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "6px" }}>
-                  누적 차량수(1분)
-                </div>
-                <div style={{ fontSize: "20px", fontWeight: "700", color: "#f9fafb" }}>
-                  {status.minute_vehicle_count}대
-                </div>
+              <div className="summary-card">
+                <div className="summary-card-label">차선저장</div>
+                <div className="summary-card-value small">현재 차선 메모리</div>
+                <button
+                  className="summary-mini-btn secondary"
+                  onClick={handleLaneSave}
+                >
+                  저장
+                </button>
               </div>
-            </div>
-
-            {/* [수정] 사고 여부 제거, 차선 재추정 상태 표시 */}
-            <div className="status-mini-box">
-              <div>Frame ID: {status.frame_id}</div>
-              <div>차선 재추정: {laneReestimateText}</div>
             </div>
 
             <div className="divider" />
@@ -527,52 +449,77 @@ function TunnelModule({host}){
           </div>
         </section>
 
-        <section className="bottom-grid">
-          <div className="panel panel-chart">
-            <div className="section-title">📊 차량 속도 (ROI)</div>
-            <div className="chart-summary">총 차량 수 {status.vehicle_count}</div>
-
-            <div className="chart-placeholder">
-              <div className="axis axis-y" />
-              <div className="axis axis-x" />
-
-              {status.vehicles.slice(0, 6).map((v, idx) => (
-                <div
-                  key={idx}
-                  className="chart-bar"
-                  style={{
-                    left: `${70 + idx * 50}px`,
-                    height: `${Math.max(20, Math.min(140, (v.speed || 0) * 8))}px`,
-                  }}
-                  title={`ID:${v.id} / speed:${v.speed}`}
-                />
-              ))}
-            </div>
+        <section className="panel panel-air">
+          <div className="panel-air-header">
+            <div className="section-title">🌫️ 터널 공기질 상태</div>
+            <div className="section-title air-divider-title">|</div>
+            <div className="section-title">환기대응정보(ROI)</div>
           </div>
 
-          <div className="panel panel-chart">
-            <div className="section-title">📊 체류시간</div>
-            <div className="chart-summary">
-              평균 체류시간: {calcAvgDwell(status.dwell_times)} sec
+          <div className="air-grid">
+            <div className="air-left">
+              <div className={`vent-risk-card ${ventRiskClass}`}>
+                <div className="vent-risk-label">{ventRiskLabel}</div>
+                <div className="vent-risk-score">
+                  위험 점수: {Number(vent.risk_score_final ?? 0).toFixed(2)}
+                </div>
+                <div className="vent-risk-alarm">
+                  알람 상태: {vent.alarm ? "ON" : "OFF"}
+                </div>
+              </div>
+
+              <div className="vent-gauge">
+                <div
+                  className="vent-gauge-fill"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.max(0, Number(vent.risk_score_final ?? 0) * 100)
+                    )}%`,
+                  }}
+                />
+              </div>
+
+              <div className="vent-step-legend">
+                <span>🟢 정상</span>
+                <span>🟡 주의</span>
+                <span>🟠 경고</span>
+                <span>🔴 위험</span>
+              </div>
+
+              <div className="vent-message">
+                {vent.message || "공기질 상태 정상"}
+              </div>
             </div>
 
-            <div className="chart-placeholder">
-              <div className="axis axis-y" />
-              <div className="axis axis-x" />
+            <div className="air-right">
+              <div className="vent-table">
+                <div className="vent-row">
+                  <span className="vent-key">차량 수</span>
+                  <span className="vent-value">{vent.vehicle_count_roi ?? 0}대</span>
+                </div>
 
-              {Object.entries(status.dwell_times)
-                .slice(0, 6)
-                .map(([id, time], idx) => (
-                  <div
-                    key={id}
-                    className="chart-bar green"
-                    style={{
-                      left: `${70 + idx * 50}px`,
-                      height: `${Math.max(20, Math.min(140, Number(time) * 8))}px`,
-                    }}
-                    title={`ID:${id} / dwell:${time}`}
-                  />
-                ))}
+                <div className="vent-row">
+                  <span className="vent-key">평균속도</span>
+                  <span className="vent-value">
+                    {Number(vent.avg_speed_roi ?? status.avg_speed_roi ?? 0).toFixed(2)} px/s
+                  </span>
+                </div>
+
+                <div className="vent-row">
+                  <span className="vent-key">교통밀도</span>
+                  <span className="vent-value">
+                    {Number(vent.traffic_density ?? 0).toFixed(2)}
+                  </span>
+                </div>
+
+                <div className="vent-row">
+                  <span className="vent-key">평균 체류시간</span>
+                  <span className="vent-value">
+                    {Number(vent.avg_dwell_time_roi ?? 0).toFixed(2)} sec
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -587,17 +534,6 @@ function getStateClass(state) {
   if (state === "JAM") return "jam";
   if (state === "ERROR") return "jam";
   return "ready";
-}
-
-function calcAvgDwell(dwellTimes) {
-  const values = Object.values(dwellTimes || {})
-    .map(Number)
-    .filter((v) => !Number.isNaN(v));
-
-  if (values.length === 0) return "0.00";
-
-  const avg = values.reduce((a, b) => a + b, 0) / values.length;
-  return avg.toFixed(2);
 }
 
 export default TunnelModule;

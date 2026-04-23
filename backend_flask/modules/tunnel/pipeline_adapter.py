@@ -57,6 +57,8 @@ class TunnelPipelineAdapter:
             "events": [],
             "frame_id": 0,
             "analysis": {},
+            "avg_speed_roi": 0.0,
+            "vehicles_in_roi": [],
 
             # [추가] 차선 재추정 상태
             "lane_reestimate_status": "idle",
@@ -74,9 +76,9 @@ class TunnelPipelineAdapter:
         # =========================================================
         # [추가] 운영화면용 얇은 오버레이 스타일
         # =========================================================
-        self.ROI_COLOR = (130, 130, 130)      # 회색
-        self.LANE_COLOR = (150, 150, 150)     # 회색
-        self.LABEL_COLOR = (210, 210, 210)    # 밝은 회색
+        self.ROI_COLOR = (120, 140, 160)      # ROI 선: 중간 청회색
+        self.LANE_COLOR = (190, 210, 230)     # 차선 중심선: 밝은 청회색
+        self.LABEL_COLOR = (220, 235, 245)    # 차선 라벨: 거의 흰색에 가까운 밝은색
         self.BOX_COLOR = (0, 255, 0)          # bbox는 초록 유지
 
         self.ROI_THICKNESS = 1
@@ -113,6 +115,8 @@ class TunnelPipelineAdapter:
             "lane_reestimate_status": "idle",
             "lane_reestimate_frame_count": 0,
             "lane_reestimate_window": 50,
+            "avg_speed_roi": 0.0,
+            "vehicles_in_roi": [],
         }
 
         self.track_first_seen = {}
@@ -470,6 +474,7 @@ class TunnelPipelineAdapter:
             avg_speed = float(state_debug.get("buffer_avg_speed", 0.0))
         else:
             state_text = str(state_result)
+            state_debug = {}
             avg_speed = 0.0
 
         if isinstance(accident_result, dict):
@@ -486,22 +491,30 @@ class TunnelPipelineAdapter:
         raw_lane_map = merged.get("raw_lane_map", {})
         boxes = merged.get("boxes", {})
 
-        # -----------------------------
-        # [추가] 차선 재추정 상태값 읽기
-        # lane_template.update() -> result["analysis"] 쪽으로 실려 올라온다고 가정
-        # 없으면 기본값 유지
-        # -----------------------------
+    # -----------------------------
+    # [추가] 차선 재추정 상태값 읽기
+    # -----------------------------
         lane_reestimate_status = merged.get("lane_reestimate_status", "idle")
         lane_reestimate_frame_count = int(merged.get("lane_reestimate_frame_count", 0))
         lane_reestimate_window = int(merged.get("lane_reestimate_window", 50))
 
-        # -----------------------------
-        # 1) vehicles + dwell_times 생성
-        # -----------------------------
+    # -----------------------------
+    # ROI 범위
+    # -----------------------------
+        roi_y1 = int(merged.get("roi_y1", merged.get("roi_raw_y1", self.frame_height * 0.20)))
+        roi_y2 = int(merged.get("roi_y2", merged.get("roi_raw_y2", self.frame_height * 0.95)))
+
+    # -----------------------------
+    # 1) vehicles + dwell_times + vehicles_in_roi 생성
+    # -----------------------------
         now_ts = time.time()
         current_ids = set()
         vehicles = []
+        vehicles_in_roi = []
         dwell_times = {}
+
+        roi_speed_sum = 0.0
+        roi_speed_count = 0
 
         for t in tracks:
             tid = int(t["id"])
@@ -518,14 +531,46 @@ class TunnelPipelineAdapter:
             lane = lane_map.get(tid, None)
             raw_lane = raw_lane_map.get(tid, None)
 
-            vehicles.append({
+            if not bbox:
+                continue
+
+            x1, y1, x2, y2 = bbox
+            bbox_w = max(int(x2) - int(x1), 1)
+            bbox_h = max(int(y2) - int(y1), 1)
+            bbox_area = bbox_w * bbox_h
+
+            bottom_x = int((x1 + x2) / 2)
+            bottom_y = int(y2)
+
+            roi_in = (roi_y1 <= bottom_y <= roi_y2)
+
+            vehicle_item = {
                 "id": tid,
+                "track_id": tid,          # [추가] ventilation용
                 "speed": round(speed, 2),
+                "ema_speed": round(speed, 2),   # [추가] ventilation용
                 "lane": lane,
                 "raw_lane": raw_lane,
                 "dwell_time": dwell_sec,
                 "bbox": bbox,
-            })
+                "bbox_size": bbox_area,   # [추가] ventilation용
+                "roi_in": roi_in,         # [추가] ventilation용
+                "bottom_point": (bottom_x, bottom_y),
+            }
+
+            vehicles.append(vehicle_item)
+
+            if roi_in:
+                vehicles_in_roi.append({
+                    "track_id": tid,
+                    "bbox": bbox,
+                    "bbox_size": bbox_area,
+                    "ema_speed": round(speed, 2),
+                    "roi_in": True,
+                })
+                roi_speed_sum += speed
+                roi_speed_count += 1
+
             # 최근 1분 누적 차량수 계산용 로그에 기록
             self.vehicle_seen_log.append((now_ts, tid))
 
@@ -533,18 +578,23 @@ class TunnelPipelineAdapter:
         for tid in stale_ids:
             del self.track_first_seen[tid]
 
-        # --------------------------------------------------
-        # 최근 60초 이내 로그만 유지
-        # --------------------------------------------------
+    # --------------------------------------------------
+    # 최근 60초 이내 로그만 유지
+    # --------------------------------------------------
         while self.vehicle_seen_log and now_ts - self.vehicle_seen_log[0][0] > 60:
             self.vehicle_seen_log.popleft()
 
         # 최근 60초 동안 등장한 고유 차량 수
         minute_vehicle_count = len(set(tid for _, tid in self.vehicle_seen_log))
 
-        # -----------------------------
-        # 2) 이벤트 로그 생성
-        # -----------------------------
+    # -----------------------------
+    # [추가] ROI 기준 평균속도
+    # -----------------------------
+        avg_speed_roi = round(roi_speed_sum / roi_speed_count, 2) if roi_speed_count > 0 else 0.0
+
+    # -----------------------------
+    # 2) 이벤트 로그 생성
+    # -----------------------------
         roi_fallback = bool(merged.get("roi_used_fallback", False))
         template_confirmed = bool(merged.get("template_confirmed", False))
 
@@ -576,9 +626,9 @@ class TunnelPipelineAdapter:
                 self._append_event_log("차선 bootstrap 중")
             self.prev_template_confirmed = template_confirmed
 
-        # -----------------------------
-        # 3) 기존 events 유지
-        # -----------------------------
+    # -----------------------------
+    # 3) 기존 events 유지
+    # -----------------------------
         events = []
         if roi_fallback:
             events.append("ROI fallback 사용")
@@ -587,7 +637,6 @@ class TunnelPipelineAdapter:
         if not template_confirmed:
             events.append("차선 bootstrap 중")
 
-        # 재추정 상태도 간단히 이벤트에 반영 가능
         if lane_reestimate_status == "reestimating":
             events.append(f"차선 재추정 중 ({lane_reestimate_frame_count}/{lane_reestimate_window})")
         elif lane_reestimate_status == "reestimated":
@@ -596,20 +645,20 @@ class TunnelPipelineAdapter:
         return {
             "state": state_text,
             "avg_speed": avg_speed,
+            "avg_speed_roi": avg_speed_roi,          # [추가]
             "vehicle_count": vehicle_count,
             "accident": accident_flag,
             "lane_count": lane_count,
             "events": events,
             "event_logs": list(self.event_logs),
             "vehicles": vehicles,
+            "vehicles_in_roi": vehicles_in_roi,      # [추가]
             "dwell_times": dwell_times,
             "frame_id": frame_id,
             "analysis": merged,
-            
-            # [추가] 최근 1분 누적 차량수
+
             "minute_vehicle_count": minute_vehicle_count,
 
-            # [추가] 프론트에서 바로 쓰는 재추정 상태
             "lane_reestimate_status": lane_reestimate_status,
             "lane_reestimate_frame_count": lane_reestimate_frame_count,
             "lane_reestimate_window": lane_reestimate_window,
@@ -643,6 +692,8 @@ class TunnelPipelineAdapter:
                     "lane_reestimate_status": "idle",
                     "lane_reestimate_frame_count": 0,
                     "lane_reestimate_window": 50,
+                    "avg_speed_roi": 0.0,
+                    "vehicles_in_roi": [],
                 }
                 self.last_result = ready_result
                 return annotated, ready_result
@@ -691,6 +742,8 @@ class TunnelPipelineAdapter:
                 "lane_reestimate_status": "idle",
                 "lane_reestimate_frame_count": 0,
                 "lane_reestimate_window": 50,
+                "avg_speed_roi": 0.0,
+                "vehicles_in_roi": [],
             }
             self.last_result = error_result
 
