@@ -10,101 +10,6 @@
   font-family: "Pretendard", "Noto Sans KR", sans-serif;
 }
 
-/* 좌측 사이드바 */
-.smart-sidebar {
-  width: 220px;
-  background: linear-gradient(180deg, #0a1530 0%, #091126 100%);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 20px 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-
-.sidebar-logo {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 28px;
-}
-
-.logo-box {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: #1f3f93;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  font-size: 20px;
-}
-
-.logo-title {
-  font-size: 22px;
-  font-weight: 800;
-}
-
-.logo-sub {
-  font-size: 12px;
-  color: #8aa0d8;
-}
-
-.sidebar-menu-title {
-  font-size: 12px;
-  color: #7890c7;
-  margin-bottom: 12px;
-}
-
-.sidebar-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-}
-
-.sidebar-item {
-  background: transparent;
-  border: none;
-  color: #c4d3f7;
-  text-align: left;
-  padding: 12px 14px;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.sidebar-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.sidebar-item.active {
-  background: #203a80;
-  color: white;
-  font-weight: 700;
-}
-
-.sidebar-bottom {
-  margin-top: 24px;
-}
-
-.sidebar-status {
-  font-size: 13px;
-  color: #72e28d;
-  margin-bottom: 14px;
-}
-
-.logout-btn {
-  width: 100%;
-  border: none;
-  border-radius: 12px;
-  padding: 12px;
-  background: #1e2f52;
-  color: white;
-  cursor: pointer;
-}
-
-/* 본문 */
 .smart-main {
   flex: 1;
   padding: 16px;
@@ -131,10 +36,17 @@
   font-weight: 800;
 }
 
+.panel-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .panel-header-right {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .action-btn {
@@ -145,6 +57,11 @@
   border-radius: 10px;
   cursor: pointer;
   font-weight: 600;
+}
+
+.action-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .top-notice,
@@ -171,12 +88,6 @@
   margin-bottom: 10px;
 }
 
-.bottom-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
 .section-title {
   font-size: 26px;
   font-weight: 800;
@@ -190,17 +101,20 @@
 }
 
 .panel-video,
-.panel-status,
-.panel-chart {
+.panel-status {
   padding: 14px;
   min-height: 320px;
 }
 
+.panel-air {
+  padding: 14px;
+}
+
 .video-wrap {
+  position: relative;
   width: 100%;
   height: 500px;
   background: #05070f;
-  border: none;
   border-radius: 14px;
   overflow: hidden;
 }
@@ -211,6 +125,18 @@
   object-fit: contain;
   display: block;
   background: black;
+}
+
+.video-overlay-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #ffffff;
+  background: rgba(8, 12, 24, 0.55);
+  z-index: 2;
 }
 
 .video-caption {
@@ -231,7 +157,7 @@
   border-radius: 999px;
   font-size: 30px;
   font-weight: 800;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .state-badge.normal {
@@ -250,33 +176,85 @@
   color: #8ec2ff;
 }
 
-.status-block {
-  margin-bottom: 14px;
+.status-speed-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
 }
 
-.status-label {
-  font-size: 18px;
-  font-weight: 700;
+.status-speed-main {
+  font-size: 20px;
+  font-weight: 800;
   color: #f0f5ff;
 }
 
-.status-value {
-  font-size: 20px;
-  font-weight: 800;
-  margin-top: 6px;
+.status-speed-sub {
+  font-size: 13px;
+  color: #aebedc;
 }
 
-.status-mini-box {
-  background: #0a0c12;
-  padding: 12px;
-  font-size: 14px;
-  line-height: 1.8;
-  margin-bottom: 16px;
+.traffic-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.summary-card {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 12px 10px;
+  text-align: center;
+  min-height: 108px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.summary-card-label {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+
+.summary-card-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #f9fafb;
+}
+
+.summary-card-value.small {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.summary-mini-btn {
+  margin-top: 8px;
+  background: #27446f;
+  color: white;
+  border: 1px solid #527ab8;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-mini-btn.secondary {
+  background: #214033;
+  border-color: #3f8a68;
+}
+
+.summary-mini-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .divider {
   height: 1px;
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
   margin: 8px 0 14px;
 }
 
@@ -290,6 +268,7 @@
   background: #161b2b;
   padding: 10px 12px;
   border-radius: 8px;
+  font-size: 14px;
 }
 
 .event-empty {
@@ -297,101 +276,8 @@
   font-size: 14px;
 }
 
-.chart-summary {
-  margin-bottom: 10px;
-  font-size: 16px;
-  color: #d6e2ff;
-}
-
-.chart-placeholder {
-  position: relative;
-  height: 220px;
-  background: #14182b;
-  overflow: hidden;
-  border: none;
-  border-radius: 12px;
-}
-
-.axis {
-  position: absolute;
-  background: rgba(255,255,255,0.25);
-}
-
-.axis-y {
-  width: 1px;
-  height: 150px;
-  left: 38px;
-  top: 25px;
-}
-
-.axis-x {
-  height: 1px;
-  width: 180px;
-  left: 38px;
-  bottom: 35px;
-}
-
-.chart-bar {
-  position: absolute;
-  bottom: 35px;
-  width: 28px;
-  background: #4d7cff;
-  border-radius: 6px 6px 0 0;
-}
-
-.chart-bar.green {
-  background: #57d68d;
-}
-
-@media (max-width: 1200px) {
-  .top-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .bottom-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 18px;
-    margin-bottom: 12px;
-    border-radius: 18px;
-  }
-
-
-  .panel-header-right {
-    flex-wrap: wrap;
-  }
-
-  .search-input {
-    width: 100%;
-  }
-}
-
-
-.scrollable-log::-webkit-scrollbar {
-  width: 8px;
-}
-
-.scrollable-log::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
-}
-
-.scrollable-log::-webkit-scrollbar-track {
-  background: transparent;
-}
-.panel-subtitle {
-  margin-top: 6px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.72);
-}
-
 .scrollable-log {
-  max-height: 220px;
+  max-height: 240px;
   overflow-y: auto;
   padding-right: 6px;
 }
@@ -409,18 +295,164 @@
   background: transparent;
 }
 
-.video-wrap {
-  position: relative;
-}
-
-.video-overlay-message {
-  position: absolute;
-  inset: 0;
+/* 하단 공기질/환기 패널 */
+.panel-air-header {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.air-divider-title {
+  opacity: 0.45;
+}
+
+.air-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 14px;
+}
+
+.air-left,
+.air-right {
+  min-width: 0;
+}
+
+.vent-risk-card {
+  border-radius: 14px;
+  padding: 18px 16px;
+  margin-top: 6px;
+  margin-bottom: 16px;
+  border: 1px solid transparent;
+  background: #161b2b;
+}
+
+.vent-risk-label {
+  font-size: 28px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.vent-risk-score,
+.vent-risk-alarm {
+  font-size: 16px;
+  margin-bottom: 8px;
+  color: #eaf1ff;
+}
+
+.vent-gauge {
+  width: 100%;
+  height: 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    #2e7d32 0%,
+    #c0ca33 35%,
+    #fb8c00 70%,
+    #e53935 100%
+  );
+  margin-bottom: 14px;
+}
+
+.vent-gauge-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  transition: width 0.3s ease;
+}
+
+.vent-step-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: #d5def4;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.vent-message {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #dce7ff;
+  background: #161b2b;
+  border-radius: 12px;
+  padding: 14px 16px;
+  border: 1px solid #2b344d;
+}
+
+.vent-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.vent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #161b2b;
+  border: 1px solid #2b344d;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.vent-key {
+  font-size: 15px;
+  color: #b9c7ea;
+  font-weight: 600;
+}
+
+.vent-value {
   font-size: 18px;
-  color: #ffffff;
-  background: rgba(8, 12, 24, 0.55);
-  z-index: 2;
+  color: #f8fbff;
+  font-weight: 800;
+}
+
+.vent-normal {
+  color: #7ee787;
+  border-color: rgba(126, 231, 135, 0.25);
+}
+
+.vent-caution {
+  color: #f7d154;
+  border-color: rgba(247, 209, 84, 0.25);
+}
+
+.vent-warning {
+  color: #ffb454;
+  border-color: rgba(255, 180, 84, 0.25);
+}
+
+.vent-danger {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.25);
+}
+
+@media (max-width: 1200px) {
+  .top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .air-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .panel-header-right {
+    width: 100%;
+    flex-wrap: wrap;
+  }
 }

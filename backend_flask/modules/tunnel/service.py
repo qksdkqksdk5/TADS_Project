@@ -10,7 +10,8 @@
 # - 최신 상태 저장
 # - 단일 스트림 보호
 # - lane_template 수동 재추정 요청 연결
-# - [추가] 사고 이벤트 캡처/저장
+# - 사고 이벤트 캡처/저장
+# - 환기 대응 위험도 계산 / 상태 포함
 # ==========================================
 
 import os
@@ -22,6 +23,8 @@ import time
 from datetime import datetime
 
 from .pipeline_adapter import TunnelPipelineAdapter
+from .ventilation_risk import VentilationRiskManager
+from .ventilation_bridge import build_ventilation_result
 
 
 class TunnelLiveService:
@@ -45,9 +48,29 @@ class TunnelLiveService:
         # CCTV 연결 상태 관리
         self.cctv_health = {}
 
+        # ==================================================
+        # 환기 대응 매니저
+        # ==================================================
+        self.ventilation_manager = VentilationRiskManager(fps=10)
+
+        # 설정 확정값
+        self.ventilation_manager.capacity_per_lane = 10
+        self.ventilation_manager.weight_clip_min = 0.8
+        self.ventilation_manager.weight_clip_max = 1.5
+        self.ventilation_manager.accident_state_bonus = 0.15
+        self.ventilation_manager.free_flow_speed = 8.0
+        self.ventilation_manager.max_dwell_time = 60.0
+
+        # 차선 수별 기준 승용차 bbox
+        self.ventilation_manager.set_bbox_ref(2, 3500.0)
+        self.ventilation_manager.set_bbox_ref(3, 2600.0)
+        self.ventilation_manager.set_bbox_ref(4, 2000.0)
+
+        # 필요 시 500m 환산 활성화
+        # self.ventilation_manager.enable_tunnel_scaling(True, default_roi_est_length=50.0)
+
         # --------------------------------------------------
         # 최신 상태 캐시
-        # 프론트 status API에서 그대로 내려갈 값들
         # --------------------------------------------------
         self.latest_status = {
             "state": "READY",
@@ -60,17 +83,27 @@ class TunnelLiveService:
             "cctv_name": "-",
             "cctv_url": "",
 
-            # [추가] 차선 재추정 상태
             "lane_reestimate_status": "idle",
             "lane_reestimate_frame_count": 0,
             "lane_reestimate_window": 50,
 
-            # [추가] 최근 1분 누적 차량수 (없으면 0 유지)
             "minute_vehicle_count": 0,
+
+            "ventilation": {
+                "risk_score_base": 0.0,
+                "risk_score_final": 0.0,
+                "risk_level": "NORMAL",
+                "alarm": False,
+                "message": "공기질 상태 정상",
+                "vehicle_count_roi": 0,
+                "weighted_vehicle_count": 0.0,
+                "traffic_density": 0.0,
+                "avg_dwell_time_roi": 0.0,
+            }
         }
 
         # ==================================================
-        # [추가] 사고 이벤트 저장 폴더
+        # 사고 이벤트 저장 폴더
         # ==================================================
         self.event_root = os.path.join(os.path.dirname(__file__), "event_storage")
         self.event_snapshot_dir = os.path.join(self.event_root, "snapshots")
@@ -79,9 +112,8 @@ class TunnelLiveService:
         os.makedirs(self.event_snapshot_dir, exist_ok=True)
         os.makedirs(self.event_log_dir, exist_ok=True)
 
-        # 최근 사고 이벤트 중복 저장 방지용
         self.last_saved_accident_frame = -999999
-        self.accident_save_cooldown = 180   # 180프레임 내 중복 저장 방지
+        self.accident_save_cooldown = 180
 
     # =========================================================
     # 1) CCTV 목록 관리
@@ -117,7 +149,6 @@ class TunnelLiveService:
 
         self.cached_cctv_list = cleaned
 
-        # health 초기화
         self.cctv_health = {}
         for cctv in self.cached_cctv_list:
             self.cctv_health[cctv["url"]] = {
@@ -132,40 +163,43 @@ class TunnelLiveService:
     # 2) 상태 업데이트
     # =========================================================
     def get_status(self):
-        """
-        프론트 /api/tunnel/status 응답용
-        """
         with self.lock:
             data = dict(self.latest_status)
 
-        # 안전하게 기본값 보정
         data.setdefault("lane_reestimate_status", "idle")
         data.setdefault("lane_reestimate_frame_count", 0)
         data.setdefault("lane_reestimate_window", 50)
         data.setdefault("minute_vehicle_count", 0)
+        data.setdefault("ventilation", {
+            "risk_score_base": 0.0,
+            "risk_score_final": 0.0,
+            "risk_level": "NORMAL",
+            "alarm": False,
+            "message": "공기질 상태 정상",
+        })
 
         return data
 
     def _update_status(self, data):
-        """
-        pipeline 결과나 service 내부 상태를 latest_status에 반영
-        """
         with self.lock:
             self.latest_status.update(data)
 
-            # 혹시 일부 키가 빠져 들어와도 기본값 유지
             self.latest_status.setdefault("lane_reestimate_status", "idle")
             self.latest_status.setdefault("lane_reestimate_frame_count", 0)
             self.latest_status.setdefault("lane_reestimate_window", 50)
             self.latest_status.setdefault("minute_vehicle_count", 0)
+            self.latest_status.setdefault("ventilation", {
+                "risk_score_base": 0.0,
+                "risk_score_final": 0.0,
+                "risk_level": "NORMAL",
+                "alarm": False,
+                "message": "공기질 상태 정상",
+            })
 
     # =========================================================
     # 2-1) 차선 재추정 요청
     # =========================================================
     def request_lane_reestimate(self):
-        """
-        관제사가 버튼을 누르면 routes.py에서 이 메서드를 호출한다.
-        """
         frame_id = self.latest_status.get("frame_id", 0)
 
         lane_template = None
@@ -202,7 +236,7 @@ class TunnelLiveService:
             "frame_id": frame_id,
             "window": 50
         }
-    
+
     def save_current_lane_memory(self):
         lane_template = None
 
@@ -241,27 +275,15 @@ class TunnelLiveService:
         }
 
     # =========================================================
-    # 2-2) [추가] 사고 이벤트 캡처/저장
+    # 2-2) 사고 이벤트 캡처/저장
     # =========================================================
     def _save_accident_event(self, frame, status_data):
-        """
-        사고 감지 시 현재 프레임(annotated)을 저장한다.
-
-        저장 내용:
-        1) jpg 스냅샷
-        2) json 메타데이터
-
-        주의:
-        - 지금은 뼈대 단계이므로 파일 저장만 수행
-        - 너무 자주 저장되지 않게 cooldown 적용
-        """
         accident_flag = bool(status_data.get("accident", False))
         frame_id = int(status_data.get("frame_id", 0))
 
         if not accident_flag:
             return
 
-        # 너무 자주 같은 사고를 저장하지 않게 방지
         if frame_id - self.last_saved_accident_frame < self.accident_save_cooldown:
             return
 
@@ -273,17 +295,15 @@ class TunnelLiveService:
 
         event_id = f"accident_{ts_compact}_{frame_id}"
 
-        # 1) 이미지 저장
         image_path = os.path.join(self.event_snapshot_dir, f"{event_id}.jpg")
         cv2.imwrite(image_path, frame)
 
-        # 2) 메타 저장
         payload = {
             "event_id": event_id,
             "timestamp": ts_text,
             "frame_id": frame_id,
             "type": "accident",
-            "state": "pending",   # 이후 dismissed / confirmed 확장 가능
+            "state": "pending",
             "cctv_name": status_data.get("cctv_name", "-"),
             "cctv_url": status_data.get("cctv_url", ""),
             "avg_speed": float(status_data.get("avg_speed", 0.0)),
@@ -291,6 +311,7 @@ class TunnelLiveService:
             "lane_count": int(status_data.get("lane_count", 0)),
             "snapshot_path": image_path,
             "events": status_data.get("events", []),
+            "ventilation": status_data.get("ventilation", {}),
         }
 
         json_path = os.path.join(self.event_log_dir, f"{event_id}.json")
@@ -300,12 +321,9 @@ class TunnelLiveService:
         print(f"📸 사고 이벤트 저장 완료: {event_id}")
 
     # =========================================================
-    # 2-3) [추가] 저장된 이벤트 목록 조회 뼈대
+    # 2-3) 저장된 이벤트 목록 조회
     # =========================================================
     def get_saved_event_list(self):
-        """
-        저장된 사고 json 목록을 최근순으로 반환
-        """
         items = []
 
         if not os.path.exists(self.event_log_dir):
@@ -355,7 +373,6 @@ class TunnelLiveService:
             health = self.cctv_health.get(url, {})
             fail_count = health.get("fail_count", 0)
 
-            # 너무 빨리 제외하지 않게 10회 기준
             if fail_count < 10:
                 healthy.append(cctv)
 
@@ -377,7 +394,6 @@ class TunnelLiveService:
         self.current_cctv = random.choice(candidates)
         self.active_cctv_name = None
 
-        # 기존 스트림 종료 유도
         self.stream_active = False
         self.stream_token += 1
 
@@ -395,6 +411,17 @@ class TunnelLiveService:
             "lane_reestimate_frame_count": 0,
             "lane_reestimate_window": 50,
             "minute_vehicle_count": 0,
+            "ventilation": {
+                "risk_score_base": 0.0,
+                "risk_score_final": 0.0,
+                "risk_level": "NORMAL",
+                "alarm": False,
+                "message": "공기질 상태 정상",
+                "vehicle_count_roi": 0,
+                "weighted_vehicle_count": 0.0,
+                "traffic_density": 0.0,
+                "avg_dwell_time_roi": 0.0,
+            }
         })
 
         print(f"✅ 랜덤 선택 CCTV(캐시): {self.current_cctv['name']}")
@@ -405,86 +432,62 @@ class TunnelLiveService:
         if not keyword:
             return None
 
-        # 1) 정확 일치 우선
+        def _reset_selected(cctv):
+            self.current_cctv = cctv
+            self.active_cctv_name = None
+            self.stream_active = False
+            self.stream_token += 1
+
+            self.ventilation_manager.vehicle_entry_memory.clear()
+            self.ventilation_manager.current_level = "NORMAL"
+            self.ventilation_manager.pending_level = "NORMAL"
+            self.ventilation_manager.pending_count = 0
+            self.ventilation_manager.release_count = 0
+
+            self._update_status({
+                "state": "READY",
+                "avg_speed": 0.0,
+                "vehicle_count": 0,
+                "accident": False,
+                "lane_count": 0,
+                "events": ["CCTV 변경됨 - 분석 초기화 중"],
+                "frame_id": 0,
+                "cctv_name": self.current_cctv["name"],
+                "cctv_url": self.current_cctv["url"],
+                "lane_reestimate_status": "idle",
+                "lane_reestimate_frame_count": 0,
+                "lane_reestimate_window": 50,
+                "minute_vehicle_count": 0,
+                "ventilation": {
+                    "risk_score_base": 0.0,
+                    "risk_score_final": 0.0,
+                    "risk_level": "NORMAL",
+                    "alarm": False,
+                    "message": "공기질 상태 정상",
+                    "vehicle_count_roi": 0,
+                    "weighted_vehicle_count": 0.0,
+                    "traffic_density": 0.0,
+                    "avg_dwell_time_roi": 0.0,
+                }
+            })
+
         for cctv in self.cached_cctv_list:
             if keyword == cctv["name"]:
-                self.current_cctv = cctv
-                self.active_cctv_name = None
-                self.stream_active = False
-                self.stream_token += 1
-
-                self._update_status({
-                    "state": "READY",
-                    "avg_speed": 0.0,
-                    "vehicle_count": 0,
-                    "accident": False,
-                    "lane_count": 0,
-                    "events": ["CCTV 변경됨 - 분석 초기화 중"],
-                    "frame_id": 0,
-                    "cctv_name": self.current_cctv["name"],
-                    "cctv_url": self.current_cctv["url"],
-                    "lane_reestimate_status": "idle",
-                    "lane_reestimate_frame_count": 0,
-                    "lane_reestimate_window": 50,
-                    "minute_vehicle_count": 0,
-                })
-
+                _reset_selected(cctv)
                 print(f"✅ 정확 이름으로 선택 CCTV: {self.current_cctv['name']}")
                 return self.current_cctv
 
-        # 2) 부분 일치
         for cctv in self.cached_cctv_list:
             if keyword in cctv["name"]:
-                self.current_cctv = cctv
-                self.active_cctv_name = None
-                self.stream_active = False
-                self.stream_token += 1
-
-                self._update_status({
-                    "state": "READY",
-                    "avg_speed": 0.0,
-                    "vehicle_count": 0,
-                    "accident": False,
-                    "lane_count": 0,
-                    "events": ["CCTV 변경됨 - 분석 초기화 중"],
-                    "frame_id": 0,
-                    "cctv_name": self.current_cctv["name"],
-                    "cctv_url": self.current_cctv["url"],
-                    "lane_reestimate_status": "idle",
-                    "lane_reestimate_frame_count": 0,
-                    "lane_reestimate_window": 50,
-                    "minute_vehicle_count": 0,
-                })
-
+                _reset_selected(cctv)
                 print(f"✅ 부분 이름으로 선택 CCTV: {self.current_cctv['name']}")
                 return self.current_cctv
 
-        # 3) 공백 제거 후 부분 일치
         normalized_keyword = keyword.replace(" ", "")
         for cctv in self.cached_cctv_list:
             normalized_name = cctv["name"].replace(" ", "")
             if normalized_keyword in normalized_name:
-                self.current_cctv = cctv
-                self.active_cctv_name = None
-                self.stream_active = False
-                self.stream_token += 1
-
-                self._update_status({
-                    "state": "READY",
-                    "avg_speed": 0.0,
-                    "vehicle_count": 0,
-                    "accident": False,
-                    "lane_count": 0,
-                    "events": ["CCTV 변경됨 - 분석 초기화 중"],
-                    "frame_id": 0,
-                    "cctv_name": self.current_cctv["name"],
-                    "cctv_url": self.current_cctv["url"],
-                    "lane_reestimate_status": "idle",
-                    "lane_reestimate_frame_count": 0,
-                    "lane_reestimate_window": 50,
-                    "minute_vehicle_count": 0,
-                })
-
+                _reset_selected(cctv)
                 print(f"✅ 정규화 이름으로 선택 CCTV: {self.current_cctv['name']}")
                 return self.current_cctv
 
@@ -500,7 +503,6 @@ class TunnelLiveService:
         print(f"🎥 CCTV 연결 시도: {name}")
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 
-        # open 자체를 조금 여유 있게 확인
         open_ok = False
         for _ in range(10):
             if cap.isOpened():
@@ -514,7 +516,6 @@ class TunnelLiveService:
             cap.release()
             return None
 
-        # 첫 프레임도 여러 번 시도
         frame_ok = False
         for _ in range(20):
             ok, frame = cap.read()
@@ -574,7 +575,6 @@ class TunnelLiveService:
     # 7) 스트리밍
     # =========================================================
     def generate_frames(self):
-        # 동시에 2개 이상 스트림이 돌지 않게 보호
         if not self.stream_lock.acquire(blocking=False):
             print("⚠️ 기존 스트림 실행 중 → 새 요청 거절")
             self._update_status({
@@ -586,8 +586,6 @@ class TunnelLiveService:
         self.stream_active = True
         tried_urls = set()
         cap = None
-
-        # 현재 스트림 세션 토큰 고정
         my_token = self.stream_token
 
         try:
@@ -618,6 +616,13 @@ class TunnelLiveService:
                 if self.active_cctv_name != selected_cctv["name"]:
                     self.pipeline.reset_pipeline()
                     self.active_cctv_name = selected_cctv["name"]
+
+                    self.ventilation_manager.vehicle_entry_memory.clear()
+                    self.ventilation_manager.current_level = "NORMAL"
+                    self.ventilation_manager.pending_level = "NORMAL"
+                    self.ventilation_manager.pending_count = 0
+                    self.ventilation_manager.release_count = 0
+
                     print(f"♻️ 스트림 시작 시 reset 완료: {self.active_cctv_name}")
 
             if cap is None or selected_cctv is None:
@@ -669,6 +674,13 @@ class TunnelLiveService:
                                 if self.active_cctv_name != selected_cctv["name"]:
                                     self.pipeline.reset_pipeline()
                                     self.active_cctv_name = selected_cctv["name"]
+
+                                    self.ventilation_manager.vehicle_entry_memory.clear()
+                                    self.ventilation_manager.current_level = "NORMAL"
+                                    self.ventilation_manager.pending_level = "NORMAL"
+                                    self.ventilation_manager.pending_count = 0
+                                    self.ventilation_manager.release_count = 0
+
                                     print(f"♻️ 재연결 후 reset 완료: {self.active_cctv_name}")
 
                                 self._update_status({
@@ -693,18 +705,16 @@ class TunnelLiveService:
                 fail_count = 0
                 frame_id += 1
 
-                # --------------------------------------------------
-                # 현재 선택된 CCTV 이름을 pipeline_adapter에 전달
-                # --------------------------------------------------
                 self.pipeline.current_cctv_name = selected_cctv["name"]
 
                 annotated, result = self.pipeline.process_frame(frame, frame_id)
 
-                # pipeline 결과에 현재 CCTV 정보 덧붙임
+                if result is None:
+                    result = {}
+
                 result["cctv_name"] = selected_cctv["name"]
                 result["cctv_url"] = selected_cctv["url"]
 
-                # lane reestimate 기본값 보정
                 if "lane_reestimate_status" not in result:
                     result["lane_reestimate_status"] = self.latest_status.get("lane_reestimate_status", "idle")
 
@@ -714,16 +724,16 @@ class TunnelLiveService:
                 if "lane_reestimate_window" not in result:
                     result["lane_reestimate_window"] = self.latest_status.get("lane_reestimate_window", 50)
 
-                # minute_vehicle_count 기본값 보정
                 if "minute_vehicle_count" not in result:
                     result["minute_vehicle_count"] = self.latest_status.get("minute_vehicle_count", 0)
 
+                result["ventilation"] = build_ventilation_result(
+                    result=result,
+                    ventilation_manager=self.ventilation_manager
+                )
+
                 self._update_status(result)
 
-                # --------------------------------------------------
-                # [추가] 사고 감지 시 현재 annotated 프레임 저장
-                # - annotated를 저장하면 박스/차선/상태가 그려진 화면 그대로 보관 가능
-                # --------------------------------------------------
                 self._save_accident_event(annotated, result)
 
                 ok, buffer = cv2.imencode(".jpg", annotated)
