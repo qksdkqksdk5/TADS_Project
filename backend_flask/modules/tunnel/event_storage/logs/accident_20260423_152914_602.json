@@ -1,0 +1,50 @@
+{
+  "event_id": "accident_20260423_152914_602",
+  "timestamp": "2026-04-23 15:29:14",
+  "frame_id": 602,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[영동선] [인천1]광교터널(인천1 1 고정)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/8278/RJn70KYEsNspsUYxGakpiM+u2E6AIn2Wy/QtHzpPZhFzJn/9N2WvsRVXbXYQk4pQfiaBaju7qUE0PeVF1qc0fCZbhwZaspcLhf80kU1rkuE=",
+  "avg_speed": 1.382,
+  "vehicle_count": 6,
+  "lane_count": 2,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260423_152914_602.jpg",
+  "events": [
+    "사고 감지"
+  ],
+  "ventilation": {
+    "frame_id": 602,
+    "lane_count": 2,
+    "traffic_state": "ACCIDENT",
+    "vehicle_count_roi": 5,
+    "weighted_vehicle_count": 6.503,
+    "roi_capacity": 20.0,
+    "traffic_density": 0.325,
+    "avg_speed_roi": 5.3,
+    "avg_dwell_time_roi": 3.02,
+    "avg_dwell_time_used": 3.02,
+    "tunnel_scale_factor": 1.0,
+    "risk_score_base": 0.258,
+    "risk_score_final": 0.408,
+    "risk_level": "CAUTION",
+    "alarm": true,
+    "message": "차량 밀집 증가, 공기질 저하 가능성 주의",
+    "hold_seconds": 0.0,
+    "detail": {
+      "n_norm": 0.3252,
+      "d_norm": 0.3252,
+      "t_norm": 0.0503,
+      "v_norm": 0.6625,
+      "state_bonus": 0.15,
+      "vehicle_weights": {
+        "122": 1.5,
+        "146": 1.5,
+        "151": 1.5,
+        "158": 0.8,
+        "152": 1.203
+      },
+      "bbox_ref_used": 3500.0
+    }
+  }
+}

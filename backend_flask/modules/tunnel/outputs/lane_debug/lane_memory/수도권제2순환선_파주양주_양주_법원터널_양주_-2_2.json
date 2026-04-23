@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수도권제2순환선(파주양주)] [양주] 법원터널(양주)-2/2",
+  "memory_key": "수도권제2순환선_파주양주_양주_법원터널_양주_-2_2",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.070420742034912,
+          767.8267822265625
+        ]
+      },
+      "x_mid": -89.32740497589111,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        34
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.6133754253387451,
+          795.192626953125
+        ]
+      },
+      "x_mid": 127.25520086288452,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        11
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 16:47:29"
+}

@@ -1,0 +1,51 @@
+{
+  "event_id": "accident_20260423_165009_998",
+  "timestamp": "2026-04-23 16:50:09",
+  "frame_id": 998,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[수도권제2순환선(봉담동탄)] 필봉산터널(봉담)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/8326/tD+wiAbI/YfgrvESpV516dvSLQqee4qTAwt2mAYU6ROZ7nh6OHstwhRYnwIwYTgE7dRUZ5jUPLTHJj3ItbzLVLKz35SnhJc7279XFCi08H0=",
+  "avg_speed": 2.09,
+  "vehicle_count": 7,
+  "lane_count": 2,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260423_165009_998.jpg",
+  "events": [
+    "사고 감지"
+  ],
+  "ventilation": {
+    "frame_id": 998,
+    "lane_count": 2,
+    "traffic_state": "ACCIDENT",
+    "vehicle_count_roi": 6,
+    "weighted_vehicle_count": 8.3,
+    "roi_capacity": 20.0,
+    "traffic_density": 0.415,
+    "avg_speed_roi": 4.06,
+    "avg_dwell_time_roi": 5.783,
+    "avg_dwell_time_used": 5.783,
+    "tunnel_scale_factor": 1.0,
+    "risk_score_base": 0.347,
+    "risk_score_final": 0.497,
+    "risk_level": "CAUTION",
+    "alarm": true,
+    "message": "차량 밀집 증가, 공기질 저하 가능성 주의",
+    "hold_seconds": 0.0,
+    "detail": {
+      "n_norm": 0.415,
+      "d_norm": 0.415,
+      "t_norm": 0.0964,
+      "v_norm": 0.5075,
+      "state_bonus": 0.15,
+      "vehicle_weights": {
+        "174": 1.5,
+        "176": 1.5,
+        "149": 1.5,
+        "178": 1.5,
+        "192": 1.5,
+        "180": 0.8
+      },
+      "bbox_ref_used": 3500.0
+    }
+  }
+}

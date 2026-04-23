@@ -1,0 +1,54 @@
+{
+  "event_id": "accident_20260423_172327_4341",
+  "timestamp": "2026-04-23 17:23:27",
+  "frame_id": 4341,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[수도권제1순환선] 사패터널(일산방향)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/5009/BNNvpG0Y2Yt4c+e/jjy1bGs5AuzI/P5VeGSCmSjJ01vSVAk75pkGVSWwsgrsXVsnjQMNGhZ8jTGFIQxWwXHMpT5rioJOCXdW3+zhm1su9pk=",
+  "avg_speed": 3.637,
+  "vehicle_count": 9,
+  "lane_count": 1,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260423_172327_4341.jpg",
+  "events": [
+    "사고 감지"
+  ],
+  "ventilation": {
+    "frame_id": 4341,
+    "lane_count": 1,
+    "traffic_state": "ACCIDENT",
+    "vehicle_count_roi": 9,
+    "weighted_vehicle_count": 10.261,
+    "roi_capacity": 10.0,
+    "traffic_density": 1.0,
+    "avg_speed_roi": 3.44,
+    "avg_dwell_time_roi": 1.233,
+    "avg_dwell_time_used": 1.233,
+    "tunnel_scale_factor": 1.0,
+    "risk_score_base": 0.691,
+    "risk_score_final": 0.841,
+    "risk_level": "WARNING",
+    "alarm": true,
+    "message": "체류시간 증가 및 혼잡 발생, 환기 상태 점검 권고",
+    "hold_seconds": 2.4,
+    "detail": {
+      "n_norm": 1.0,
+      "d_norm": 1.0,
+      "t_norm": 0.0206,
+      "v_norm": 0.43,
+      "state_bonus": 0.15,
+      "vehicle_weights": {
+        "2103": 1.222,
+        "2106": 1.5,
+        "2108": 1.5,
+        "2105": 1.339,
+        "2115": 0.8,
+        "2079": 0.8,
+        "2123": 1.5,
+        "2107": 0.8,
+        "2104": 0.8
+      },
+      "bbox_ref_used": 3500.0
+    }
+  }
+}

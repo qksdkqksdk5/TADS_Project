@@ -1,0 +1,48 @@
+{
+  "event_id": "accident_20260423_172223_3441",
+  "timestamp": "2026-04-23 17:22:23",
+  "frame_id": 3441,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[수도권제1순환선] 사패터널(일산방향)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/5009/BNNvpG0Y2Yt4c+e/jjy1bGs5AuzI/P5VeGSCmSjJ01vSVAk75pkGVSWwsgrsXVsnjQMNGhZ8jTGFIQxWwXHMpT5rioJOCXdW3+zhm1su9pk=",
+  "avg_speed": 3.507,
+  "vehicle_count": 3,
+  "lane_count": 1,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260423_172223_3441.jpg",
+  "events": [
+    "사고 감지"
+  ],
+  "ventilation": {
+    "frame_id": 3441,
+    "lane_count": 1,
+    "traffic_state": "ACCIDENT",
+    "vehicle_count_roi": 3,
+    "weighted_vehicle_count": 4.411,
+    "roi_capacity": 10.0,
+    "traffic_density": 0.441,
+    "avg_speed_roi": 1.55,
+    "avg_dwell_time_roi": 2.533,
+    "avg_dwell_time_used": 2.533,
+    "tunnel_scale_factor": 1.0,
+    "risk_score_base": 0.396,
+    "risk_score_final": 0.546,
+    "risk_level": "DANGER",
+    "alarm": true,
+    "message": "공기질 악화 위험 높음, 즉시 환기 대응 확인 필요",
+    "hold_seconds": 0.0,
+    "detail": {
+      "n_norm": 0.4411,
+      "d_norm": 0.4411,
+      "t_norm": 0.0422,
+      "v_norm": 0.1938,
+      "state_bonus": 0.15,
+      "vehicle_weights": {
+        "1625": 1.411,
+        "1638": 1.5,
+        "1644": 1.5
+      },
+      "bbox_ref_used": 3500.0
+    }
+  }
+}
