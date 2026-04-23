@@ -463,6 +463,7 @@ class FeatureExtractor:
                 "known_vehicle_count":   speed_known_count,  # 궤적 확인된 차량 수 (저규모 가드용)
             "occupied_cell_count":   occupied_cells,     # 현재 점유 셀 수 (저규모 가드용)
             "valid_cell_count":      valid_cell_count,   # 유효 셀 수 (분모 기준)
+            "count_ref":             float(getattr(self.cfg, "count_ref", 8.0)),  # congestion_judge 동적 occ_gate 계산용 기준 차량 수
 
             "rule_jam_score":        0.0,                    # jam_score (CJ 채움)
         }

@@ -231,7 +231,7 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  const { is_learning, relearning, waiting_stable, learning_progress, learning_total, level, jam_score } =
+  const { is_learning, relearning, waiting_stable, learning_progress, learning_total, level } =
     cameraData || {};
 
   return (
@@ -259,15 +259,15 @@ function MjpegPlayer({ host, cameraId, cameraData }) {
         <StatusOverlay
           is_learning={is_learning} relearning={relearning} waiting_stable={waiting_stable}
           learning_progress={learning_progress} learning_total={learning_total}
-          level={level} jam_score={jam_score}
+          level={level}
         />
       )}
     </>
   );
 }
 
-// ── 상태 오버레이 ─────────────────────────────────────────────
-function StatusOverlay({ is_learning, relearning, waiting_stable, learning_progress, learning_total, level, jam_score }) {
+// ── 상태 오버레이 — 학습 상태와 정체 레벨만 표시 (jam_score 제거)
+function StatusOverlay({ is_learning, relearning, waiting_stable, learning_progress, learning_total, level }) {
   if (waiting_stable) {
     return <div style={overlayBase}><span style={{ fontSize: '11px', color: '#f97316', fontWeight: 600 }}>안정 대기중...</span></div>;
   }
@@ -288,13 +288,13 @@ function StatusOverlay({ is_learning, relearning, waiting_stable, learning_progr
   if (relearning) {
     return <div style={overlayBase}><span style={{ fontSize: '11px', color: '#f97316', fontWeight: 600 }}>재보정 중...</span></div>;
   }
-  if (!level) return null;
+  // 원활이면 오버레이 없음 — 정상 상태에서 UI를 가리지 않도록
+  if (!level || level === 'SMOOTH') return null;
   return (
-    <div style={{ ...overlayBase, flexDirection: 'row', gap: '8px' }}>
+    <div style={{ ...overlayBase, flexDirection: 'row', gap: '6px', alignItems: 'center' }}>
       <span style={{ fontSize: '11px', fontWeight: 700, color: LEVEL_COLOR[level] || '#6b7280' }}>
         [{LEVEL_LABEL[level] || level}]
       </span>
-      <span style={{ fontSize: '11px', color: '#94a3b8' }}>jam: {(jam_score ?? 0).toFixed(2)}</span>
     </div>
   );
 }

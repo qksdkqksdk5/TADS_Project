@@ -10,90 +10,133 @@ import MetricsPanel from './MetricsPanel';
 // 학습 완료(is_learning=false) 상태의 최소 traffic_update 페이로드를 생성한다.
 function makeData(overrides = {}) {
   return {
-    level:             'SMOOTH',     // 기본: 원활
+    level:             'SMOOTH',     // 두 방향 중 최악 레벨
+    dir_label_a:       '상행',       // A방향 레이블 — 왼쪽 뱃지
+    dir_label_b:       '하행',       // B방향 레이블 — 오른쪽 뱃지
+    level_a:           'SMOOTH',     // A방향 레벨
+    level_b:           'SMOOTH',     // B방향 레벨
+    jam_a:             0.0,          // A방향 jam_score
+    jam_b:             0.0,          // B방향 jam_score
     is_learning:       false,        // 학습 완료
     relearning:        false,        // 재보정 아님
     learning_progress: 0,
     learning_total:    0,
-    jam_up:            0.0,          // 상행 정체지수
-    jam_down:          0.0,          // 하행 정체지수
-    vehicle_count:     0,            // 차량 수
-    affected:          0,            // 정체 차량 수
-    occupancy:         0.0,          // 점유율 (0~1)
-    avg_speed:         1.0,          // 정규화 속도 (0~100 스케일, 100 = 기준 대비 100%)
-    duration_sec:      0,            // 지속 시간
     ...overrides,
   };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// A. avg_speed 표시 — 이중 곱셈 금지
+// A. 방향별 뱃지 순서 — dir_label_a가 왼쪽, dir_label_b가 오른쪽
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('MetricsPanel — avg_speed 표시', () => {
+describe('MetricsPanel — 방향별 뱃지 순서', () => {
 
-  it('[Red] avg_speed=4.0 이면 "4%" 로 표시해야 한다 (400%가 아님)', () => {
-    // 백엔드 get_avg_speed()는 norm_speed_ratio * 100 을 반환한다.
-    // avg_speed=4.0 은 이미 "4%" 를 뜻한다.
-    // 프론트엔드가 * 100 을 또 하면 400% 가 됨 → 버그
-    render(<MetricsPanel data={makeData({ avg_speed: 4.0 })} />);
+  it('dir_label_a=상행이면 "상행" 레이블이 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData({ dir_label_a: '상행', dir_label_b: '하행' })} />);
 
-    // "기준 대비 4%" 가 화면에 있어야 한다
-    expect(screen.getByText(/기준 대비 4%/)).toBeTruthy();
-    // "400%" 는 화면에 없어야 한다
-    expect(screen.queryByText(/400%/)).toBeNull();
+    expect(screen.getByText('상행')).toBeTruthy();
+    expect(screen.getByText('하행')).toBeTruthy();
   });
 
-  it('avg_speed=100.0 이면 "기준 대비 100%" 로 표시해야 한다', () => {
-    // 기준 속도와 동일한 경우
-    render(<MetricsPanel data={makeData({ avg_speed: 100.0 })} />);
+  it('dir_label_a=하행이면 "하행" 레이블이 먼저 표시되어야 한다 (카메라 기준 왼쪽)', () => {
+    // 카메라 광학흐름 기준으로 A방향이 하행인 경우 — 하행이 왼쪽 뱃지
+    render(<MetricsPanel data={makeData({ dir_label_a: '하행', dir_label_b: '상행' })} />);
 
-    expect(screen.getByText(/기준 대비 100%/)).toBeTruthy();
-    // 10000% 는 절대 나오면 안 됨
-    expect(screen.queryByText(/10000%/)).toBeNull();
-  });
-
-  it('avg_speed=50.5 이면 반올림해서 "기준 대비 51%" 로 표시해야 한다', () => {
-    // Math.round(50.5) = 51
-    render(<MetricsPanel data={makeData({ avg_speed: 50.5 })} />);
-
-    expect(screen.getByText(/기준 대비 51%/)).toBeTruthy();
-  });
-
-  it('avg_speed=0.0 이면 "기준 대비 0%" 로 표시해야 한다', () => {
-    // 완전 정지 상태
-    render(<MetricsPanel data={makeData({ avg_speed: 0.0 })} />);
-
-    expect(screen.getByText(/기준 대비 0%/)).toBeTruthy();
-  });
-
-  it('학습 중(is_learning=true)이면 avg_speed 대신 "-" 를 표시해야 한다', () => {
-    // 학습 중엔 속도 지표가 의미 없으므로 "-" 표시
-    render(<MetricsPanel data={makeData({ is_learning: true })} />);
-
-    // 학습 중이면 "-" 가 상대 속도 칸에 표시됨 (여러 개가 있을 수 있어 getAllByText 사용)
-    const dashes = screen.getAllByText('-');
-    expect(dashes.length).toBeGreaterThan(0);
-    // 속도 수치는 표시되면 안 됨
-    expect(screen.queryByText(/기준 대비/)).toBeNull();
+    const labels = screen.getAllByText(/상행|하행/);
+    // 첫 번째로 등장하는 레이블이 하행이어야 한다
+    expect(labels[0].textContent).toBe('하행');
+    expect(labels[1].textContent).toBe('상행');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// B. 차량 수 / 정체 차량 표시
+// B. 레벨 + 지수 통합 뱃지 표시
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('MetricsPanel — 차량 수 표시', () => {
+describe('MetricsPanel — 레벨·지수 통합 뱃지', () => {
 
-  it('vehicle_count=34 이면 "34대" 로 표시해야 한다', () => {
-    render(<MetricsPanel data={makeData({ vehicle_count: 34 })} />);
+  it('level_a=SLOW 이면 A방향 뱃지에 "서행"이 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData({ level_a: 'SLOW', level_b: 'SMOOTH' })} />);
 
-    expect(screen.getByText('34대')).toBeTruthy();
+    expect(screen.getByText('서행')).toBeTruthy();
+    expect(screen.getByText('원활')).toBeTruthy();
   });
 
-  it('affected=2 이면 "2대" 로 표시해야 한다', () => {
-    render(<MetricsPanel data={makeData({ affected: 2 })} />);
+  it('level_a=JAM 이면 A방향 뱃지에 "정체"가 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData({ level_a: 'JAM', level_b: 'SLOW' })} />);
 
-    expect(screen.getByText('2대')).toBeTruthy();
+    expect(screen.getByText('정체')).toBeTruthy();
+    expect(screen.getByText('서행')).toBeTruthy();
+  });
+
+  it('jam_a=0.73, jam_b=0.12 이면 두 수치가 소수점 2자리로 표시되어야 한다', () => {
+    // 정체 레벨과 지수가 하나의 뱃지에 합쳐지므로 수치도 같이 표시되어야 한다
+    render(<MetricsPanel data={makeData({ jam_a: 0.73, jam_b: 0.12 })} />);
+
+    expect(screen.getByText('0.73')).toBeTruthy();
+    expect(screen.getByText('0.12')).toBeTruthy();
+  });
+
+  it('별도 "정체 지수" 섹션 레이블이 없어야 한다 (통합 뱃지로 대체)', () => {
+    // 이전 구조에서는 "정체 지수"라는 별도 섹션이 있었으나 통합 후 제거
+    render(<MetricsPanel data={makeData()} />);
+
+    expect(screen.queryByText('정체 지수')).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// C. 학습 중 상태
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('MetricsPanel — 학습 중 상태', () => {
+
+  it('is_learning=true 이면 "학습 중" 단일 뱃지가 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData({ is_learning: true })} />);
+
+    expect(screen.getByText('학습 중')).toBeTruthy();
+    // 방향 레이블은 표시되면 안 됨
+    expect(screen.queryByText('상행')).toBeNull();
+    expect(screen.queryByText('하행')).toBeNull();
+  });
+
+  it('relearning=true 이면 "재보정 중" 단일 뱃지가 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData({ relearning: true })} />);
+
+    expect(screen.getByText('재보정 중')).toBeTruthy();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// D. 방향 기준 툴팁 (레벨 기준은 팝업 헤더로 이동됨)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('MetricsPanel — 방향 기준 툴팁', () => {
+
+  it('기본 상태에서는 방향 기준 툴팁이 숨겨져 있어야 한다', () => {
+    render(<MetricsPanel data={makeData()} />);
+
+    // 툴팁 제목 "방향 기준 (CCTV 화면 기준)"은 hover 전에 보이면 안 됨
+    expect(screen.queryByText(/CCTV 화면 기준/)).toBeNull();
+  });
+
+  it('레벨 기준 박스("레벨 기준")가 MetricsPanel에 없어야 한다 (팝업 헤더로 이동)', () => {
+    // 레벨 기준은 CameraPopup 헤더로 이동했으므로 MetricsPanel에 없어야 한다
+    render(<MetricsPanel data={makeData()} />);
+
+    expect(screen.queryByText('레벨 기준')).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// E. 정체 예측 플레이스홀더
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('MetricsPanel — 정체 예측 플레이스홀더', () => {
+
+  it('"정체 예측 준비 중" 문구가 표시되어야 한다', () => {
+    render(<MetricsPanel data={makeData()} />);
+
+    expect(screen.getByText('정체 예측 준비 중')).toBeTruthy();
   });
 });

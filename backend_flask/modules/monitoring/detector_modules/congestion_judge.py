@@ -37,10 +37,12 @@ def compute_jam_score_fallback(x_t: dict) -> float:
     정상 차량(빠른 통과): ema 낮게 유지 → cds 낮음
     정체 차량(같은 셀 오래 머묾): ema 서서히 누적 → cds 높음
 
-    설계 목표 (smooth<0.25, slow<0.55, JAM≥0.55):
-      - 원활 (cds=0.05, occ=0.05): jam=0.045+0.015=0.060 → SMOOTH
-      - 서행 (cds=0.20, occ=0.15): jam=0.180+0.045=0.225 → SLOW
-      - 정체 (cds=0.60, occ=0.25): jam=0.540+0.075=0.615 → JAM
+    설계 목표 (smooth<0.30, slow<0.60, JAM≥0.60):
+      - 원활 (cds=0.05, dwell=0.00): core≈0.028 → SMOOTH
+      - 서행 (cds=0.20, dwell=0.10): core≈0.210 → SLOW
+      - 정체 (cds=0.60, dwell=0.50): core≈0.830 → JAM
+
+    ※ occ_gate 포화점: count_ref/valid_cell_count+0.04 (valid=80, count_ref=8 기준 ≈0.14)
 
     Args:
         x_t: feature 벡터 dict.
@@ -51,10 +53,10 @@ def compute_jam_score_fallback(x_t: dict) -> float:
     import math
 
     # ── feature 추출 ──────────────────────────────────────────────────
-    cds      = _clip(x_t.get("cell_dwell_score", 0.0), 0.0, 1.0)  # 셀 누적 점유 EMA (핵심 정체 신호)
+    cds      = _clip(x_t.get("cell_dwell_score", 0.0), 0.0, 1.0)  # 셀 누적 점유 EMA (교통 밀도 배경 신호)
     flow_occ = _clip(x_t.get("flow_occupancy",   0.0), 0.0, 1.0)  # 차량 점유 셀 / 유효 셀 (순간 밀도)
     persist  = _clip(x_t.get("cell_persistence", 0.0), 0.0, 1.0)  # 30프레임 전·현재 점유셀 Jaccard (체류 지속성)
-    dwell    = _clip(x_t.get("dwell_cell_ratio", 0.0), 0.0, 1.0)  # 체류 셀 / 유효 셀 (15f+ 머문 셀 비율)
+    dwell    = _clip(x_t.get("dwell_cell_ratio", 0.0), 0.0, 1.0)  # 체류 셀 / 유효 셀 (15f+ 머문 셀 비율 — 주 신호)
 
     known_cnt    = int(x_t.get("known_vehicle_count", 0))  # 궤적 확인된 차량 수
     occupied_cnt = int(x_t.get("occupied_cell_count", 0))  # 현재 점유 셀 수
@@ -67,23 +69,31 @@ def compute_jam_score_fallback(x_t: dict) -> float:
         return _clip(0.08 * math.sqrt(flow_occ), 0.0, 0.10)  # 최대 0.10으로 제한
 
     # ── 2) 규모 게이트: 차량 수·점유율이 충분할수록 체류 신호를 신뢰 ──
-    # count_gate: 2대 이하=0.0, 10대=1.0 — 소수 차량 오탐 억제
-    # occ_gate  : flow_occ 0.06 이하=0.0, 0.26 이상=1.0 — 빈 도로에서 cds 억제
+    # count_gate: 2대 이하=0.0, 12대=1.0 — 소수 차량 오탐 억제 (분모 8→10: 6fps 저감지 환경 보정)
+    # occ_gate  : count_ref/valid_cell_count 동적 포화점 — 고정 0.26 제거
     # scale_gate: 두 조건 모두 충족해야 체류 신호를 최대 반영
-    count_gate = _clip((known_cnt - 2) / 8.0, 0.0, 1.0)      # 2대 이하는 0, 10대면 1.0
-    occ_gate   = _clip((flow_occ - 0.06) / 0.20, 0.0, 1.0)   # 점유율 낮으면 0, 0.26 이상이면 1.0
-    scale_gate = count_gate * occ_gate                         # 두 게이트의 곱 (AND 조건)
+    count_gate = _clip((known_cnt - 2) / 10.0, 0.0, 1.0)      # 2대 이하는 0, 12대면 1.0 (13→10)
+    _count_ref_val  = float(x_t.get("count_ref", 8.0))         # config.count_ref (기준 차량 수, 기본 8)
+    _valid_cnt      = max(int(x_t.get("valid_cell_count", 400)), 1)  # 방향별 유효 셀 수 (기본 400)
+    _occ_gate_lo    = 0.04                                      # 최소 점유율 하한 (4셀 미만 완전 억제)
+    _occ_gate_range = max(0.05, _count_ref_val / _valid_cnt)    # 기준 밀도: count_ref/valid (고정 0.30 제거)
+    occ_gate   = _clip((flow_occ - _occ_gate_lo) / _occ_gate_range, 0.0, 1.0)  # 기준 밀도 이상이면 1.0
+    scale_gate = count_gate * occ_gate                          # 두 게이트의 곱 (AND 조건)
 
     # ── 3) 핵심 jam 계산 ─────────────────────────────────────────────
-    # cds    × 1.10: EMA 누적 체류 강도 (주 신호) — 차량이 셀에 오래 머물수록 상승
-    # persist× 0.25: Jaccard 지속성 보조 — 점유 패턴이 30프레임 전과 유사할수록 상승
-    # dwell  × 0.10: sqrt 비선형 — 체류 셀 비율의 초기 상승 빠르게 반영
+    # [설계 원칙]
+    # cds: "셀이 얼마나 자주 점유됐는가" — 차량이 빠르게 지나가도 셀 점유 → 교통 밀도 배경 신호
+    # dwell: "15프레임(≈0.5초) 이상 같은 셀에 머문 차량 비율" — 진짜 정체 주 신호로 승격
+    # persist: Jaccard 지속성 보조 — 점유 패턴이 30프레임 전과 유사할수록 상승
+    # cds   × 0.55: 1.90→0.55 — 교통량 배경 신호 (단독으로 JAM 유발 불가)
+    # dwell × 1.00: 0.10×√dwell→1.00×dwell — 진짜 정체 주 신호로 승격
+    # persist × 0.20: 0.25→0.20 — 보조 신호 소폭 감소
     # 위 세 신호 모두 scale_gate로 스케일 — 저규모에서 과대 반응 방지
     # 0.12×sqrt(flow_occ): scale_gate 없는 기저 신호 — 차량 많을수록 최소 jam 보장
     core = (
-        1.90 * cds                   # 셀 누적 EMA (주 신호) — 1.10→1.90: _lane_cell_count 버그 수정으로 cds가 낮아진 것 보정
-        + 0.25 * persist             # 점유 지속성 (보조)
-        + 0.10 * math.sqrt(dwell)    # 체류 셀 비율 (sqrt 비선형)
+        0.55 * cds                   # 교통 밀도 배경 신호 (1.90→0.55: 단독 JAM 유발 방지)
+        + 0.20 * persist             # 점유 지속성 보조 (0.25→0.20)
+        + 1.00 * dwell               # 15f+ 체류 셀 비율 (0.10×√dwell→1.00×dwell: 진짜 정체 주 신호)
     )
 
     jam = core * scale_gate + 0.12 * math.sqrt(flow_occ)  # 규모 게이트 적용 + 기저 신호

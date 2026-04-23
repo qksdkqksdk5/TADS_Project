@@ -191,6 +191,14 @@ _FRAME_POOL = _GeventThreadPool(maxsize=16)
 # 열기에 실패한다. 이 잠금으로 VideoCapture open()을 직렬화해 문제를 방지한다.
 _CAP_OPEN_LOCK = threading.Lock()
 
+# ── ITS URL 갱신 직렬화 잠금 ──────────────────────────────────────────────────
+# 여러 MonitoringDetector 스레드가 동시에 _get_fresh_url() 을 호출하면
+# _cctv_cache.pop() 경쟁이 발생해 일부 카메라가 빈 캐시를 보고 API 재호출에 실패,
+# 만료된(404) URL 을 그대로 사용하게 된다.
+# 이 잠금으로 pop+재조회를 직렬화해 경쟁을 없애고,
+# 두 번째 이후 스레드는 첫 번째 스레드가 갱신한 캐시를 재사용한다.
+_FRESH_URL_LOCK = threading.Lock()
+
 
 def _open_rtsp_cap(url: str):
     """
@@ -295,11 +303,13 @@ class MonitoringDetector(BaseDetector):
         self._dir_label_b    = "하행"
         self._valid_cells_a  = 1
         self._valid_cells_b  = 1
+        self._dir_a_is_left  = True    # A방향이 화면 왼쪽인지 여부 — 학습 완료 후 갱신
         self._track_direction: dict = {}   # {track_id: 'a' | 'b'}
 
         # ── Socket.IO emit / REST API 공유 상태 ──────────────────────────
         # frame_lock(BaseDetector 제공)으로 스레드 안전하게 접근
-        self._prev_level        = "SMOOTH"   # 레벨 전환 감지용
+        self._prev_level_a      = "SMOOTH"   # 방향 A(상행 or 하행) 레벨 전환 감지용 — 방향별 독립 알림을 위해 분리
+        self._prev_level_b      = "SMOOTH"   # 방향 B(하행 or 상행) 레벨 전환 감지용
         self._wrongway_alerted  = set()      # 이미 알림 보낸 역주행 track_id
         self.latest_tracks_info = []         # Step 4 REST API용
         self.latest_speeds      = {}         # Step 4 REST API용
@@ -370,22 +380,52 @@ class MonitoringDetector(BaseDetector):
 
         try:
             from modules.monitoring import its_helper   # 지연 임포트로 순환 참조 방지
+            import time as _time
 
-            # 캐시를 강제 무효화해 ITS API에서 신선한 토큰을 받는다.
-            # 캐시가 살아 있으면 만료된 URL 이 그대로 반환되기 때문이다.
-            its_helper._cctv_cache.pop(self._road_key, None)
+            # ── 직렬화 잠금으로 동시 pop 경쟁 방지 ──────────────────────────
+            # 여러 카메라 스레드가 동시에 이 메서드를 호출하면
+            #   스레드 A: pop → 캐시 비워짐 → API 호출 중
+            #   스레드 B: pop(이미 비어있음) → API 호출(A 결과 덮어씀 or 실패)
+            # 의 경쟁이 생겨 일부 카메라가 카메라 목록에서 자신을 찾지 못한다.
+            # 잠금 안에서: 캐시가 방금 갱신됐으면(만료까지 5초 이상 남음) pop 없이
+            # 재사용하고, 그렇지 않으면 pop 후 ITS API 를 직접 재호출한다.
+            with _FRESH_URL_LOCK:
+                cached = its_helper._cctv_cache.get(self._road_key)   # 현재 캐시 확인
+                now    = _time.time()
 
-            # ITS API 재호출 → 신선한 토큰이 담긴 카메라 목록 획득
-            cameras = its_helper.get_cctv_list(self._road_key)
+                # 캐시가 5초 이상 됐으면 항상 강제 무효화 후 ITS API 재호출.
+                # ITS URL 토큰은 15~30초 내 만료될 수 있다.
+                # 직렬화 잠금(_FRESH_URL_LOCK) 덕분에 "5초 이내 갱신된 캐시"는
+                # 다음 카메라가 재사용하므로 API 과다 호출 없이도 신선한 URL을 보장한다.
+                # (이전 30초 임계값: 카메라 4-7이 12-28초 된 URL을 받아 만료 → 스트림 열기 실패)
+                cache_age = (now - (cached['expires'] - its_helper.CCTV_TTL)) if cached else 999
+                if not cached or cache_age > 5:
+                    # 캐시가 없거나 5초 이상 됐으면 강제 무효화
+                    its_helper._cctv_cache.pop(self._road_key, None)
+                    print(f"🔃 [{self.camera_id}] URL 갱신 (캐시 {cache_age:.1f}초 경과 → pop+재조회)")
+                else:
+                    # 5초 이내 갱신된 캐시 → 재사용 (API 절약)
+                    print(f"♻️  [{self.camera_id}] URL 캐시 재사용 (캐시 {cache_age:.1f}초 경과)")
 
-            # camera_id 가 일치하는 항목의 URL을 꺼낸다
-            for cam in cameras:
-                if cam['camera_id'] == self.camera_id:
-                    new_url = cam['url']
-                    if new_url and new_url != self.url:
-                        print(f"🔄 [{self.camera_id}] ITS URL 토큰 갱신 완료")
-                        self.url = new_url   # reconnect() 에서도 최신 URL을 쓸 수 있도록 갱신
-                    return new_url
+                # get_cctv_list: 캐시가 살아 있으면 캐시 반환, 없으면 ITS API 호출
+                cameras = its_helper.get_cctv_list(self._road_key)
+
+                # camera_id 일치 항목의 URL 추출 (잠금 안에서 race-free 하게 탐색)
+                new_url = next(
+                    (c['url'] for c in cameras if c['camera_id'] == self.camera_id),
+                    None,
+                )
+
+            # 잠금 해제 후 결과 적용
+            if new_url:
+                url_changed = (new_url != self.url)
+                self.url = new_url   # reconnect() 에서도 최신 URL을 쓸 수 있도록 갱신
+                if url_changed:
+                    print(f"🔄 [{self.camera_id}] ITS URL 토큰 갱신 완료")
+                return new_url
+
+            # 목록에 없는 경우 — 카메라가 ITS 에서 잠시 제외됐을 가능성
+            print(f"⚠️  [{self.camera_id}] ITS 목록에서 카메라를 찾지 못함 — 기존 URL 유지")
 
         except Exception as e:
             # 갱신 실패가 전체 모니터링을 중단시켜선 안 된다 → 기존 URL로 계속 시도
@@ -472,11 +512,12 @@ class MonitoringDetector(BaseDetector):
               f"A={self._dir_label_a} B={self._dir_label_b}")
 
     def _compute_direction_cell_counts(self):
-        """방향별 유효 셀 수를 계산해 TrafficAnalyzer에 주입한다."""
+        """방향별 유효 셀 수를 계산해 TrafficAnalyzer에 주입하고, 화면 좌/우 위치를 판별한다."""
         if self._ref_direction is None:
             return
         ref_x, ref_y   = self._ref_direction
         count_a, count_b = 0, 0
+        col_sum_a, col_sum_b = 0, 0   # 각 방향 셀의 컬럼(가로) 좌표 합계
         for r in range(self.flow.grid_size):
             for c in range(self.flow.grid_size):
                 if self.flow.count[r, c] <= 0:
@@ -485,16 +526,24 @@ class MonitoringDetector(BaseDetector):
                 vy  = float(self.flow.flow[r, c, 1])
                 cos = vx * ref_x + vy * ref_y
                 if cos >= self.cfg.lane_cos_threshold:
-                    count_a += 1
+                    count_a   += 1
+                    col_sum_a += c   # c가 작을수록 화면 왼쪽
                 else:
-                    count_b += 1
+                    count_b   += 1
+                    col_sum_b += c
         self._valid_cells_a = max(count_a, 1)
         self._valid_cells_b = max(count_b, 1)
         if self.traffic_analyzer_a:
             self.traffic_analyzer_a.set_valid_cell_count(self._valid_cells_a)
         if self.traffic_analyzer_b:
             self.traffic_analyzer_b.set_valid_cell_count(self._valid_cells_b)
-        print(f"📐 [{self.camera_id}] 방향별 셀 A={self._valid_cells_a} B={self._valid_cells_b}")
+
+        # A방향 셀의 평균 컬럼 < B방향 셀의 평균 컬럼 → A가 화면 왼쪽
+        avg_col_a = col_sum_a / count_a if count_a > 0 else 0
+        avg_col_b = col_sum_b / count_b if count_b > 0 else self.flow.grid_size
+        self._dir_a_is_left = avg_col_a < avg_col_b   # True: A=왼쪽, False: B=왼쪽
+        print(f"📐 [{self.camera_id}] 방향별 셀 A={self._valid_cells_a}(avg_col={avg_col_a:.1f}) "
+              f"B={self._valid_cells_b}(avg_col={avg_col_b:.1f}) → A_left={self._dir_a_is_left}")
 
     def _classify_direction(self, fx, fy) -> str:
         """flow_map 보간 기반 방향 분류 (fallback)."""
@@ -534,6 +583,18 @@ class MonitoringDetector(BaseDetector):
         jam_b = ta_b.get_jam_score() if ta_b else 0.0
         level = self._worst_level()
 
+        # ── 방향 레이블 기반 상/하행 jam_score 매핑 ──────────────────────────
+        # 학습 완료 후 _dir_label_a는 "UP"(상행) 또는 "DOWN"(하행)으로 자동 설정된다.
+        # 초기값 "상행"도 UP 취급 — 학습 전 기본 가정(a=상행)을 유지한다.
+        # 이 매핑이 없으면 카메라 방향에 따라 a채널이 실제 하행임에도 상행으로 표시된다.
+        _a_is_up   = self._dir_label_a in ("UP", "상행")  # a채널이 상행이면 True
+        _jam_up    = jam_a if _a_is_up else jam_b          # 실제 상행 jam_score
+        _jam_down  = jam_b if _a_is_up else jam_a          # 실제 하행 jam_score
+        # 프론트 뱃지 순서용 한국어 레이블 — A방향이 왼쪽, B방향이 오른쪽으로 고정된다.
+        # 카메라마다 광학흐름 기준이 다르므로, A의 실제 방향(상행/하행)에 따라 왼쪽 뱃지가 결정된다.
+        _dir_label_a_kr = "상행" if _a_is_up else "하행"   # A방향 한국어 레이블
+        _dir_label_b_kr = "하행" if _a_is_up else "상행"   # B방향 한국어 레이블
+
         # learning_progress 계산
         if st.is_learning:
             progress = min(st.frame_num, cfg.learning_frames)
@@ -550,15 +611,31 @@ class MonitoringDetector(BaseDetector):
         vc_a = ta_a._vehicle_count if ta_a else 0
         vc_b = ta_b._vehicle_count if ta_b else 0
 
+        # 방향별 실제 레벨 — _a_is_up 매핑에 따라 상/하행에 올바른 레벨을 할당한다.
+        # 히스테리시스가 적용된 값을 그대로 사용하기 위해 TrafficAnalyzer에서 직접 읽는다.
+        _level_a = ta_a.get_congestion_level() if ta_a else "SMOOTH"
+        _level_b = ta_b.get_congestion_level() if ta_b else "SMOOTH"
+        _level_up   = _level_a if _a_is_up else _level_b   # 실제 상행 레벨
+        _level_down = _level_b if _a_is_up else _level_a   # 실제 하행 레벨
+
         payload = {
             "camera_id":         self.camera_id,
             "lat":               self.lat,
             "lng":               self.lng,
             "location":          self.location,
             "level":             level,
+            "level_up":          _level_up,              # 상행 방향 정체 레벨 (jam_up 대응)
+            "level_down":        _level_down,             # 하행 방향 정체 레벨 (jam_down 대응)
+            "dir_label_a":       _dir_label_a_kr,         # A방향 레이블(상행/하행)
+            "dir_label_b":       _dir_label_b_kr,         # B방향 레이블(하행/상행)
+            "dir_a_is_left":     self._dir_a_is_left,     # A방향이 화면 왼쪽이면 True — 뱃지 순서 결정용
+            "level_a":           _level_a,                # A방향(왼쪽 뱃지) 정체 레벨
+            "level_b":           _level_b,                # B방향(오른쪽 뱃지) 정체 레벨
             "jam_score":         round((jam_a + jam_b) / 2, 3),
-            "jam_up":            round(jam_a, 3),
-            "jam_down":          round(jam_b, 3),
+            "jam_up":            round(_jam_up,   3),   # 광학흐름 기반 실제 상행 값
+            "jam_down":          round(_jam_down, 3),   # 광학흐름 기반 실제 하행 값
+            "jam_a":             round(jam_a, 3),        # A방향(왼쪽 뱃지) jam_score
+            "jam_b":             round(jam_b, 3),        # B방향(오른쪽 뱃지) jam_score
             "vehicle_count":     vc_a + vc_b,
             "affected":          (
                 (ta_a.get_affected_vehicles() if ta_a else 0) +
@@ -584,25 +661,49 @@ class MonitoringDetector(BaseDetector):
         }
         self.socketio.emit('traffic_update', payload)
 
-        # ── 레벨 전환 감지 ──
-        if level != self._prev_level:
+        # ── 방향별 레벨 전환 감지 ─────────────────────────────────────────
+        # 각 방향의 이전 레벨을 독립적으로 추적한다.
+        # 기존 단일 _prev_level 방식은 한 방향이 이미 악화된 상태에서
+        # 다른 방향이 처음 막히기 시작해도 알림이 발화되지 않는 문제가 있었다.
+        la = ta_a.get_congestion_level() if ta_a else "SMOOTH"  # a방향 현재 레벨
+        lb = ta_b.get_congestion_level() if ta_b else "SMOOTH"  # b방향 현재 레벨
+
+        # a방향이 상행이면 (label_a=상행, label_b=하행), 아니면 반대
+        _label_a = "상행" if _a_is_up else "하행"
+        _label_b = "하행" if _a_is_up else "상행"
+
+        # (현재 레벨, 이전 레벨 속성명, 방향 레이블, 해당 방향 jam_score) 쌍으로 순회
+        for _cur, _prev_attr, _dir_label, _dir_jam in (
+            (la, "_prev_level_a", _label_a, jam_a),
+            (lb, "_prev_level_b", _label_b, jam_b),
+        ):
+            _prev = getattr(self, _prev_attr)
+            if _cur == _prev:  # 레벨 변화 없으면 건너뜀
+                continue
+
+            # 방향별 레벨 전환 로그 이벤트
             self.socketio.emit('level_change', {
                 "camera_id":  self.camera_id,
-                "from_level": self._prev_level,
-                "to_level":   level,
-                "jam_score":  payload["jam_score"],
+                "direction":  _dir_label,           # 어느 방향인지 명시
+                "from_level": _prev,
+                "to_level":   _cur,
+                "jam_score":  round(_dir_jam, 3),   # 해당 방향 jam_score
                 "timestamp":  datetime.utcnow().isoformat(),
             })
-            if level in ("SLOW", "JAM"):
+
+            # SLOW 또는 JAM 진입 시에만 이상 알림 발화
+            if _cur in ("SLOW", "JAM"):
                 self.socketio.emit('anomaly_alert', {
                     "camera_id":   self.camera_id,
                     "event_type":  "CONGESTION",
-                    "level":       level,
-                    "jam_score":   payload["jam_score"],
+                    "level":       _cur,
+                    "direction":   _dir_label,       # 어느 방향이 막혔는지
+                    "jam_score":   round(_dir_jam, 3),
                     "detected_at": datetime.utcnow().isoformat(),
                     "location":    self.location,
                 })
-            self._prev_level = level
+
+            setattr(self, _prev_attr, _cur)  # 이전 레벨 갱신
 
         # ── 디버그 정보 갱신 ──
         total_cells = cfg.grid_size ** 2
@@ -822,6 +923,13 @@ class MonitoringDetector(BaseDetector):
         _base_jump_px     = getattr(cfg, 'frame_skip_jump_px', 80.0)
         _jump_thr_dynamic = _base_jump_px
 
+        # ── timestamp gap 감지 변수 ───────────────────────────────────────
+        # CAP_PROP_POS_MSEC 기반: 1~3프레임 partial drop 시 jump 임계값 확대
+        # _prev_cap_ts_ms: 직전 프레임 스트림 타임스탬프 (ms) — 첫 프레임은 None
+        # _is_time_gap: 이번 프레임이 타임스탬프 갭 직후이면 True
+        _prev_cap_ts_ms  = None  # 직전 프레임 타임스탬프 (ms), 첫 프레임에는 미정
+        _is_time_gap     = False  # 타임스탬프 갭 플래그 (partial drop 감지)
+
         # ── 로그 노이즈 억제 변수 ────────────────────────────────────────
         # 학습 진행률 마일스톤: 이미 출력한 10% 단위 % 값을 저장해 중복 출력 방지
         _learn_logged_pcts:   set = set()   # 초기 학습 마일스톤 (10, 20, ..., 100)
@@ -829,7 +937,11 @@ class MonitoringDetector(BaseDetector):
         # 프레임 스킵 쿨타임: 마지막으로 스킵 로그를 찍은 프레임 번호
         _last_skip_log_frame: int = -_SKIP_LOG_COOL   # 초기값 → 첫 감지 시 바로 출력
 
-        print(f"📚 [{self.camera_id}] 학습 모드 시작 (목표: {cfg.learning_frames}프레임 ≈ {cfg.learning_frames/fps:.0f}초)")
+        # 캐시 히트 여부에 따라 시작 모드 로그 출력
+        if st.is_learning:
+            print(f"📚 [{self.camera_id}] 학습 모드 시작 (목표: {cfg.learning_frames}프레임 ≈ {cfg.learning_frames/fps:.0f}초)")
+        else:
+            print(f"🔍 [{self.camera_id}] 탐지 모드로 시작 (캐시 히트 — 학습 생략)")
 
         # ── 메인 루프 ────────────────────────────────────────────────
         while self.is_running and self.cap.isOpened():
@@ -899,6 +1011,29 @@ class MonitoringDetector(BaseDetector):
                 # 200px 상한 = 차량이 1프레임에 화면 너비의 ~31% 를 이동해야 감지 → 충분한 여유.
                 _jump_thr_dynamic = min(_base_jump_px * min(_scale, 5.0),
                                         getattr(cfg, 'frame_skip_jump_px_max', 200.0))
+
+            # ── CAP_PROP_POS_MSEC 기반 timestamp gap 감지 ────────────────────
+            # 1~3프레임 partial drop 시: adj_diff는 정상(다른 장면이므로),
+            # 차량 displacement는 정상 범위 내일 수 있지만 시간 갭이 발생.
+            # 갭 감지 시: solo_jump 임계값을 시간 비율만큼 확대하여 정상 이동을
+            # jump로 오판하는 것을 방지 + 속도 벡터에 갭 보정 적용.
+            _cur_cap_ts_ms  = self.cap.get(cv2.CAP_PROP_POS_MSEC)  # 현재 프레임 스트림 타임스탬프 (ms)
+            _time_gap_ratio = 1.0  # 기본값: 갭 없음 (비율 1.0 = 정상)
+            _is_time_gap    = False  # 갭 플래그 초기화 (매 프레임 갱신)
+            if _prev_cap_ts_ms is not None and _cur_cap_ts_ms > 0:
+                _ts_delta_ms  = _cur_cap_ts_ms - _prev_cap_ts_ms  # 프레임 간 실제 시간 차이 (ms)
+                _expected_ms  = 1000.0 / max(fps, 1.0)  # 예상 프레임 간격 (ms) — fps 기반
+                if _expected_ms > 0 and _ts_delta_ms > 0:
+                    _time_gap_ratio = _ts_delta_ms / _expected_ms  # 실제/예상 비율 (1.0 = 정상)
+                    if _time_gap_ratio > 2.5 and _ts_delta_ms > 400:  # 2.5배 이상 + 0.4초 이상
+                        _is_time_gap = True  # partial drop 확인 → jump 임계값 확대
+                        print(
+                            f"[F:{st.frame_num}] ⏱ 타임스탬프 갭 감지 "
+                            f"(간격={_ts_delta_ms:.0f}ms, "
+                            f"예상={_expected_ms:.0f}ms, "
+                            f"비율={_time_gap_ratio:.1f}x)"
+                        )
+            _prev_cap_ts_ms = _cur_cap_ts_ms  # 다음 프레임 비교용 저장
 
             # YOLO+ByteTrack: 추론도 C 익스텐션 블로킹 → OS 스레드로 실행
             tracks = _FRAME_POOL.apply(self.tracker.track, (frame,))
@@ -1116,11 +1251,36 @@ class MonitoringDetector(BaseDetector):
                 is_wrong = False
 
                 # ── 속도 계산 (velocity_window 이상 궤적 있을 때) ──
+                # endpoint-to-endpoint 대신 per-frame 변위 중앙값을 사용.
+                # 단일 프레임 끊김·순간이동이 있어도 중앙값은 영향 없음.
+                # IQR 이상치 필터 추가: partial drop 후 궤적에 남은 이상 변위 제거.
+                # 2~3프레임 연속 드롭 시 velocity_window 내 이상치 비율 20~30%가 돼
+                # 중앙값이 이상치 방향으로 편향될 수 있음 → IQR로 방어.
                 if len(traj) >= cfg.velocity_window:
-                    vdx = traj[-1][0] - traj[-cfg.velocity_window][0]
-                    vdy = traj[-1][1] - traj[-cfg.velocity_window][1]
-                    mag = np.sqrt(vdx**2 + vdy**2)
-                    speeds[tid] = mag
+                    _w   = cfg.velocity_window  # 속도 계산 윈도우 크기
+                    _si  = len(traj) - _w  # 윈도우 시작 인덱스
+                    # per-frame 변위 리스트: 인접 포인트 간 x/y 차이
+                    _pfx = [traj[_si+i+1][0] - traj[_si+i][0] for i in range(_w-1)]
+                    _pfy = [traj[_si+i+1][1] - traj[_si+i][1] for i in range(_w-1)]
+
+                    # IQR 이상치 필터: per-frame 변위 크기의 Q1~Q3 범위 밖 제거
+                    _pf_mags = [(_pfx[i]**2 + _pfy[i]**2)**0.5 for i in range(len(_pfx))]
+                    if len(_pf_mags) >= 5:  # 충분한 샘플 수일 때만 IQR 적용
+                        _q1    = float(np.percentile(_pf_mags, 25))  # 1사분위수
+                        _q3    = float(np.percentile(_pf_mags, 75))  # 3사분위수
+                        _iqr   = _q3 - _q1  # IQR (사분위 범위)
+                        _upper = _q3 + 2.0 * _iqr  # 상한 (2×IQR — 보수적)
+                        if _upper > 0:  # 유효한 상한이 있을 때만 필터 적용
+                            _keep = [i for i in range(len(_pfx)) if _pf_mags[i] <= _upper]
+                            if len(_keep) >= 3:  # 필터 후 최소 3개 남아야 적용
+                                _pfx = [_pfx[i] for i in _keep]  # 이상치 제거된 x 변위
+                                _pfy = [_pfy[i] for i in _keep]  # 이상치 제거된 y 변위
+
+                    # 중앙값 속도 벡터: 중앙값 × 창 크기 (mag 단위 유지)
+                    vdx = float(np.median(_pfx)) * (_w - 1)
+                    vdy = float(np.median(_pfy)) * (_w - 1)
+                    mag = np.sqrt(vdx**2 + vdy**2)  # 속도 크기 (픽셀)
+                    speeds[tid] = mag  # feature_extractor 에서 nm 계산에 사용
 
                     # 속도 벡터 기반 방향 override (더 정확)
                     if (not st.is_learning and not st.relearning
