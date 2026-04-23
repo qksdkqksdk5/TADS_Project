@@ -33,14 +33,14 @@ function App() {
     if (user) {
       const host = window.location.hostname;
       const mainSocket = io(`http://${host}:5000`, {
-        transports: ["websocket"],
+        transports: ["polling", "websocket"],
         forceNew: true,
         reconnectionAttempts: 3,
         timeout: 5000,
       });
 
       const cloudSocket = io("https://itsras.illit.kr", {
-        transports: ["websocket"], // 터널 서버도 웹소켓 강제
+        transports: ["polling", "websocket"], // 터널 서버도 웹소켓 강제
         forceNew: true,
       });
 

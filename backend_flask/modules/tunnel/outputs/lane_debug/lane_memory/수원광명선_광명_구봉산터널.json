@@ -1,0 +1,49 @@
+{
+  "cctv_name": "[수원광명선] 광명 구봉산터널",
+  "memory_key": "수원광명선_광명_구봉산터널",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.3354326486587524,
+          708.0731811523438
+        ]
+      },
+      "x_mid": 155.20406460762024,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        2
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.7249059677124023,
+          651.7640380859375
+        ]
+      },
+      "x_mid": 351.65296745300293,
+      "count": 2,
+      "ratio": 0.6666666666666666,
+      "member_ids": [
+        1,
+        3
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-22 14:34:01"
+}

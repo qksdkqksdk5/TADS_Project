@@ -1,0 +1,16 @@
+{
+  "event_id": "accident_20260422_181437_1747",
+  "timestamp": "2026-04-22 18:14:37",
+  "frame_id": 1747,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[수도권제2순환선(봉담동탄)] 필봉산터널(동탄)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/8327/JdqIr+tRRcj6oVvFQnzIvtzHkUDVhJZY9XY+eGNGobDo55Y5O5qOjHvT6ff9uRudnQ7jtswETvv+M/fs9ia+cqNyXt2YgXEmO36dKnPo3bg=",
+  "avg_speed": 5.089,
+  "vehicle_count": 2,
+  "lane_count": 2,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260422_181437_1747.jpg",
+  "events": [
+    "사고 감지"
+  ]
+}

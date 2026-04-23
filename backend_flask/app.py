@@ -3,9 +3,11 @@
 # monkey.patch_all()
 
 import os
+os.environ["OPENCV_FFMPEG_THREADS"] = "1"
 
 import warnings
 import atexit
+import logging
 from dotenv import load_dotenv
 from flask import Flask, jsonify
 from flask_socketio import SocketIO, emit
@@ -94,6 +96,10 @@ def handle_resolve(data):
 @app.route('/')
 def index():
     return "TADS Backend Server is Running"
+
+# Werkzeug(Flask 기본 서버)의 로그를 'ERROR'만 찍히도록 설정 (일반 접속 로그 숨기기)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
