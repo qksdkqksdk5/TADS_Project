@@ -49,9 +49,10 @@ function EventItem({ event, onSelect, onDismissWrongway }) {
     : '-';
 
   // 이벤트 유형 레이블 텍스트
+  // direction 필드가 있으면 "상행 SLOW (0.45)" 형태로, 없으면 기존 형태로 표시한다.
   const labelText = isWrongway
     ? `역주행 (${event.label || event.track_id || '-'})`
-    : `${event.level} (${event.jam_score?.toFixed(2) ?? '-'})`;
+    : `${event.direction ? `${event.direction} ` : ''}${event.level} (${event.jam_score?.toFixed(2) ?? '-'})`;
 
   // 해소 여부에 따른 행 배경·테두리 스타일
   const rowStyle = event.is_resolved

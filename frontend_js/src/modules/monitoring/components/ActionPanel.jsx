@@ -24,11 +24,6 @@ const ACTION_BUTTONS = {
   ],
 };
 
-const REFERENCES = {
-  SLOW:      'Papageorgiou 2006 / MDPI 2024 — 속도 분산 -12~20%, 정체 지속 -25%',
-  CONGESTED: 'ALINEA 1991 / FHWA CHART — 골든타임 10분 이내 대응 시 처리시간 -11분',
-  JAM:       'ALINEA 1991 / FHWA CHART — 골든타임 10분 이내 대응 시 처리시간 -11분',
-};
 
 const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
@@ -120,17 +115,6 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
             />
           ))}
 
-          {/* 논문 근거 */}
-          {REFERENCES[level] && (
-            <div style={{
-              marginTop: '10px', padding: '7px 8px',
-              background: '#020617', borderRadius: '6px',
-              fontSize: '10px', color: '#475569', lineHeight: 1.6,
-              border: '1px solid #0f172a',
-            }}>
-              📚 {REFERENCES[level]}
-            </div>
-          )}
         </div>
       )}
     </Wrapper>

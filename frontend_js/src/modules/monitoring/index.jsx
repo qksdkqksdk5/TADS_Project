@@ -91,28 +91,44 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose,
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: '10px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0,
+          gap: '12px',
         }}>
-          {/* 좌측: 카메라 이름 + 순번 */}
+          {/* 좌측: 카메라 이름 + 순번 + 방향키 힌트 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
             <span style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               📷 {title}
             </span>
-            {/* 현재/전체 카운터 — 카메라가 2개 이상일 때만 표시 */}
+            {/* 현재/전체 카운터 */}
             {showNav && (
               <span style={{ fontSize: '11px', color: '#475569', whiteSpace: 'nowrap', flexShrink: 0 }}>
                 {currentIdx}/{total}
               </span>
             )}
-          </div>
-
-          {/* 우측: 방향키 힌트 + 닫기 버튼 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-            {/* 방향키 힌트 — 카메라가 2개 이상일 때만 표시 */}
+            {/* 방향키 힌트 — 카메라 이름 바로 오른쪽 */}
             {showNav && (
-              <span style={{ fontSize: '11px', color: '#334155', userSelect: 'none' }}>
+              <span style={{ fontSize: '11px', color: '#334155', whiteSpace: 'nowrap', flexShrink: 0, userSelect: 'none' }}>
                 ← → 전환
               </span>
             )}
+          </div>
+
+          {/* 우측: 레벨 기준 칩 + 닫기 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            {/* 레벨 기준 칩 3개 — X 버튼 왼쪽 */}
+            <span style={{ fontSize: '10px', color: '#334155', userSelect: 'none' }}>레벨 기준</span>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px 7px', background: '#22c55e12', border: '1px solid #22c55e33', borderRadius: '5px' }}>
+              <span style={{ fontSize: '10px', color: '#22c55e', fontWeight: 700, lineHeight: 1.2 }}>원활</span>
+              <span style={{ fontSize: '9px', color: '#4ade8077', lineHeight: 1.2 }}>&lt;0.25</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px 7px', background: '#eab30812', border: '1px solid #eab30833', borderRadius: '5px' }}>
+              <span style={{ fontSize: '10px', color: '#eab308', fontWeight: 700, lineHeight: 1.2 }}>서행</span>
+              <span style={{ fontSize: '9px', color: '#facc1577', lineHeight: 1.2 }}>0.25–</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px 7px', background: '#ef444412', border: '1px solid #ef444433', borderRadius: '5px' }}>
+              <span style={{ fontSize: '10px', color: '#ef4444', fontWeight: 700, lineHeight: 1.2 }}>정체</span>
+              <span style={{ fontSize: '9px', color: '#f8717177', lineHeight: 1.2 }}>≥0.60</span>
+            </div>
+            {/* 닫기 버튼 */}
             <button
               onClick={onClose}
               style={{

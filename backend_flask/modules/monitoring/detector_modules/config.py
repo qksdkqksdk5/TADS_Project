@@ -59,6 +59,10 @@ class DetectorConfig:
     # ── bbox 거리 기반 alpha 감쇠 ────────────────────────────────────────
     bbox_alpha_decay: float = 0.5       # 거리 1셀당 alpha 감쇠율 (중앙점 우선 학습)
     bbox_gating_alpha_ratio: float = 0.3  # 이 비율(decay^dist) 미만이면 방향 게이팅·count 증가 비적용
+    max_cross_flow_cells: float = 1.2    # 횡방향(차선 횡단) 최대 확산 셀 수 (이동 방향에 수직)
+                                         # 1.2 = 수직 방향 1셀 + 약간의 여유 (대각선 허용)
+                                         # 이동 방향과 평행(전후방)은 무제한 → 차선 내 커버리지 유지
+                                         # 중앙선 annotation 없이 반대 차선 오염 구조 차단
 
     # ── 프레임 freeze 감지 (끊김 재연결 감지) ────────────────────────────
     min_freeze_frames: int = 10         # 이 이상 정지 프레임이 연속되면 freeze로 확정 (6fps=1.7초)
@@ -133,7 +137,7 @@ class DetectorConfig:
     grace_period_sec:        float = 60.0   # 카메라 전환 후 판정 유예 시간 (초)
 
     # ==================== jam_score 임계값 ====================
-    smooth_jam_threshold:    float = 0.25   # jam_score 이 값 미만 → SMOOTH
+    smooth_jam_threshold:    float = 0.30   # jam_score 이 값 미만 → SMOOTH — 0.25→0.30: dwell 주 신호 승격 후 score 분포 상향 반영
     slow_jam_threshold:      float = 0.60   # jam_score 이 값 미만 → SLOW, 이상 → CONGESTED
     density_max_vehicles:   float = 40.0   # density 정규화 기준 차량 수 — 이 값 이상이면 density=1.0 (포화)
 
@@ -151,7 +155,7 @@ class DetectorConfig:
     # ==================== Phase 2 GRU 파라미터 ====================
     gru_hidden: int = 64                    # GRU hidden state 크기
     gru_layers: int = 2                     # GRU 레이어 수
-    gru_seq_len: int = 30                   # 입력 시퀀스 길이 (프레임)
+    gru_seq_len: int = 90                   # 입력 시퀀스 길이 (프레임) — 30→90: 5분 예측에 5초(30f) 창은 부족, 15초(90f) 창으로 확대
     gru_blend_ratio: float = 0.0           # GRU 기여 비율 (1 - 이 값 = rule 비율)
                                            # 0.0 = rule 100% (GRU 비활성) — 클래스 불균형·레이블 오염 해결 전까지 비활성
                                            # 재활성 조건: retrain 후 precision/recall 검증 완료 시 0.10~0.20으로 점진 증가
@@ -164,7 +168,7 @@ class DetectorConfig:
     # ==================== Direct 미래 예측 파라미터 ====================
     # 자기회귀 롤아웃 대신 "현재 관측 → N분 후 상태" 를 직접 예측하는 헤드
     # 오차 누적 없음 — 각 헤드가 독립적으로 해당 시점의 레벨을 학습
-    gru_predict_horizons_sec: tuple = (60, 180, 300)  # 예측 목표: 1분·3분·5분 후
+    gru_predict_horizons_sec: tuple = (300,)           # 예측 목표: 5분 후 단일 예측 — 1·3·5분 멀티헤드 → 단순화
     gru_pretrain_min_sec: float = 120.0               # pretrain 시작 최소 데이터 (초)
                                                       # 실제 수집 속도 = 실fps ÷ log_interval(3) → 명목fps 기준 임계값이
                                                       # 실수집 속도 대비 5배 과대 책정되는 문제 보정
@@ -175,8 +179,7 @@ class DetectorConfig:
     gru_log_interval: int = 3                         # feature 로그 저장 주기 (프레임)
                                                       # 매 프레임 저장 시 I/O 과부하 → 3프레임마다 1개 저장
                                                       # 10fps × 1/3 ≈ 3.3개/초 → 1시간 ≈ 12,000개
-    gru_retrain_interval_sec: float = 3600.0          # 누적 데이터 증가 후 재학습 주기 (초)
-                                                      # 1시간마다 새 데이터 반영해 재학습
+    gru_retrain_interval_sec: float = 1200.0          # 누적 데이터 증가 후 재학습 주기 (초) — 3600→1200: JAM 등 새 패턴 20분 내 반영
 
     # ==================== 화면 표시 설정 ====================
     display_width: int = 1280              # 화면 출력 창 너비 (픽셀). 0이면 원본 해상도 그대로

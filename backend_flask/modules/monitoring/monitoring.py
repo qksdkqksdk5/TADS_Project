@@ -3,6 +3,7 @@
 
 import os
 import time
+import threading   # 큐 러너를 OS 스레드로 실행 (gevent 스케줄링 문제 우회)
 import gevent
 from datetime import datetime, timezone  # diagnostics 엔드포인트의 시각 계산에 필요
 from flask import Blueprint, jsonify, request, current_app, Response
@@ -19,9 +20,23 @@ monitoring_bp = Blueprint('monitoring', __name__)
 # Overpass 백그라운드 fetch 중복 방지 (현재 요청 중인 road_key 집합)
 _geo_fetching: set = set()
 
-# 구간 큐 러너 greenlet 추적 (stop 시 kill용)
-# key: (road, start_ic, end_ic) → gevent.Greenlet
+# 구간 큐 러너 스레드 추적 (stop 시 참조 제거용)
+# key: (road, start_ic, end_ic) → threading.Thread
 _queue_greenlets: dict = {}
+
+# ── 큐 러너 실시간 진단 추적 ──────────────────────────────────────────────────
+# 큐 러너 내부 상태를 외부에서 조회할 수 있도록 전역에 기록한다.
+# /api/monitoring/its/queue_status 엔드포인트에서 읽는다.
+_queue_diag: dict = {
+    'runner_started_at':  None,   # 큐 러너 시작 시각 (ISO 문자열)
+    'runner_alive':       False,  # 큐 러너 그린렛 현재 살아있는지
+    'pending_ids':        [],     # 현재 대기 중인 camera_id 목록
+    'started_by_runner':  [],     # 큐 러너가 시작한 camera_id 목록
+    'iteration_count':    0,      # 큐 러너 외부 루프 반복 횟수
+    'last_learning_count': None,  # 마지막으로 측정한 learning_count
+    'last_free_slots':    None,   # 마지막으로 측정한 free_slots
+    'last_error':         None,   # 큐 러너에서 발생한 마지막 예외
+}
 
 # ── 탭 이탈 시 일시정지 설정 ────────────────────────────────────────────────
 # ┌─────────────────────────────────────────────────────────────────────────┐
@@ -589,35 +604,152 @@ def _try_start_camera(cam, socketio, app_obj, db_inst):
     return True
 
 
-def _segment_queue_runner(pending_cams, socketio, app_obj, db_inst):
+def _count_learning_alive() -> int:
+    """
+    스레드가 살아 있으면서 is_learning=True 인 MonitoringDetector 수를 반환한다.
+
+    스트림 열기 실패 등으로 스레드가 죽어도 DetectorState.is_learning 은
+    True 그대로 남는다. 이 상태를 '학습 중' 으로 잘못 카운트하면 free_slots 가
+    영원히 0 이 되어 큐가 멈춘다 — 스레드 생존 여부를 함께 확인해야 한다.
+    """
+    with detector_manager._lock:
+        # active_detectors 와 threads 를 동시에 읽어야 하므로 락 안에서 처리한다
+        count = 0
+        for key, det in detector_manager.active_detectors.items():
+            if not isinstance(det, MonitoringDetector):
+                continue
+            if not det.state.is_learning:
+                continue
+            # 스레드가 없거나 이미 종료됐으면 '학습 중' 으로 세지 않는다
+            t = detector_manager.threads.get(key)
+            if t and t.is_alive():
+                count += 1
+    return count
+
+
+def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj, db_inst):
     """
     초기 배치 이후 남은 카메라를 큐로 관리하는 백그라운드 그린렛.
-    학습 중인 카메라 수가 MAX_CONCURRENT_MONITORS 미만이 되면 다음 카메라를 순차 시작.
+    학습 중(스레드 생존 확인)인 카메라 수가 MAX_CONCURRENT_MONITORS 미만이 되면
+    다음 카메라를 순차 시작한다.
+
+    camera_id 목록만 받고, 시작 직전에 ITS API 를 재호출해 최신 URL 을 사용한다.
+    fresh_map 에 없는 카메라는 즉시 버리지 않고 최대 MAX_MISS_RETRIES 번까지
+    재시도한 뒤 그래도 없으면 영구 스킵한다 (ITS API 일시 누락 대응).
     """
-    print(f"🗂️  ITS 큐 매니저 시작 — 대기 카메라: {len(pending_cams)}개")
-    while pending_cams:
-        with detector_manager._lock:
-            learning_count = sum(
-                1 for det in detector_manager.active_detectors.values()
-                if isinstance(det, MonitoringDetector) and det.state.is_learning
-            )
+    MAX_MISS_RETRIES = 6   # fresh_map 에 없을 때 최대 재시도 횟수
+    pending_ids = list(pending_ids)         # 원본 리스트를 변경하지 않기 위해 복사
+    miss_counts: dict = {}                  # {cam_id: fresh_map 미탐지 횟수}
 
-        free_slots = MAX_CONCURRENT_MONITORS - learning_count
-        while free_slots > 0 and pending_cams:
-            cam = pending_cams.pop(0)
-            try:
-                started = _try_start_camera(cam, socketio, app_obj, db_inst)
-                if started:
-                    free_slots -= 1
-                    if pending_cams:
-                        time.sleep(2)   # 순차 시작 딜레이 (monkey-patched → gevent.sleep)
-            except Exception as e:
-                print(f"⚠️ 큐 카메라 시작 실패 [{cam['camera_id']}]: {e}")
+    # ── 진단 추적 초기화 ─────────────────────────────────────────────────────
+    _queue_diag['runner_started_at'] = datetime.utcnow().isoformat()
+    _queue_diag['runner_alive']      = True
+    _queue_diag['pending_ids']       = list(pending_ids)   # 초기 대기 목록 기록
+    _queue_diag['started_by_runner'] = []
+    _queue_diag['iteration_count']   = 0
+    _queue_diag['last_error']        = None
 
-        if pending_cams:
-            gevent.sleep(10)   # 10초 후 슬롯 재확인
+    print(f"🗂️  ITS 큐 매니저 시작 — 대기 카메라: {len(pending_ids)}개 {pending_ids}")
 
-    print(f"✅ ITS 구간 큐 처리 완료 — 모든 카메라 시작됨")
+    try:   # 그린렛 무음 사망 방지 — 예외를 잡아 로그로 남긴다
+        while pending_ids:
+            _queue_diag['iteration_count'] += 1    # 루프 반복 횟수 기록
+            _queue_diag['pending_ids']      = list(pending_ids)   # 현재 대기 목록 갱신
+
+            # 스레드가 살아 있는 학습 중 카메라만 카운트 (dead thread 오염 방지)
+            learning_count = _count_learning_alive()
+            free_slots     = MAX_CONCURRENT_MONITORS - learning_count
+
+            # 진단: _count_learning_alive() 세부 내역 출력
+            with detector_manager._lock:
+                _diag_details = [
+                    f"{k}(learning={d.state.is_learning},alive={detector_manager.threads.get(k, None) and detector_manager.threads[k].is_alive()})"
+                    for k, d in detector_manager.active_detectors.items()
+                    if isinstance(d, MonitoringDetector)
+                ]
+            print(f"🗂️  [큐 러너 #{_queue_diag['iteration_count']}] "
+                  f"학습중={learning_count} / 슬롯={free_slots} / 대기={len(pending_ids)}개 {pending_ids}")
+            print(f"    └ 감지기 상세: {_diag_details if _diag_details else '없음'}")
+
+            _queue_diag['last_learning_count'] = learning_count
+            _queue_diag['last_free_slots']     = free_slots
+
+            if free_slots <= 0:
+                # 슬롯이 없으면 10 초 후 재확인 (OS 스레드이므로 time.sleep 사용)
+                time.sleep(10)
+                continue
+
+            # 슬롯이 생겼을 때만 ITS API 를 재호출해 최신 URL 을 취득한다
+            # (캐시 TTL 60 초 경과 시 자동으로 ITS API 재호출)
+            fresh_cams = its_helper.get_cameras_in_range(road, start_ic, end_ic)
+            if not fresh_cams:
+                # ITS API 오류나 빈 응답이면 카메라를 버리지 않고 10 초 후 재시도한다
+                print(f"⚠️ ITS 카메라 목록 조회 실패 — 10초 후 재시도 [{road} {start_ic}→{end_ic}]")
+                time.sleep(10)
+                continue
+
+            # camera_id → cam 딕셔너리 인덱스 (빠른 조회용)
+            fresh_map  = {c['camera_id']: c for c in fresh_cams}
+            no_match_in_batch = 0   # 이번 배치에서 fresh_map 미탐지 연속 횟수
+            print(f"    └ fresh_map 카메라 수: {len(fresh_map)}개 | "
+                  f"pending 중 fresh_map 매칭: {sum(1 for p in pending_ids if p in fresh_map)}개")
+
+            while free_slots > 0 and pending_ids:
+                # 이번 배치의 모든 pending 카메라가 fresh_map 에 없으면 루프 탈출
+                if no_match_in_batch >= len(pending_ids):
+                    print(f"⚠️ 대기 중인 카메라 전부 fresh_map 에 없음 — 10초 후 재조회")
+                    break
+
+                cam_id = pending_ids[0]   # pop 전에 참조해 두어 예외 로그에 쓸 수 있게 한다
+                cam    = fresh_map.get(cam_id)
+
+                if cam is None:
+                    # ITS API 가 이 카메라를 일시적으로 누락한 경우.
+                    # 즉시 버리지 않고 맨 뒤로 이동해 최대 MAX_MISS_RETRIES 번 재시도한다.
+                    miss_counts[cam_id] = miss_counts.get(cam_id, 0) + 1
+                    pending_ids.pop(0)
+                    if miss_counts[cam_id] < MAX_MISS_RETRIES:
+                        pending_ids.append(cam_id)   # 맨 뒤로 이동
+                        no_match_in_batch += 1
+                        print(f"⚠️ fresh_map 미탐지 [{cam_id}] ({miss_counts[cam_id]}/{MAX_MISS_RETRIES}) — 재시도 예정")
+                    else:
+                        print(f"⚠️ [{cam_id}] {MAX_MISS_RETRIES}회 연속 미탐지 → 영구 스킵")
+                    continue
+
+                # fresh_map 에 있는 카메라 → 탐지 횟수 초기화 후 시작 시도
+                miss_counts.pop(cam_id, None)
+                no_match_in_batch = 0
+
+                try:
+                    print(f"🔧 [큐 러너] _try_start_camera 호출: {cam_id}")
+                    started = _try_start_camera(cam, socketio, app_obj, db_inst)
+                    pending_ids.pop(0)   # 성공·이미실행 모두 큐에서 제거
+                    if started:
+                        free_slots -= 1
+                        _queue_diag['started_by_runner'].append(cam_id)   # 진단 기록
+                        print(f"🚀 [큐 러너] 카메라 시작 완료 [{cam_id}] — 남은 슬롯={free_slots}")
+                        if pending_ids:
+                            time.sleep(2)   # 순차 시작 딜레이 (monkey-patched → gevent.sleep)
+                    else:
+                        print(f"ℹ️  [큐 러너] 이미 실행 중 [{cam_id}] — 슬롯 소모 없음")
+                except Exception as e:
+                    import traceback as _tb
+                    pending_ids.pop(0)   # 실패해도 제거 — 무한 재시도 방지
+                    _queue_diag['last_error'] = str(e)
+                    print(f"⚠️ 큐 카메라 시작 실패 [{cam_id}]: {e}")
+                    _tb.print_exc()
+
+            if pending_ids:
+                time.sleep(10)   # 다음 배치를 위해 10 초 대기 (OS 스레드)
+
+        print(f"✅ ITS 구간 큐 처리 완료 — 모든 카메라 시작됨")
+        _queue_diag['runner_alive'] = False
+
+    except Exception as e:
+        # 그린렛 최상위 예외 — 무음 사망 대신 로그로 남겨 원인을 파악할 수 있게 한다
+        print(f"❌ [큐 러너] 예상치 못한 오류로 종료: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 @monitoring_bp.route('/its/start_segment', methods=['POST'])
@@ -646,6 +778,15 @@ def its_start_segment():
     # 강제 무효화는 프론트엔드가 보유한 세션 토큰과 다른 신규 토큰을 발급받게 되어
     # 오히려 스트림 열기 실패를 유발할 수 있으므로 제거한다.
     cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
+
+    # ── 진단 로그: 수신된 파라미터와 범위 내 카메라 수를 터미널에 출력 ──────────
+    print(f"🔍 [start_segment] road={road!r}  start_ic={start_ic!r}  end_ic={end_ic!r}")
+    print(f"    └ get_cameras_in_range 결과: {len(cameras_in_range)}개")
+    if cameras_in_range:
+        # 첫/마지막 카메라 이름을 출력해 범위가 올바른지 확인한다
+        print(f"    └ 첫 카메라: {cameras_in_range[0]['ic_name']}  "
+              f"마지막 카메라: {cameras_in_range[-1]['ic_name']}")
+
     if not cameras_in_range:
         return jsonify({"status": "error", "message": "해당 범위 카메라 없음"}), 404
 
@@ -653,12 +794,9 @@ def its_start_segment():
     app_obj  = current_app._get_current_object()
     from models import db as db_inst
 
-    # 현재 학습 중인 MonitoringDetector 수
-    with detector_manager._lock:
-        learning_count = sum(
-            1 for det in detector_manager.active_detectors.values()
-            if isinstance(det, MonitoringDetector) and det.state.is_learning
-        )
+    # 현재 학습 중인 MonitoringDetector 수 (스레드 생존 여부 포함 — dead thread 오염 방지)
+    learning_count = _count_learning_alive()
+    print(f"    └ learning_count={learning_count}  MAX_CONCURRENT={MAX_CONCURRENT_MONITORS}")
 
     started         = []
     already_running = []
@@ -687,16 +825,33 @@ def its_start_segment():
         else:
             queued_cams.append(cam)
 
-    # 큐에 남은 카메라를 백그라운드 그린렛이 자동 처리
+    # 큐에 남은 카메라를 백그라운드 OS 스레드가 자동 처리
+    # gevent.spawn 대신 threading.Thread 사용 — gevent 스케줄러가 Flask 요청 처리에
+    # 집중할 때 그린렛이 실행 기회를 얻지 못하는 문제를 우회한다.
+    # cam 딕셔너리(만료 전 URL 포함) 대신 camera_id 목록만 전달한다.
+    # 큐 러너가 실제 시작 직전에 its_helper를 재호출해 최신 URL을 가져오게 한다.
     queued_ids = [c['camera_id'] for c in queued_cams]
     seg_key = (road, start_ic, end_ic)
     if queued_cams:
-        # 이전 큐 러너가 있으면 kill 후 새로 시작
-        old_g = _queue_greenlets.pop(seg_key, None)
-        if old_g and not old_g.dead:
-            old_g.kill()
-        g = gevent.spawn(_segment_queue_runner, list(queued_cams), socketio, app_obj, db_inst)
-        _queue_greenlets[seg_key] = g
+        # 이전 큐 러너 스레드가 있으면 중단 신호를 줄 수 없으므로 딕셔너리만 교체한다.
+        # (스레드는 daemon=True 이므로 서버 종료 시 자동 정리됨)
+        old_t = _queue_greenlets.pop(seg_key, None)
+        if old_t and old_t.is_alive():
+            # 이전 스레드는 daemon=True 이므로 강제 종료는 불가하지만,
+            # pending_ids 가 교체되므로 사실상 새 스레드가 덮어쓴다.
+            print(f"ℹ️  [큐 러너] 이전 스레드 실행 중 — 새 스레드로 교체")
+        t = threading.Thread(
+            target=_segment_queue_runner,
+            args=(
+                queued_ids,              # camera_id 문자열 목록 (URL 없음 — 만료 방지)
+                road, start_ic, end_ic,  # 재조회에 필요한 구간 정보
+                socketio, app_obj, db_inst,
+            ),
+            daemon=True,   # 서버 종료 시 자동 정리 (사용자가 Ctrl+C 해도 안전)
+            name=f"queue-runner-{road}-{start_ic}-{end_ic}",
+        )
+        t.start()
+        _queue_greenlets[seg_key] = t   # 키 이름 유지 (stop_segment 에서 참조)
 
     msg_parts = []
     if started:         msg_parts.append(f"{len(started)}개 시작")
@@ -819,12 +974,13 @@ def its_stop_segment():
 
     cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
 
-    # 해당 구간 큐 러너가 살아있으면 kill (재시작 방지)
+    # 해당 구간 큐 러너 스레드 참조 제거
+    # threading.Thread 는 강제 종료가 불가하지만 daemon=True 이므로 서버 종료 시 자동 정리된다.
+    # 딕셔너리에서 제거하면 새로운 start_segment 호출 시 새 스레드가 생성된다.
     seg_key = (road, start_ic, end_ic)
-    old_g = _queue_greenlets.pop(seg_key, None)
-    if old_g and not old_g.dead:
-        old_g.kill()
-        print(f"⏹️ 구간 큐 러너 취소: {road} {start_ic}→{end_ic}")
+    old_t = _queue_greenlets.pop(seg_key, None)
+    if old_t and old_t.is_alive():
+        print(f"⏹️ 구간 큐 러너 스레드 참조 제거 (스레드는 자연 종료 대기): {road} {start_ic}→{end_ic}")
 
     stopped   = []
     not_found = []
@@ -991,3 +1147,66 @@ def its_probe_batch():
     result['road'] = road   # 요청한 도로명도 응답에 포함
 
     return jsonify(result), 200
+
+
+# ── 큐 러너 실시간 진단 엔드포인트 ───────────────────────────────────────────
+
+@monitoring_bp.route('/its/queue_status', methods=['GET'])
+def its_queue_status():
+    """
+    큐 러너(_segment_queue_runner)의 현재 상태와 모든 MonitoringDetector 상태를
+    JSON으로 반환한다.
+
+    브라우저에서 GET /api/monitoring/its/queue_status 로 언제든지 조회 가능.
+    터미널 로그 없이도 "왜 카메라가 3개에서 안 늘어나는지" 원인을 추적하기 위한
+    진단 전용 엔드포인트다.
+
+    Returns:
+        200 {
+          queue_diag: { runner_started_at, runner_alive, pending_ids,
+                        started_by_runner, iteration_count,
+                        last_learning_count, last_free_slots, last_error },
+          detectors: [
+            { key, camera_id, is_learning, thread_alive, paused },
+            ...
+          ],
+          counts: { total, learning_alive, paused, max_concurrent },
+          server_time: ISO 문자열
+        }
+    """
+    import threading as _threading   # 스레드 상태 확인용 (이미 임포트돼 있어도 무방)
+
+    # 현재 활성 MonitoringDetector 목록과 스레드 상태를 스냅샷으로 수집한다
+    detector_snapshot = []
+    with detector_manager._lock:
+        for key, det in detector_manager.active_detectors.items():
+            if not isinstance(det, MonitoringDetector):
+                continue   # MonitoringDetector 가 아닌 감지기는 제외
+            t      = detector_manager.threads.get(key)   # 연관 스레드 객체
+            alive  = bool(t and t.is_alive())             # 스레드 생존 여부
+            detector_snapshot.append({
+                'key':        key,                         # ex) monitoring_cam01
+                'camera_id':  det.camera_id,               # 카메라 ID
+                'is_learning': det.state.is_learning,      # 학습 중 여부
+                'thread_alive': alive,                     # 스레드 살아있는지
+                'paused':     getattr(det, '_paused', False),  # 일시정지 여부
+            })
+
+    # 학습 중(스레드 생존)인 감지기 수를 계산해 슬롯 현황을 보여준다
+    learning_alive = sum(
+        1 for d in detector_snapshot
+        if d['is_learning'] and d['thread_alive']
+    )
+    paused_count = sum(1 for d in detector_snapshot if d['paused'])
+
+    return jsonify({
+        'queue_diag':  _queue_diag,        # 큐 러너 진단 추적 데이터
+        'detectors':   detector_snapshot,   # 감지기별 상태 스냅샷
+        'counts': {
+            'total':          len(detector_snapshot),   # 전체 MonitoringDetector 수
+            'learning_alive': learning_alive,            # 슬롯을 점유 중인 수
+            'paused':         paused_count,              # 일시정지 중인 수
+            'max_concurrent': MAX_CONCURRENT_MONITORS,  # 최대 동시 학습 수
+        },
+        'server_time': datetime.now(timezone.utc).isoformat(),  # 서버 현재 시각
+    }), 200

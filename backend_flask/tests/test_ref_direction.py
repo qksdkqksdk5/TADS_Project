@@ -1,17 +1,15 @@
 # tests/test_ref_direction.py
-# 교통 모니터링 팀 — _compute_ref_direction 다수결 알고리즘 검증
+# 교통 모니터링 팀 — _compute_ref_direction 단일 최다 셀 알고리즘 검증
 #
-# 버그: 현재 구현은 count 최다 단일 셀의 방향을 기준으로 사용한다.
-#       최다 셀이 우연히 소수 방향(예: 하행)에 속하면 기준 방향이 역전됨.
-#
-# 수정 목표: 모든 유효 셀에 대해 count-가중 다수결 투표로 기준 방향을 결정한다.
+# 알고리즘: flow_map 전체 셀 중 count 가 가장 많은 단일 셀의 방향 벡터를
+#           기준 방향(ref_direction)으로 채택한다.
+#           (final_pj/src/detector.py 와 동일한 로직)
 #
 # 실행: backend_flask/ 에서
 #     pytest tests/test_ref_direction.py -v
 
 import os
 import sys
-import math
 from unittest.mock import MagicMock
 
 # ── sys.path 설정 ────────────────────────────────────────────────────────────
@@ -102,86 +100,72 @@ class TestRefDirectionUnidirectional:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B. 양방향 도로 — 최다 셀이 소수 방향일 때 (핵심 버그 시나리오)
+# B. 단일 최다 셀 선택 — count 가 가장 많은 셀의 방향이 기준이 되어야 한다
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestRefDirectionBidirectionalBias:
+class TestRefDirectionSingleMaxCell:
     """
-    최다 count 셀이 소수 방향에 있을 때 다수결로 올바른 기준 방향이 결정되어야 한다.
+    알고리즘 명세: flow_map 전체 셀 중 count 가 가장 높은 단일 셀의 방향을
+    ref_direction 으로 채택한다. (final_pj/src/detector.py 와 동일)
 
-    시나리오:
-      - 셀 1개: ← 방향, count=1000  (최다 count — 현재 구현이 이 셀을 선택)
-      - 셀 8개: → 방향, count=10 each (총 80 count — 다수를 차지하는 방향)
-      → 현재 구현: _ref_direction = ← (버그)
-      → 수정 후:   _ref_direction = → (다수결로 교정)
+    단일 셀 방식은 학습이 충분히 완료된 상태(1800프레임) 에서는
+    가장 많이 관측된 차선 셀이 대다수 교통 흐름을 대표한다는 전제를 따른다.
     """
 
-    def test_majority_right_wins_over_single_high_count_left_cell(self):
+    def test_highest_count_cell_direction_is_used(self):
         """
-        [Red] 최다 count 단일 셀(←)보다 다수 셀(→) 의 합산 count 가 크면
-              _ref_direction 은 → 이어야 한다.
-
-        현재 구현: count 최다 셀 = ← 단일 셀 → _ref_direction = ← (잘못됨)
-        수정 후:   다수결 → ← count 합(1000) vs → count 합(80)... 아, 이 경우엔 ← 가 이긴다.
-
-        올바른 시나리오:
-          - 셀 1개: ← 방향, count=5  (최다 count 이지만 소수)
-          - 셀 9개: → 방향, count=3 each (총 27 count — 다수 방향)
-          → 현재 구현: _ref_direction = ← (5짜리가 최다라 선택됨)
-          → 수정 후:   → (→ 총 count 27 > ← 총 count 5)
+        count 가 가장 높은 단일 셀(←, count=100) 의 방향이 ref_direction 이 되어야 한다.
+        다른 셀들이 → 방향이라도 count 가 낮으면 무시된다.
         """
         det, _ = _make_minimal_detector()
         fm = _make_flow_grid(size=5)  # 5×5 = 25 셀
 
-        # 셀 (0,0): ← 방향, count=5 (단일 최다)
-        fm.flow[0, 0]  = (-1.0, 0.0)
-        fm.count[0, 0] = 5
-
-        # 나머지 9개 셀: → 방향, count=3 each (총 count=27 > 5)
+        # 나머지 9개 셀: → 방향, count=3 each (단일 최다보다 낮음)
         positions = [(r, c) for r in range(5) for c in range(5) if (r, c) != (0, 0)]
         for r, c in positions[:9]:
-            fm.flow[r, c]  = (1.0, 0.0)
+            fm.flow[r, c]  = (1.0, 0.0)   # → 방향
             fm.count[r, c] = 3
 
+        # 셀 (0,0): ← 방향, count=100 — 단일 최다
+        fm.flow[0, 0]  = (-1.0, 0.0)
+        fm.count[0, 0] = 100
+
         det.flow = fm
         det._compute_ref_direction()
 
         vx, vy = det._ref_direction
-        # [Red] 현재 구현은 count=5인 ← 셀을 선택 → vx < 0 (버그)
-        # [Green] 수정 후에는 → 다수결 → vx > 0
-        assert vx > 0, (
-            f"[Red] 최다count 단일셀(←, count=5) 보다 다수셀(→, 총count=27)이 많은데 "
-            f"_ref_direction.x={vx:.3f} 가 음수입니다 — 다수결 없이 단일 셀 선택"
+        # 단일 최다 셀(←, count=100) 의 방향 → vx < 0
+        assert vx < 0, (
+            f"단일 최다 count 셀(←, count=100) 의 방향이 ref_direction 이어야 하는데 "
+            f"vx={vx:.3f} 가 음수가 아닙니다"
         )
 
-    def test_majority_up_wins_over_single_high_count_down_cell(self):
+    def test_only_max_count_cell_matters_not_sum(self):
         """
-        [Red] 수직 방향 도로: 최다 count 단일 셀(↓)보다 다수 셀(↑) 이 올바른 기준.
-
-        상행(↑, vy < 0)이 실제 다수인데 최다 count 셀이 하행(↓) 에 있으면
-        현재 구현은 _dir_label_a="UP"으로 잘못 설정한다.
+        count 합산이 아니라 단일 최다 셀 기준임을 확인한다.
+        (↓, count=50) 1개 vs (↑, count=5) 여러 개: 단일 최다 셀(↓)이 기준이어야 함.
         """
         det, _ = _make_minimal_detector()
-        fm = _make_flow_grid(size=5)
+        fm = _make_flow_grid(size=4)   # 4×4 = 16 셀
 
-        # 셀 (2,2): ↓ 방향(vy>0 = 화면 아래), count=8 (단일 최다)
-        fm.flow[2, 2]  = (0.0,  1.0)   # 하행 (화면 아래 = vy 양수)
-        fm.count[2, 2] = 8
+        # 셀 (1,1): ↓ 방향(vy>0), count=50 — 단일 최다
+        fm.flow[1, 1]  = (0.0, 1.0)    # 화면 아래 (하행)
+        fm.count[1, 1] = 50
 
-        # 셀 12개: ↑ 방향(vy<0 = 화면 위), count=2 each (총 count=24 > 8)
-        positions = [(r, c) for r in range(5) for c in range(5) if (r, c) != (2, 2)]
-        for r, c in positions[:12]:
-            fm.flow[r, c]  = (0.0, -1.0)   # 상행 (화면 위)
-            fm.count[r, c] = 2
+        # 나머지 10개 셀: ↑ 방향(vy<0), count=5 each (합산 50이지만 단일은 5)
+        positions = [(r, c) for r in range(4) for c in range(4) if (r, c) != (1, 1)]
+        for r, c in positions[:10]:
+            fm.flow[r, c]  = (0.0, -1.0)   # 화면 위 (상행)
+            fm.count[r, c] = 5
 
         det.flow = fm
         det._compute_ref_direction()
 
         vx, vy = det._ref_direction
-        # 수정 후: 다수결 ↑ 방향 → vy < 0
-        assert vy < 0, (
-            f"[Red] 다수셀(↑, vy<0, 총count=24) 이 많은데 "
-            f"_ref_direction.y={vy:.3f} 가 음수가 아닙니다 — 단일 최다 셀(↓) 선택"
+        # 단일 최다 셀(↓, count=50) → vy > 0
+        assert vy > 0, (
+            f"단일 최다 셀(↓, count=50) 이 기준이어야 하는데 "
+            f"vy={vy:.3f} 가 양수가 아닙니다"
         )
 
 
