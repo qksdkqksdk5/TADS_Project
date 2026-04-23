@@ -10,6 +10,8 @@
 # 4) bootstrap 성공 시 최종 대표 집단(current_template) 확정
 # 5) 현재 프레임 차량은 최종 대표 집단 중 가장 가까운 차선에 임시 할당
 # 6) 동일 CCTV(터널)면 과거 저장된 lane memory를 먼저 불러오기
+# 7) lane memory는 즉시 로드하되, 화면 표시만 50프레임 뒤에 시작
+# 8) [추가] 관제사 요청 시점부터 50프레임을 따로 수집해 수동 재추정 가능
 #
 # [핵심 아이디어]
 # - 실시간 CCTV에서는 초반에 차량이 적으면 차선 추정이 실패할 수 있음
@@ -17,6 +19,10 @@
 #   "중앙영역 차량 수 조건이 만족된 뒤" bootstrap을 시작해야 안정적임
 # - 또한 같은 터널은 구조가 거의 같으므로, 한 번 저장한 차선 template를
 #   다음 진입 때 재사용하면 더 안정적으로 동작함
+# - 다만 memory 차선을 영상 시작 직후 바로 그리면 어색할 수 있으므로
+#   내부적으로는 즉시 로드하되, 화면 표시만 일정 프레임 뒤에 시작한다
+# - 실험 단계에서는 관제사가 "지금 차량이 충분하다"고 판단한 시점에
+#   버튼을 눌러 50프레임만 따로 모아 다시 차선을 추정할 수 있게 한다
 # ==========================================
 
 import os
@@ -24,6 +30,7 @@ import re
 import json
 import glob
 from datetime import datetime
+from collections import defaultdict
 
 import numpy as np
 import matplotlib
@@ -38,7 +45,7 @@ class LaneTemplateEstimator:
         # -----------------------------
         self.current_template = []          # 최종 대표 집단 목록
         self.template_confirmed = False
-        self.phase = "WAITING"              # WAITING / BOOTSTRAP / CLUSTER_VIEW / MEMORY_LOAD
+        self.phase = "WAITING"              # WAITING / BOOTSTRAP / CLUSTER_VIEW / MEMORY_LOAD / MEMORY_WAIT / REESTIMATING
 
         # -----------------------------
         # 수집 메모리
@@ -48,6 +55,32 @@ class LaneTemplateEstimator:
         self.track_stable_motion = {}       # tid -> 안정 이동 여부
         self.collected_track_ids = set()
         self.collected_track_points = {}    # tid -> [(x, y), ...]
+
+        # -----------------------------
+        # [추가] lane 재추정용 상태 변수
+        # -----------------------------
+        # 관제사가 "차선 재추정" 버튼을 누르면 True
+        self.reestimate_requested = False
+
+        # 실제 50프레임 수집 중인지 여부
+        self.reestimate_collecting = False
+
+        # 재추정 시작 프레임
+        self.reestimate_start_frame = None
+
+        # 재추정은 요청 시점부터 50프레임만 수집
+        self.REESTIMATE_FRAME_WINDOW = 50
+
+        # 현재 몇 프레임 수집했는지
+        self.reestimate_frame_count = 0
+
+        # 재추정용 track 포인트 버퍼
+        # { track_id: [(x, y), (x, y), ...] }
+        self.reestimate_track_points = defaultdict(list)
+
+        # 프론트/로그용 상태 문자열
+        # idle / reestimating / reestimated / confirmed
+        self.reestimate_status = "idle"
 
         # -----------------------------
         # 디버그
@@ -63,15 +96,16 @@ class LaneTemplateEstimator:
             "raw_lane_map": {},
             "memory_loaded": False,
             "memory_key": None,
+            "memory_pending_display": False,
+            "memory_delay_remaining": 0,
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
         }
 
         # -----------------------------
         # 파라미터
         # -----------------------------
-        # [기존] BOOTSTRAP_FRAMES = 100 방식은 제거
-        # [신규] 중앙영역 차량 수 + 연속 프레임 조건으로 bootstrap 시작
-
-        # 선형 피팅에 필요한 최소 포인트 수
         self.FIT_MIN_POINTS = 30
 
         # 안정 이동 여부 판단 기준
@@ -83,13 +117,13 @@ class LaneTemplateEstimator:
         self.MAX_FIT_RMSE = 35.0
 
         # bootstrap 시작 조건
-        self.CENTER_VEHICLE_COUNT_THR = 2       # 중앙영역 차량 2대 이상
-        self.BOOTSTRAP_READY_FRAMES = 20        # 연속 20프레임 유지 시 bootstrap 시작
+        self.CENTER_VEHICLE_COUNT_THR = 2
+        self.BOOTSTRAP_READY_FRAMES = 20
 
         # bootstrap 수집/실패 제어
-        self.BOOTSTRAP_MAX_COLLECT_FRAMES = 120 # bootstrap 최대 수집 프레임
-        self.MIN_BOOTSTRAP_TRACKS = 2           # 최소 안정 차량 수
-        self.BOOTSTRAP_COOLDOWN_FRAMES = 60     # 실패 후 재시도 대기 프레임
+        self.BOOTSTRAP_MAX_COLLECT_FRAMES = 120
+        self.MIN_BOOTSTRAP_TRACKS = 2
+        self.BOOTSTRAP_COOLDOWN_FRAMES = 60
 
         # 현재 bootstrap 상태
         self.bootstrap_ready_count = 0
@@ -124,10 +158,16 @@ class LaneTemplateEstimator:
         self.current_cctv_name = None
         self.current_cctv_key = None
 
-        # memory를 이미 한 번 조회했는지 여부
-        # 같은 CCTV에서 매 프레임마다 load를 반복하지 않기 위해 사용
+        # 같은 CCTV에서 memory를 매 프레임 재조회하지 않기 위한 플래그
         self.memory_checked = False
         self.memory_loaded = False
+
+        # -----------------------------
+        # memory 표시 지연 관련 상태
+        # -----------------------------
+        self.MEMORY_DISPLAY_DELAY_FRAMES = 50
+        self.memory_loaded_frame = None
+        self.memory_pending_display = False
 
     # =========================================================
     # 0) bootstrap 관련 상태 초기화
@@ -170,6 +210,17 @@ class LaneTemplateEstimator:
         self.memory_checked = False
         self.memory_loaded = False
 
+        self.memory_loaded_frame = None
+        self.memory_pending_display = False
+
+        # 수동 재추정 상태도 함께 초기화
+        self.reestimate_requested = False
+        self.reestimate_collecting = False
+        self.reestimate_start_frame = None
+        self.reestimate_frame_count = 0
+        self.reestimate_track_points.clear()
+        self.reestimate_status = "idle"
+
     # =========================================================
     # 0-2) 그래프 파일 정리
     # =========================================================
@@ -201,29 +252,17 @@ class LaneTemplateEstimator:
         예:
         "[수원광명선] 광명 구봉산터널"
         -> "수원광명선_광명_구봉산터널"
-
-        목적:
-        - 파일명으로 안전하게 사용
-        - DB key로도 나중에 재사용 가능
         """
         if not cctv_name:
             return None
 
         name = str(cctv_name).strip()
-
-        # 대괄호/소괄호를 공백으로 치환
         name = name.replace("[", " ")
         name = name.replace("]", " ")
         name = name.replace("(", " ")
         name = name.replace(")", " ")
-
-        # 파일명에 위험한 문자 제거
         name = re.sub(r'[\\/:*?"<>|]+', " ", name)
-
-        # 여러 공백을 하나로 정리
         name = re.sub(r"\s+", " ", name).strip()
-
-        # 공백은 _ 로 변환
         name = name.replace(" ", "_")
 
         return name if name else None
@@ -232,9 +271,6 @@ class LaneTemplateEstimator:
     # 0-4) memory 파일 경로 생성
     # =========================================================
     def _get_memory_path(self, cctv_name):
-        """
-        정규화된 CCTV 이름을 바탕으로 memory json 파일 경로 생성
-        """
         memory_key = self._normalize_cctv_name(cctv_name)
         if not memory_key:
             return None, None
@@ -248,13 +284,6 @@ class LaneTemplateEstimator:
     def save_lane_memory(self, cctv_name=None):
         """
         현재 확정된 current_template를 json으로 저장
-
-        저장 내용:
-        - cctv_name
-        - memory_key
-        - lane_count
-        - centerlines(current_template)
-        - saved_at
         """
         target_name = cctv_name or self.current_cctv_name
         if not target_name:
@@ -287,14 +316,13 @@ class LaneTemplateEstimator:
     # =========================================================
     # 0-6) lane memory 로드
     # =========================================================
-    def load_lane_memory(self, cctv_name=None):
+    def load_lane_memory(self, cctv_name=None, frame_id=None):
         """
         동일한 CCTV 이름의 저장된 차선 template가 있으면 불러오기
 
-        성공 시:
-        - current_template 세팅
-        - template_confirmed = True
-        - phase = "CLUSTER_VIEW"
+        [중요]
+        - 내부적으로는 즉시 current_template에 로드
+        - 하지만 화면 표시는 MEMORY_DISPLAY_DELAY_FRAMES 뒤에 시작
         """
         target_name = cctv_name or self.current_cctv_name
         if not target_name:
@@ -314,10 +342,12 @@ class LaneTemplateEstimator:
 
             self.current_template = centerlines
             self.template_confirmed = True
-            self.phase = "CLUSTER_VIEW"
 
+            self.phase = "MEMORY_WAIT"
             self.memory_loaded = True
             self.memory_checked = True
+            self.memory_loaded_frame = frame_id
+            self.memory_pending_display = True
 
             print(f"📂 저장된 lane memory 로드: {load_path}")
             return True
@@ -327,19 +357,25 @@ class LaneTemplateEstimator:
             return False
 
     # =========================================================
-    # 0-7) 수동 보정용 lane 제거 후 저장
+    # 0-7) memory 표시 지연 남은 프레임 계산
+    # =========================================================
+    def _get_memory_delay_remaining(self, frame_id):
+        """
+        memory를 로드한 뒤 화면에 표시하기까지 남은 프레임 수 계산
+        """
+        if self.memory_loaded_frame is None:
+            return self.MEMORY_DISPLAY_DELAY_FRAMES
+
+        elapsed = max(0, frame_id - self.memory_loaded_frame)
+        remaining = max(0, self.MEMORY_DISPLAY_DELAY_FRAMES - elapsed)
+        return remaining
+
+    # =========================================================
+    # 0-8) 수동 보정용 lane 제거 후 저장
     # =========================================================
     def remove_lane_and_save(self, lane_id_to_remove, cctv_name=None):
         """
         사람이 "lane 1은 차선 아님" 같은 수동 보정을 할 때 쓰는 함수
-
-        예:
-        remove_lane_and_save(1, "[수원광명선] 광명 구봉산터널")
-
-        동작:
-        1) current_template에서 해당 lane 제거
-        2) lane_id를 다시 0,1,2...로 재정렬
-        3) memory 저장
         """
         if not self.current_template:
             print("⚠️ lane 제거 실패: current_template 비어 있음")
@@ -360,6 +396,8 @@ class LaneTemplateEstimator:
         self.current_template = reindexed
         self.template_confirmed = len(self.current_template) > 0
         self.phase = "CLUSTER_VIEW" if self.template_confirmed else "WAITING"
+        self.memory_pending_display = False
+        self.memory_loaded = True
 
         self.save_lane_memory(cctv_name=cctv_name)
         print(f"🛠️ lane {lane_id_to_remove} 제거 후 memory 재저장 완료")
@@ -370,12 +408,7 @@ class LaneTemplateEstimator:
     # =========================================================
     def _count_center_tracks(self, track_points, frame_width, frame_height):
         """
-        현재 프레임의 대표점(track_points)이
-        중앙영역에 몇 대 있는지 계산
-
-        [주의]
-        - track_points는 보통 tid -> (x, y) 형태라고 가정
-        - 여기서 x, y는 현재 프레임 차량 대표점(bottom-center 등)
+        현재 프레임의 대표점(track_points)이 중앙영역에 몇 대 있는지 계산
         """
         cx1 = int(frame_width * self.CENTER_X1_RATIO)
         cx2 = int(frame_width * self.CENTER_X2_RATIO)
@@ -434,13 +467,11 @@ class LaneTemplateEstimator:
 
     # =========================================================
     # 3) 차량 궤적 선형 피팅
-    #    x = a*y + b
     # =========================================================
     def _fit_trajectory_model(self, pts):
         """
         최근 궤적을 선형으로 피팅
-        - 입력: 점 목록 [(x,y), ...]
-        - 출력: 선형 모델, RMSE
+        x = a*y + b
         """
         recent = pts[-self.FIT_MIN_POINTS:]
         ys = np.array([p[1] for p in recent], dtype=np.float32)
@@ -484,8 +515,6 @@ class LaneTemplateEstimator:
     def _model_distance(self, model1, model2, lane_y1, lane_y2, frame_height):
         """
         두 선형 궤적이 얼마나 비슷한지 계산
-        - 계수 벡터 거리
-        - ROI 여러 지점에서 x 차이
         """
         v1 = self._coef_vector(model1, frame_height)
         v2 = self._coef_vector(model2, frame_height)
@@ -527,8 +556,7 @@ class LaneTemplateEstimator:
     # =========================================================
     def _collect_stable_models(self, track_history):
         """
-        현재까지의 track_history에서
-        안정적으로 움직이는 차량만 선형 모델로 수집
+        현재까지의 track_history에서 안정적으로 움직이는 차량만 선형 모델로 수집
         """
         for tid, pts in track_history.items():
             stable = self._is_stable_moving_track(pts)
@@ -548,6 +576,148 @@ class LaneTemplateEstimator:
             self.track_fit_error[tid] = rmse
             self.collected_track_ids.add(tid)
             self.collected_track_points[tid] = list(pts)
+
+    # =========================================================
+    # 6-1) [추가] 재추정 50프레임 버퍼를 기존 군집 입력 형태로 변환
+    # =========================================================
+    def _build_reestimate_template(self, lane_y1, lane_y2, frame_height):
+        """
+        관제사 요청 후 50프레임 동안 모은 reestimate_track_points를 사용해서
+        기존 bootstrap과 동일한 군집화 흐름으로 current_template를 다시 만든다.
+
+        핵심:
+        - 완전히 새로운 로직을 만들지 않고
+        - 기존 _cluster_track_models_stage1 / stage2 를 재사용한다
+        - 대신 50프레임 버퍼를 임시로 self.track_models / self.collected_track_ids
+          형식에 맞게 구성해서 넣는다
+        """
+        # -----------------------------
+        # 1) 기존 bootstrap 메모리를 백업
+        #    (현재 확정 template는 유지)
+        # -----------------------------
+        backup_track_models = self.track_models
+        backup_track_fit_error = self.track_fit_error
+        backup_track_stable_motion = self.track_stable_motion
+        backup_collected_track_ids = self.collected_track_ids
+        backup_collected_track_points = self.collected_track_points
+
+        # 임시 재구성용 메모리
+        temp_track_models = {}
+        temp_track_fit_error = {}
+        temp_track_stable_motion = {}
+        temp_collected_track_ids = set()
+        temp_collected_track_points = {}
+
+        # -----------------------------
+        # 2) 50프레임 버퍼에서 안정 track만 선형 모델 생성
+        # -----------------------------
+        for tid, pts in self.reestimate_track_points.items():
+            pts = list(pts)
+
+            # 재추정은 "버튼 누른 이후 50프레임"이라 포인트 수가 많지 않을 수 있으므로
+            # 너무 엄격하면 아무 것도 안 잡힐 수 있다.
+            # 그래서 여기서는 최소 10점 이상만 있으면 한 번 시도하고,
+            # 기존 안정성 조건도 함께 참고한다.
+            if len(pts) < 10:
+                continue
+
+            # 최근 30점보다 적으면 전부 사용, 많으면 최근 30점 사용
+            fit_pts = pts[-self.FIT_MIN_POINTS:] if len(pts) >= self.FIT_MIN_POINTS else pts
+
+            stable = True
+            if len(pts) >= self.FIT_MIN_POINTS:
+                stable = self._is_stable_moving_track(pts)
+
+            if not stable:
+                continue
+
+            model, rmse = self._fit_trajectory_model(fit_pts if len(fit_pts) >= self.FIT_MIN_POINTS else (fit_pts + fit_pts[-1:] * max(0, self.FIT_MIN_POINTS - len(fit_pts))))
+            if model is None:
+                continue
+
+            if rmse > self.MAX_FIT_RMSE:
+                continue
+
+            temp_track_models[tid] = model
+            temp_track_fit_error[tid] = rmse
+            temp_track_stable_motion[tid] = True
+            temp_collected_track_ids.add(tid)
+            temp_collected_track_points[tid] = pts
+
+        # 유효 track 수 부족
+        if len(temp_collected_track_ids) < self.MIN_BOOTSTRAP_TRACKS:
+            self.track_models = backup_track_models
+            self.track_fit_error = backup_track_fit_error
+            self.track_stable_motion = backup_track_stable_motion
+            self.collected_track_ids = backup_collected_track_ids
+            self.collected_track_points = backup_collected_track_points
+            print("⚠️ 재추정 실패: 유효 track 수 부족")
+            return False, [], []
+
+        # -----------------------------
+        # 3) 기존 군집 로직 재사용
+        # -----------------------------
+        self.track_models = temp_track_models
+        self.track_fit_error = temp_track_fit_error
+        self.track_stable_motion = temp_track_stable_motion
+        self.collected_track_ids = temp_collected_track_ids
+        self.collected_track_points = temp_collected_track_points
+
+        clusters_stage1 = self._cluster_track_models_stage1(
+            lane_y1, lane_y2, frame_height
+        )
+        cluster_info_stage1 = self._extract_cluster_info_stage1(
+            clusters_stage1, lane_y1, lane_y2
+        )
+
+        clusters_stage2 = self._cluster_representatives_stage2(
+            cluster_info_stage1, lane_y1, lane_y2, frame_height
+        )
+        final_cluster_info = self._extract_cluster_info_stage2(
+            clusters_stage2, lane_y1, lane_y2
+        )
+
+        success = self._is_valid_bootstrap_result(final_cluster_info)
+
+        if success:
+            new_template = []
+            for idx, c in enumerate(final_cluster_info):
+                new_template.append({
+                    "lane_id": idx,
+                    "cluster_id": c["cluster_id"],
+                    "rep_model": c["rep_model"],
+                    "x_mid": c["x_mid"],
+                    "count": c["count"],
+                    "ratio": c["ratio"],
+                    "member_ids": c["member_ids"],
+                    "source_cluster_ids": c["source_cluster_ids"],
+                })
+
+            self.current_template = new_template
+            self.template_confirmed = True
+            self.phase = "CLUSTER_VIEW"
+            self.memory_loaded = False
+            self.memory_pending_display = False
+            self.memory_loaded_frame = None
+
+            # 재추정 성공 시 같은 CCTV 이름으로 자동 저장
+            # self.save_lane_memory(self.current_cctv_name) # 수동저장 추가로 .. 주석처리
+
+            print(f"✅ 차선 재추정 완료: {len(self.current_template)}개 차선")
+        else:
+            print("⚠️ 차선 재추정 실패: 군집 결과가 유효하지 않음")
+
+        # -----------------------------
+        # 4) 원래 bootstrap 메모리 복구
+        #    (현재 template는 새 걸로 유지)
+        # -----------------------------
+        self.track_models = backup_track_models
+        self.track_fit_error = backup_track_fit_error
+        self.track_stable_motion = backup_track_stable_motion
+        self.collected_track_ids = backup_collected_track_ids
+        self.collected_track_points = backup_collected_track_points
+
+        return success, cluster_info_stage1, final_cluster_info
 
     # =========================================================
     # 7) 1차 군집화
@@ -625,8 +795,7 @@ class LaneTemplateEstimator:
     # =========================================================
     def _cluster_representatives_stage2(self, cluster_info_stage1, lane_y1, lane_y2, frame_height):
         """
-        1차 군집 대표선들끼리 다시 거리 계산해서
-        비슷한 흐름은 한 번 더 합친다.
+        1차 군집 대표선들끼리 다시 거리 계산해서 비슷한 흐름을 한 번 더 합침
         """
         if not cluster_info_stage1:
             return []
@@ -708,8 +877,6 @@ class LaneTemplateEstimator:
     def _is_valid_bootstrap_result(self, final_cluster_info):
         """
         bootstrap 결과가 실제로 쓸 만한지 검사
-        - 최종 차선 후보가 1개 이상 있어야 함
-        - 안정 차량 수가 최소 기준 이상이어야 함
         """
         if len(final_cluster_info) < 1:
             return False
@@ -720,7 +887,26 @@ class LaneTemplateEstimator:
         return True
 
     # =========================================================
-    # 12) 현재 차량을 가장 가까운 최종 대표 집단에 임시 할당
+    # 12) memory 표시 대기 중인지 검사
+    # =========================================================
+    def _is_memory_display_ready(self, frame_id):
+        """
+        memory가 로드된 뒤 50프레임이 지나야 화면 표시 허용
+        """
+        if not self.memory_pending_display:
+            return True
+
+        remaining = self._get_memory_delay_remaining(frame_id)
+        if remaining <= 0:
+            self.memory_pending_display = False
+            self.phase = "MEMORY_LOAD"
+            return True
+
+        self.phase = "MEMORY_WAIT"
+        return False
+
+    # =========================================================
+    # 13) 현재 차량을 가장 가까운 최종 대표 집단에 임시 할당
     # =========================================================
     def _assign_lane(self, point, template):
         if not template:
@@ -742,7 +928,7 @@ class LaneTemplateEstimator:
         return best_lane
 
     # =========================================================
-    # 13) 그래프 저장
+    # 14) 그래프 저장
     # =========================================================
     def save_trajectory_plot(self, lane_y1, lane_y2, filename=None):
         """
@@ -871,17 +1057,87 @@ class LaneTemplateEstimator:
         return save_path
 
     # =========================================================
-    # 14) 외부 호출 메인 함수
+    # 14-1) [추가] 관제사 수동 차선 재추정 요청
+    # =========================================================
+    def request_reestimate(self, frame_id=None):
+        """
+        관제사가 버튼을 눌렀을 때 호출한다.
+
+        동작:
+        1) 요청 시점 기록
+        2) 그 이후 50프레임 동안만 reestimate_track_points에 따로 수집
+        3) 50프레임이 차면 기존 군집 로직을 재사용해 current_template 교체
+
+        주의:
+        - 실험 단계라 별도 조건 검사 없이 바로 시작한다
+        - 현재 차선(template)은 재추정이 끝날 때까지 그대로 유지한다
+        """
+        self.reestimate_requested = True
+        self.reestimate_collecting = True
+        self.reestimate_start_frame = frame_id
+        self.reestimate_frame_count = 0
+        self.reestimate_track_points.clear()
+        self.reestimate_status = "reestimating"
+        self.phase = "REESTIMATING"
+
+        print(f"🔄 차선 재추정 요청 접수: start_frame={frame_id}")
+
+    # =========================================================
+    # 14-2) [추가] track_history에서 재추정용 포인트 수집
+    # =========================================================
+    def _collect_reestimate_points(self, track_history):
+        """
+        현재 프레임의 track_history에서 마지막 점을 추출해
+        reestimate용 버퍼에 누적한다.
+
+        전제:
+        - 현재 프로젝트의 track_history는 tid -> [(x, y), ...] 구조로 사용 중
+        - 혹시 dict 형태가 들어와도 최소 대응 가능하도록 같이 처리
+        """
+        if not track_history:
+            return
+
+        for track_id, history in track_history.items():
+            if not history:
+                continue
+
+            last_pt = history[-1]
+            x, y = None, None
+
+            # case 1) dict 형태
+            if isinstance(last_pt, dict):
+                if "x" in last_pt and "y" in last_pt:
+                    x, y = last_pt["x"], last_pt["y"]
+                elif "cx" in last_pt and "cy" in last_pt:
+                    x, y = last_pt["cx"], last_pt["cy"]
+
+            # case 2) tuple/list 형태
+            elif isinstance(last_pt, (tuple, list)) and len(last_pt) >= 2:
+                x, y = last_pt[0], last_pt[1]
+
+            if x is None or y is None:
+                continue
+
+            self.reestimate_track_points[track_id].append((float(x), float(y)))
+
+    # =========================================================
+    # 14-3) [추가] 재추정 상태를 결과에 실어주기
+    # =========================================================
+    def _attach_reestimate_status_to_result(self, result):
+        result["lane_reestimate_status"] = self.reestimate_status
+        result["lane_reestimate_frame_count"] = self.reestimate_frame_count
+        result["lane_reestimate_window"] = self.REESTIMATE_FRAME_WINDOW
+        return result
+
+    # =========================================================
+    # 15) 외부 호출 메인 함수
     # =========================================================
     def update(self, frame_id, analysis):
         track_history = analysis["track_history"]
         track_points = analysis["track_points"]
         frame_height = analysis["frame_height"]
 
-        # -----------------------------------------------------
-        # 현재 CCTV 이름 받기
-        # analysis에 cctv_name이 들어오면 같은 터널 memory를 찾는 데 사용
-        # -----------------------------------------------------
+        # 현재 CCTV 이름
         incoming_cctv_name = analysis.get("cctv_name")
 
         # CCTV가 바뀌면 lane estimator 상태도 새로 시작
@@ -890,55 +1146,87 @@ class LaneTemplateEstimator:
             self.current_cctv_key = self._normalize_cctv_name(incoming_cctv_name)
             self._reset_for_new_cctv()
 
-        # -----------------------------------------------------
-        # frame_width가 analysis에 있으면 사용
-        # 없으면 실시간 환경 기본값(1280) 사용
-        # -----------------------------------------------------
         frame_width = analysis.get("frame_width", 1280)
 
-        # -----------------------------------------------------
-        # 차선 추정은 ROI와 별도로 화면 전체 흐름을 보기 위해
-        # 더 넓은 세로 범위를 사용
-        # -----------------------------------------------------
+        # 차선 추정은 ROI와 별도로 화면 전체 흐름을 보기 위해 더 넓은 세로 범위 사용
         lane_y1 = int(frame_height * 0.20)
         lane_y2 = int(frame_height * 0.95)
+
+        clusters_stage1_debug = []
+        clusters_stage2_debug = []
+
+        # -----------------------------------------------------
+        # [추가] R) 수동 재추정 50프레임 수집 로직
+        # -----------------------------------------------------
+        # 요청이 들어온 뒤에는 기존 자동 bootstrap과 별개로
+        # 50프레임 동안 현재 track_history를 따로 모은다.
+        if self.reestimate_collecting:
+            self.phase = "REESTIMATING"
+            self.reestimate_status = "reestimating"
+
+            self._collect_reestimate_points(track_history)
+            self.reestimate_frame_count += 1
+
+            # 50프레임이 차면 즉시 새 template 생성 시도
+            if self.reestimate_frame_count >= self.REESTIMATE_FRAME_WINDOW:
+                ok, clusters_stage1_debug, clusters_stage2_debug = self._build_reestimate_template(
+                    lane_y1=lane_y1,
+                    lane_y2=lane_y2,
+                    frame_height=frame_height
+                )
+
+                self.reestimate_collecting = False
+                self.reestimate_requested = False
+                self.reestimate_start_frame = None
+                self.reestimate_track_points.clear()
+                self.reestimate_frame_count = 0
+
+                if ok:
+                    self.reestimate_status = "reestimated"
+                    self.phase = "CLUSTER_VIEW"
+                else:
+                    # 실패해도 기존 template는 그대로 유지
+                    self.reestimate_status = "confirmed" if self.template_confirmed else "idle"
+                    self.phase = "CLUSTER_VIEW" if self.template_confirmed else "WAITING"
 
         # -----------------------------------------------------
         # A) 저장된 memory가 있으면 bootstrap 전에 먼저 로드
         # 같은 CCTV에서는 한 번만 체크
+        # 재추정 중에는 memory 자동 로드 로직을 건드리지 않는다.
         # -----------------------------------------------------
-        if not self.memory_checked and not self.template_confirmed and self.current_cctv_name:
+        if (not self.reestimate_collecting) and (not self.memory_checked) and (not self.template_confirmed) and self.current_cctv_name:
             self.memory_checked = True
-            loaded = self.load_lane_memory(self.current_cctv_name)
+            loaded = self.load_lane_memory(self.current_cctv_name, frame_id=frame_id)
             if loaded:
-                self.phase = "MEMORY_LOAD"
+                self.phase = "MEMORY_WAIT"
 
         # -----------------------------------------------------
         # B) 이미 template가 확정된 경우
         # memory load 포함
         # 이후에는 bootstrap 안 하고 바로 차선 할당만 수행
+        # 단, 재추정 중이면 bootstrap 분기는 건너뜀
         # -----------------------------------------------------
-        if self.template_confirmed:
+        if self.template_confirmed and (not self.reestimate_collecting):
             if self.memory_loaded:
-                self.phase = "MEMORY_LOAD"
+                if self._is_memory_display_ready(frame_id):
+                    self.phase = "MEMORY_LOAD"
+                else:
+                    self.phase = "MEMORY_WAIT"
             else:
+                # 직전 재추정 완료 상태라면 한 번은 유지
+                if self.reestimate_status != "reestimated":
+                    self.reestimate_status = "confirmed"
                 self.phase = "CLUSTER_VIEW"
 
-            clusters_stage1_debug = []
-            clusters_stage2_debug = []
-
-        else:
+        elif not self.template_confirmed and (not self.reestimate_collecting):
             # -------------------------------------------------
             # C) bootstrap cooldown 감소
-            # 실패 직후 바로 다시 시도하지 않도록 대기 프레임 사용
             # -------------------------------------------------
             if self.bootstrap_cooldown > 0:
                 self.bootstrap_cooldown -= 1
 
             # -------------------------------------------------
             # D) 중앙영역 차량 수 계산
-            # 중앙영역 차량 2대 이상이 연속으로 유지되어야
-            # bootstrap 시작
             # -------------------------------------------------
             center_count = self._count_center_tracks(
                 track_points,
@@ -962,7 +1250,6 @@ class LaneTemplateEstimator:
             else:
                 # ---------------------------------------------
                 # F) bootstrap 시작 시점
-                # 조건을 처음 만족한 순간 메모리 초기화 후 수집 시작
                 # ---------------------------------------------
                 if self.bootstrap_collect_frames == 0 and self.bootstrap_ready_count >= self.BOOTSTRAP_READY_FRAMES:
                     self._reset_bootstrap_memory()
@@ -1006,7 +1293,6 @@ class LaneTemplateEstimator:
 
                 # ---------------------------------------------
                 # I) bootstrap 성공 조건
-                # 충분한 안정 차량/군집이 있으면 template 확정
                 # ---------------------------------------------
                 success = self._is_valid_bootstrap_result(final_cluster_info)
 
@@ -1027,6 +1313,9 @@ class LaneTemplateEstimator:
                     self.template_confirmed = True
                     self.phase = "CLUSTER_VIEW"
                     self.memory_loaded = False
+                    self.memory_pending_display = False
+                    self.memory_loaded_frame = None
+                    self.reestimate_status = "confirmed"
 
                     # 새 결과 저장 전 이전 그래프 삭제
                     self._cleanup_debug_graphs()
@@ -1047,8 +1336,6 @@ class LaneTemplateEstimator:
 
                 # ---------------------------------------------
                 # J) bootstrap 실패 처리
-                # 너무 오래 수집했는데도 template가 안 잡히면
-                # cooldown 후 재시도 가능하게 만든다
                 # ---------------------------------------------
                 elif self.bootstrap_collect_frames >= self.BOOTSTRAP_MAX_COLLECT_FRAMES:
                     self.phase = "WAITING"
@@ -1059,22 +1346,38 @@ class LaneTemplateEstimator:
                     clusters_stage2_debug = []
 
         # -----------------------------------------------------
-        # K) 현재 최종 대표 집단 기준 임시 할당
-        # template_confirmed가 False면 lane_id는 None이 될 수 있음
+        # K) memory 표시 대기 중이면 화면에 차선을 숨긴다
+        # 내부적으로는 current_template를 갖고 있지만,
+        # 아직 50프레임이 지나지 않았으므로 프론트/오버레이에는 안 보이게 함
+        # -----------------------------------------------------
+        hide_memory_display = self.memory_loaded and self.memory_pending_display
+        memory_delay_remaining = self._get_memory_delay_remaining(frame_id) if hide_memory_display else 0
+
+        # -----------------------------------------------------
+        # L) 현재 최종 대표 집단 기준 임시 할당
+        # 단, memory 표시 대기 중이면 lane_map도 비워서
+        # 화면에 차선/차선번호가 안 보이게 만든다
         # -----------------------------------------------------
         lane_map = {}
         raw_lane_map = {}
 
-        for tid, pt in track_points.items():
-            lane_id = self._assign_lane(pt, self.current_template)
-            lane_map[tid] = lane_id
-            raw_lane_map[tid] = lane_id
+        if not hide_memory_display:
+            for tid, pt in track_points.items():
+                lane_id = self._assign_lane(pt, self.current_template)
+                lane_map[tid] = lane_id
+                raw_lane_map[tid] = lane_id
+
+            visible_centerlines = self.current_template
+            visible_lane_count = len(self.current_template)
+        else:
+            visible_centerlines = []
+            visible_lane_count = 0
 
         result = {
             "lane_map": lane_map,
             "raw_lane_map": raw_lane_map,
-            "lane_count": len(self.current_template),
-            "centerlines": self.current_template,
+            "lane_count": visible_lane_count,
+            "centerlines": visible_centerlines,
             "lane_debug": {
                 tid: {
                     "raw_lane": raw_lane_map.get(tid),
@@ -1082,25 +1385,35 @@ class LaneTemplateEstimator:
                 } for tid in lane_map
             },
             "template_phase": self.phase,
-            "template_confirmed": self.template_confirmed,
+            "template_confirmed": (self.template_confirmed and not hide_memory_display),
             "clusters_stage1": clusters_stage1_debug,
             "clusters_stage2": clusters_stage2_debug,
             "clusters": clusters_stage2_debug,
             "memory_loaded": self.memory_loaded,
             "memory_key": self.current_cctv_key,
+            "memory_pending_display": self.memory_pending_display,
+            "memory_delay_remaining": memory_delay_remaining,
         }
+
+        # 재추정 상태값 추가
+        result = self._attach_reestimate_status_to_result(result)
 
         self.last_debug = {
             "phase": self.phase,
-            "template_confirmed": self.template_confirmed,
-            "lane_count": len(self.current_template),
-            "template": self.current_template,
+            "template_confirmed": (self.template_confirmed and not hide_memory_display),
+            "lane_count": visible_lane_count,
+            "template": visible_centerlines,
             "clusters_stage1": clusters_stage1_debug,
             "clusters_stage2": clusters_stage2_debug,
             "lane_map": lane_map,
             "raw_lane_map": raw_lane_map,
             "memory_loaded": self.memory_loaded,
             "memory_key": self.current_cctv_key,
+            "memory_pending_display": self.memory_pending_display,
+            "memory_delay_remaining": memory_delay_remaining,
+            "lane_reestimate_status": self.reestimate_status,
+            "lane_reestimate_frame_count": self.reestimate_frame_count,
+            "lane_reestimate_window": self.REESTIMATE_FRAME_WINDOW,
         }
 
         return result

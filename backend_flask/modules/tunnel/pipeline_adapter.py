@@ -7,6 +7,7 @@
 # - pipeline_V5_5/PipelineCore 연결
 # - 프론트(status API)용 결과 정리
 # - CCTV 변경 시 full reset 지원
+# - [추가] service.py가 lane_template에 더 쉽게 접근할 수 있도록 getter 제공
 # ==========================================
 
 import os
@@ -45,6 +46,8 @@ class TunnelPipelineAdapter:
         self.frame_height = 720
         self.current_cctv_name = None
 
+        self.vehicle_seen_log = deque()
+
         self.last_result = {
             "state": "READY",
             "avg_speed": 0.0,
@@ -54,6 +57,11 @@ class TunnelPipelineAdapter:
             "events": [],
             "frame_id": 0,
             "analysis": {},
+
+            # [추가] 차선 재추정 상태
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
         }
 
         self.track_first_seen = {}
@@ -62,6 +70,22 @@ class TunnelPipelineAdapter:
         self.prev_accident_flag = False
         self.prev_roi_fallback = None
         self.prev_template_confirmed = None
+
+        # =========================================================
+        # [추가] 운영화면용 얇은 오버레이 스타일
+        # =========================================================
+        self.ROI_COLOR = (130, 130, 130)      # 회색
+        self.LANE_COLOR = (150, 150, 150)     # 회색
+        self.LABEL_COLOR = (210, 210, 210)    # 밝은 회색
+        self.BOX_COLOR = (0, 255, 0)          # bbox는 초록 유지
+
+        self.ROI_THICKNESS = 1
+        self.LANE_THICKNESS = 1
+        self.BOX_THICKNESS = 1
+
+        self.FONT = cv2.FONT_HERSHEY_SIMPLEX
+        self.FONT_SCALE_SMALL = 0.40
+        self.FONT_THICKNESS = 1
 
     # =========================================================
     # 1) CCTV 변경 시 full reset
@@ -86,6 +110,9 @@ class TunnelPipelineAdapter:
             "events": [],
             "frame_id": 0,
             "analysis": {},
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
         }
 
         self.track_first_seen = {}
@@ -109,6 +136,37 @@ class TunnelPipelineAdapter:
                 frame_height=self.frame_height,
                 lane_output_dir=lane_output_dir
             )
+
+    # =========================================================
+    # 2-1) [추가] service.py에서 lane_template 쉽게 접근하도록 getter 제공
+    # =========================================================
+    def get_lane_template(self):
+        """
+        service.py에서 self.pipeline.get_lane_template()로 바로 접근하기 위한 함수
+
+        현재 구조:
+        TunnelLiveService
+          └─ self.pipeline (TunnelPipelineAdapter)
+               └─ self.pipeline (PipelineCore)
+                    └─ lane_template
+
+        이 메서드를 두면 service.py에서 내부 구조를 덜 의존하게 된다.
+        """
+        if self.pipeline is None:
+            print("❌ get_lane_template: self.pipeline is None")
+            return None
+
+        print("🧪 get_lane_template dir(self.pipeline):", dir(self.pipeline))
+        if hasattr(self.pipeline, "lane_template"):
+            print("✅ get_lane_template: self.pipeline.lane_template 찾음")
+            return getattr(self.pipeline, "lane_template")
+        
+        if hasattr(self.pipeline, "lane_estimator"):
+            print("✅ get_lane_template: self.pipeline.lane_estimator 찾음")
+            return getattr(self.pipeline, "lane_estimator")
+
+        print("❌ get_lane_template: lane template 관련 속성 못 찾음")
+        return None
 
     # =========================================================
     # 3) YOLO + ByteTrack
@@ -145,6 +203,10 @@ class TunnelPipelineAdapter:
     # 4) 시각화 함수들
     # =========================================================
     def _draw_centerlines(self, frame, centerlines, lane_y1, lane_y2):
+        """
+        차선 중심선을 얇은 회색으로 그린다.
+        라벨은 크게 'LANE 0' 대신 시작지점 근처에 'L0', 'L1'처럼 작게 표시한다.
+        """
         for lane in centerlines:
             lane_id = lane.get("lane_id", -1)
             model = lane.get("rep_model", {})
@@ -170,25 +232,39 @@ class TunnelPipelineAdapter:
 
                 pts.append((int(x), int(y)))
 
+            # 얇은 회색 선
             for i in range(1, len(pts)):
-                cv2.line(frame, pts[i - 1], pts[i], (255, 255, 0), 2)
+                cv2.line(
+                    frame,
+                    pts[i - 1],
+                    pts[i],
+                    self.LANE_COLOR,
+                    self.LANE_THICKNESS
+                )
 
-            if pts:
+            # 시작지점 근처에만 작게 L0, L1 표시
+            if len(pts) > 0:
+                x0, y0 = pts[0]
                 cv2.putText(
                     frame,
-                    f"LANE {lane_id}",
-                    pts[len(pts) // 2],
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
+                    f"L{lane_id}",
+                    (x0 + 4, max(15, y0 - 4)),
+                    self.FONT,
+                    self.FONT_SCALE_SMALL,
+                    self.LABEL_COLOR,
+                    self.FONT_THICKNESS,
+                    cv2.LINE_AA
                 )
 
     def _draw_tracks(self, frame, tracks, merged_analysis):
+        """
+        차량 bbox는 초록색 유지하되 얇게,
+        텍스트는 작고 간결하게:
+        ID:12 V:2.8 L1
+        """
         boxes = merged_analysis.get("boxes", {})
         speeds = merged_analysis.get("speeds", {})
         lane_map = merged_analysis.get("lane_map", {})
-        raw_lane_map = merged_analysis.get("raw_lane_map", {})
 
         for t in tracks:
             tid = t["id"]
@@ -198,30 +274,37 @@ class TunnelPipelineAdapter:
                 continue
 
             x1, y1, x2, y2 = bbox
-            speed = speeds.get(tid, 0.0)
-            raw_lane = raw_lane_map.get(tid, None)
+            speed = float(speeds.get(tid, 0.0))
             lane = lane_map.get(tid, None)
 
+            # bbox 얇게
             cv2.rectangle(
                 frame,
                 (int(x1), int(y1)),
                 (int(x2), int(y2)),
-                (0, 255, 0),
-                2
+                self.BOX_COLOR,
+                self.BOX_THICKNESS
             )
 
-            text = f"ID:{tid} V:{speed:.1f} raw:{raw_lane} lane:{lane}"
+            lane_text = f"L{lane}" if lane is not None else "L-"
+            text = f"ID:{tid} V:{speed:.1f} {lane_text}"
+
             cv2.putText(
                 frame,
                 text,
-                (int(x1), max(20, int(y1) - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                2
+                (int(x1), max(15, int(y1) - 5)),
+                self.FONT,
+                self.FONT_SCALE_SMALL,
+                self.BOX_COLOR,
+                self.FONT_THICKNESS,
+                cv2.LINE_AA
             )
 
     def _draw_roi_lines(self, frame, merged_analysis):
+        """
+        ROI는 얇은 회색 선만 표시하고,
+        텍스트(ROI 수치)는 표시하지 않는다.
+        """
         h, w = frame.shape[:2]
 
         roi_y1 = merged_analysis.get("roi_y1")
@@ -235,29 +318,8 @@ class TunnelPipelineAdapter:
         roi_y1 = int(roi_y1)
         roi_y2 = int(roi_y2)
 
-        used_fallback = bool(
-            merged_analysis.get("roi_used_fallback", False)
-            or merged_analysis.get("roi_fallback", False)
-        )
-
-        color = (0, 255, 255) if used_fallback else (255, 0, 0)
-
-        cv2.line(frame, (0, roi_y1), (w, roi_y1), color, 2)
-        cv2.line(frame, (0, roi_y2), (w, roi_y2), color, 2)
-
-        roi_text = f"ROI: {roi_y1}-{roi_y2}"
-        if used_fallback:
-            roi_text += " fallback"
-
-        cv2.putText(
-            frame,
-            roi_text,
-            (20, max(25, roi_y1 - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            color,
-            2
-        )
+        cv2.line(frame, (0, roi_y1), (w, roi_y1), self.ROI_COLOR, self.ROI_THICKNESS)
+        cv2.line(frame, (0, roi_y2), (w, roi_y2), self.ROI_COLOR, self.ROI_THICKNESS)
 
     def _draw_summary(self, frame, result, frame_id):
         merged = result.get("analysis", {})
@@ -389,7 +451,6 @@ class TunnelPipelineAdapter:
         timestamp = time.strftime("%H:%M:%S")
         log_text = f"[{timestamp}] {message}"
 
-        # 완전 같은 메시지가 연속으로 쌓이지 않게만 방지
         if len(self.event_logs) == 0 or self.event_logs[-1] != log_text:
             self.event_logs.append(log_text)
 
@@ -425,9 +486,18 @@ class TunnelPipelineAdapter:
         raw_lane_map = merged.get("raw_lane_map", {})
         boxes = merged.get("boxes", {})
 
-    # -----------------------------
-    # 1) vehicles + dwell_times 생성
-    # -----------------------------
+        # -----------------------------
+        # [추가] 차선 재추정 상태값 읽기
+        # lane_template.update() -> result["analysis"] 쪽으로 실려 올라온다고 가정
+        # 없으면 기본값 유지
+        # -----------------------------
+        lane_reestimate_status = merged.get("lane_reestimate_status", "idle")
+        lane_reestimate_frame_count = int(merged.get("lane_reestimate_frame_count", 0))
+        lane_reestimate_window = int(merged.get("lane_reestimate_window", 50))
+
+        # -----------------------------
+        # 1) vehicles + dwell_times 생성
+        # -----------------------------
         now_ts = time.time()
         current_ids = set()
         vehicles = []
@@ -456,15 +526,25 @@ class TunnelPipelineAdapter:
                 "dwell_time": dwell_sec,
                 "bbox": bbox,
             })
+            # 최근 1분 누적 차량수 계산용 로그에 기록
+            self.vehicle_seen_log.append((now_ts, tid))
 
-    # 현재 화면에서 사라진 차량은 추적 시간 메모리에서 제거
         stale_ids = [tid for tid in list(self.track_first_seen.keys()) if tid not in current_ids]
         for tid in stale_ids:
             del self.track_first_seen[tid]
 
-    # -----------------------------
-    # 2) 이벤트 로그 생성
-    # -----------------------------
+        # --------------------------------------------------
+        # 최근 60초 이내 로그만 유지
+        # --------------------------------------------------
+        while self.vehicle_seen_log and now_ts - self.vehicle_seen_log[0][0] > 60:
+            self.vehicle_seen_log.popleft()
+
+        # 최근 60초 동안 등장한 고유 차량 수
+        minute_vehicle_count = len(set(tid for _, tid in self.vehicle_seen_log))
+
+        # -----------------------------
+        # 2) 이벤트 로그 생성
+        # -----------------------------
         roi_fallback = bool(merged.get("roi_used_fallback", False))
         template_confirmed = bool(merged.get("template_confirmed", False))
 
@@ -496,9 +576,9 @@ class TunnelPipelineAdapter:
                 self._append_event_log("차선 bootstrap 중")
             self.prev_template_confirmed = template_confirmed
 
-    # -----------------------------
-    # 3) 기존 events 유지
-    # -----------------------------
+        # -----------------------------
+        # 3) 기존 events 유지
+        # -----------------------------
         events = []
         if roi_fallback:
             events.append("ROI fallback 사용")
@@ -506,6 +586,12 @@ class TunnelPipelineAdapter:
             events.append("사고 감지")
         if not template_confirmed:
             events.append("차선 bootstrap 중")
+
+        # 재추정 상태도 간단히 이벤트에 반영 가능
+        if lane_reestimate_status == "reestimating":
+            events.append(f"차선 재추정 중 ({lane_reestimate_frame_count}/{lane_reestimate_window})")
+        elif lane_reestimate_status == "reestimated":
+            events.append("차선 재추정 완료")
 
         return {
             "state": state_text,
@@ -519,6 +605,14 @@ class TunnelPipelineAdapter:
             "dwell_times": dwell_times,
             "frame_id": frame_id,
             "analysis": merged,
+            
+            # [추가] 최근 1분 누적 차량수
+            "minute_vehicle_count": minute_vehicle_count,
+
+            # [추가] 프론트에서 바로 쓰는 재추정 상태
+            "lane_reestimate_status": lane_reestimate_status,
+            "lane_reestimate_frame_count": lane_reestimate_frame_count,
+            "lane_reestimate_window": lane_reestimate_window,
         }
 
     # =========================================================
@@ -546,6 +640,9 @@ class TunnelPipelineAdapter:
                     "events": ["pipeline initializing"],
                     "frame_id": frame_id,
                     "analysis": {},
+                    "lane_reestimate_status": "idle",
+                    "lane_reestimate_frame_count": 0,
+                    "lane_reestimate_window": 50,
                 }
                 self.last_result = ready_result
                 return annotated, ready_result
@@ -560,11 +657,9 @@ class TunnelPipelineAdapter:
                 merged.get("roi_y2", merged.get("roi_raw_y2", frame.shape[0] * 0.95))
             )
 
-            # ROI는 샘플이 있거나 fallback이면 표시
             if merged.get("roi_sample_count", 0) > 0 or merged.get("roi_fixed", False):
                 self._draw_roi_lines(annotated, merged)
 
-            # 차선은 template_confirmed 이후에만 표시
             if merged.get("template_confirmed", False):
                 self._draw_centerlines(
                     annotated,
@@ -574,7 +669,6 @@ class TunnelPipelineAdapter:
                 )
 
             self._draw_tracks(annotated, tracks, merged)
-            # self._draw_summary(annotated, result, frame_id) # 화면 속 정보 패널 제거
 
             front_status = self._build_front_status(result, frame_id, tracks)
             self.last_result = front_status
@@ -594,6 +688,9 @@ class TunnelPipelineAdapter:
                 "events": [f"pipeline error: {e}"],
                 "frame_id": frame_id,
                 "analysis": {},
+                "lane_reestimate_status": "idle",
+                "lane_reestimate_frame_count": 0,
+                "lane_reestimate_window": 50,
             }
             self.last_result = error_result
 
