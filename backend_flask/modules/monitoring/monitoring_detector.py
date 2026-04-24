@@ -69,14 +69,8 @@ from modules.monitoring.detector_modules.tracker         import YoloTracker
 from modules.monitoring.detector_modules.judge           import WrongWayJudge
 from modules.monitoring.detector_modules.id_manager      import IDManager
 from modules.monitoring.detector_modules.camera_switch   import CameraSwitchDetector
-from modules.monitoring.detector_modules.traffic_analyzer import TrafficAnalyzer, CongestionPredictor
-
-# GRU: PyTorch 없는 환경에서도 동작하도록 try/except
-try:
-    from modules.monitoring.detector_modules.gru_module import GRUModule
-    _GRU_AVAILABLE = True
-except ImportError:
-    _GRU_AVAILABLE = False
+from modules.monitoring.detector_modules.traffic_analyzer      import TrafficAnalyzer, CongestionPredictor
+from modules.monitoring.detector_modules.historical_predictor  import HistoricalPredictor
 
 from modules.traffic.detectors.base_detector import BaseDetector
 
@@ -267,7 +261,6 @@ class MonitoringDetector(BaseDetector):
 
         # ── DetectorConfig ─────────────────────────────────────────────
         # flow_map_path=None + detect_only=False → 옵션 B: 매번 새로 학습
-        # gru_blend_ratio는 config 기본값(0.2) 유지
         self.cfg = DetectorConfig(
             model_path   = Path(_YOLO_MODEL),
             conf         = 0.3,
@@ -290,12 +283,12 @@ class MonitoringDetector(BaseDetector):
         self.switch = CameraSwitchDetector(self.cfg)
 
         # TrafficAnalyzer: 프레임 크기 확인 후 run() 에서 초기화
-        self.traffic_analyzer_a = None
-        self.traffic_analyzer_b = None
-        self.predictor_a        = None
-        self.predictor_b        = None
-        self.gru_module_a       = None
-        self.gru_module_b       = None
+        self.traffic_analyzer_a = None   # A방향 정체 분석기 (run()에서 초기화)
+        self.traffic_analyzer_b = None   # B방향 정체 분석기 (run()에서 초기화)
+        self.predictor_a        = None   # A방향 단기 추세 예측기
+        self.predictor_b        = None   # B방향 단기 추세 예측기
+        self._hist_pred_a       = None   # A방향 시각별 이력 기반 5분 후 예측기
+        self._hist_pred_b       = None   # B방향 시각별 이력 기반 5분 후 예측기
 
         # ── 방향 분류 상태 ────────────────────────────────────────────────
         self._ref_direction  = None
@@ -402,10 +395,8 @@ class MonitoringDetector(BaseDetector):
                 if not cached or cache_age > 5:
                     # 캐시가 없거나 5초 이상 됐으면 강제 무효화
                     its_helper._cctv_cache.pop(self._road_key, None)
-                    print(f"🔃 [{self.camera_id}] URL 갱신 (캐시 {cache_age:.1f}초 경과 → pop+재조회)")
                 else:
-                    # 5초 이내 갱신된 캐시 → 재사용 (API 절약)
-                    print(f"♻️  [{self.camera_id}] URL 캐시 재사용 (캐시 {cache_age:.1f}초 경과)")
+                    pass  # 5초 이내 갱신된 캐시 → 재사용 (API 절약)
 
                 # get_cctv_list: 캐시가 살아 있으면 캐시 반환, 없으면 ITS API 호출
                 cameras = its_helper.get_cctv_list(self._road_key)
@@ -418,10 +409,7 @@ class MonitoringDetector(BaseDetector):
 
             # 잠금 해제 후 결과 적용
             if new_url:
-                url_changed = (new_url != self.url)
                 self.url = new_url   # reconnect() 에서도 최신 URL을 쓸 수 있도록 갱신
-                if url_changed:
-                    print(f"🔄 [{self.camera_id}] ITS URL 토큰 갱신 완료")
                 return new_url
 
             # 목록에 없는 경우 — 카메라가 ITS 에서 잠시 제외됐을 가능성
@@ -507,9 +495,6 @@ class MonitoringDetector(BaseDetector):
         self._dir_label_a, self._dir_label_b = (
             ("UP", "DOWN") if self._ref_direction[1] < 0 else ("DOWN", "UP")
         )
-        print(f"🧭 [{self.camera_id}] 기준 방향 "
-              f"({self._ref_direction[0]:.3f}, {self._ref_direction[1]:.3f}) "
-              f"A={self._dir_label_a} B={self._dir_label_b}")
 
     def _compute_direction_cell_counts(self):
         """방향별 유효 셀 수를 계산해 TrafficAnalyzer에 주입하고, 화면 좌/우 위치를 판별한다."""
@@ -542,8 +527,6 @@ class MonitoringDetector(BaseDetector):
         avg_col_a = col_sum_a / count_a if count_a > 0 else 0
         avg_col_b = col_sum_b / count_b if count_b > 0 else self.flow.grid_size
         self._dir_a_is_left = avg_col_a < avg_col_b   # True: A=왼쪽, False: B=왼쪽
-        print(f"📐 [{self.camera_id}] 방향별 셀 A={self._valid_cells_a}(avg_col={avg_col_a:.1f}) "
-              f"B={self._valid_cells_b}(avg_col={avg_col_b:.1f}) → A_left={self._dir_a_is_left}")
 
     def _classify_direction(self, fx, fy) -> str:
         """flow_map 보간 기반 방향 분류 (fallback)."""
@@ -658,6 +641,11 @@ class MonitoringDetector(BaseDetector):
             "waiting_stable":    st.waiting_stable,
             "learning_progress": progress,
             "learning_total":    total,
+            # ── HistoricalPredictor: 5분 후 예측 ──────────────────────────
+            # 각 방향의 predict()는 학습 데이터 없으면 None ("Training..." 표시).
+            # [{horizon_sec, horizon_min, predicted_level, confidence, jam_score, interpolated}]
+            "prediction_a":      self._hist_pred_a.predict() if self._hist_pred_a else None,
+            "prediction_b":      self._hist_pred_b.predict() if self._hist_pred_b else None,
         }
         self.socketio.emit('traffic_update', payload)
 
@@ -723,7 +711,6 @@ class MonitoringDetector(BaseDetector):
             "vehicle_count":     vc_a + vc_b,
             "flow_map_coverage": f"{int(learned_cells / total_cells * 100)}% 셀 학습 완료",
             "yolo_model":        "yolo11n_v2/best.pt",
-            "gru_blend_ratio":   cfg.gru_blend_ratio,
             "wrongway_ids":      list(st.wrong_way_ids),
         }
 
@@ -850,28 +837,29 @@ class MonitoringDetector(BaseDetector):
 
         # 스트림 다운스케일 비율 확정 (640px 상한)
         self._stream_scale = min(1.0, 640 / fw) if fw > 640 else 1.0
-        print(f"📐 [{self.camera_id}] 스트림 스케일: {fw}×{fh} → scale={self._stream_scale:.3f}")
 
-        # ── GRU 초기화 ────────────────────────────────────────────────
-        if _GRU_AVAILABLE:
-            self.gru_module_a = GRUModule(cfg, fps=fps)
-            self.gru_module_b = GRUModule(cfg, fps=fps)
-            print(f"🧠 [{self.camera_id}] GRUModule ×2 초기화 (blend={cfg.gru_blend_ratio})")
-        else:
-            print(f"ℹ️  [{self.camera_id}] GRU 없음 → rule-only 모드")
-
-        # ── TrafficAnalyzer ×2 초기화 ────────────────────────────────
+        # ── TrafficAnalyzer ×2 초기화 (Rule 기반 단독, GRU 제거) ────
         self.traffic_analyzer_a = TrafficAnalyzer(
-            cfg, frame_w=fw, frame_h=fh, fps=fps,
-            flow_map=self.flow, gru_module=self.gru_module_a
+            cfg, frame_w=fw, frame_h=fh, fps=fps, flow_map=self.flow
         )
         self.traffic_analyzer_a.set_state(st)
 
         self.traffic_analyzer_b = TrafficAnalyzer(
-            cfg, frame_w=fw, frame_h=fh, fps=fps,
-            flow_map=self.flow, gru_module=self.gru_module_b
+            cfg, frame_w=fw, frame_h=fh, fps=fps, flow_map=self.flow
         )
         self.traffic_analyzer_b.set_state(st)
+
+        # ── HistoricalPredictor ×2 초기화 (시각별 5분 후 예측) ───────
+        # 현재는 메모리에만 슬롯 데이터를 보관한다 (재시작 시 초기화).
+        # 영속 저장은 추후 DB 연동으로 구현한다.
+        self._hist_pred_a = HistoricalPredictor(
+            smooth_threshold=cfg.smooth_jam_threshold,   # SMOOTH 경계값 (0.25)
+            slow_threshold=cfg.slow_jam_threshold,       # JAM 경계값 (0.60)
+        )
+        self._hist_pred_b = HistoricalPredictor(
+            smooth_threshold=cfg.smooth_jam_threshold,
+            slow_threshold=cfg.slow_jam_threshold,
+        )
 
         self.predictor_a = CongestionPredictor(cfg, fps=fps)
         self.predictor_b = CongestionPredictor(cfg, fps=fps)
@@ -977,11 +965,6 @@ class MonitoringDetector(BaseDetector):
                 # ── [진단] reconnect 호출 기록 ───────────────────────────────
                 self._diag['reconnect_count'] = self._diag.get('reconnect_count', 0) + 1
                 self._diag['reconnect_last_at'] = datetime.utcnow().isoformat()
-                print(
-                    f"🔄 [DIAG][{self.camera_id}] reconnect 시작 "
-                    f"(누적 {self._diag['reconnect_count']}회) "
-                    f"— BaseDetector.reconnect() 가 이벤트 루프를 차단할 수 있음"
-                )
                 reconnected = self.reconnect(delay=3, max_retries=5)
                 if not reconnected:
                     gevent.sleep(10)
@@ -1027,12 +1010,6 @@ class MonitoringDetector(BaseDetector):
                     _time_gap_ratio = _ts_delta_ms / _expected_ms  # 실제/예상 비율 (1.0 = 정상)
                     if _time_gap_ratio > 2.5 and _ts_delta_ms > 400:  # 2.5배 이상 + 0.4초 이상
                         _is_time_gap = True  # partial drop 확인 → jump 임계값 확대
-                        print(
-                            f"[F:{st.frame_num}] ⏱ 타임스탬프 갭 감지 "
-                            f"(간격={_ts_delta_ms:.0f}ms, "
-                            f"예상={_expected_ms:.0f}ms, "
-                            f"비율={_time_gap_ratio:.1f}x)"
-                        )
             _prev_cap_ts_ms = _cur_cap_ts_ms  # 다음 프레임 비교용 저장
 
             # YOLO+ByteTrack: 추론도 C 익스텐션 블로킹 → OS 스레드로 실행
@@ -1087,10 +1064,9 @@ class MonitoringDetector(BaseDetector):
                         print(f"📷 [{self.camera_id}] 카메라 전환 감지 → 화면 안정 대기 중...")
                         st.waiting_stable = True
                         st.stable_since_frame = st.frame_num
-                        if self.gru_module_a:
-                            self.gru_module_a.reset()
-                        if self.gru_module_b:
-                            self.gru_module_b.reset()
+                        # waiting_stable 최초 진입 시각만 기록한다 (재연결 반복 시 리셋 방지)
+                        if st.waiting_stable_entered_frame == 0:
+                            st.waiting_stable_entered_frame = st.frame_num
                         self._track_direction.clear()
 
                 # (B) 안정 대기 중: diff 모니터링 → 안정되면 재학습 시작
@@ -1121,12 +1097,11 @@ class MonitoringDetector(BaseDetector):
                         st.relearning = False
                         st.waiting_stable = True
                         st.stable_since_frame = st.frame_num
+                        # waiting_stable 최초 진입 시각만 기록 (재연결 반복 시 리셋 방지)
+                        if st.waiting_stable_entered_frame == 0:
+                            st.waiting_stable_entered_frame = st.frame_num
                         self.flow.reset()
                         _relearn_smooth_80 = _relearn_smooth_95 = False
-                        if self.gru_module_a:
-                            self.gru_module_a.reset()
-                        if self.gru_module_b:
-                            self.gru_module_b.reset()
 
             # ── 초기 학습 완료 처리 ──
             if st.is_learning:
@@ -1180,8 +1155,9 @@ class MonitoringDetector(BaseDetector):
                     _rd = self._ref_direction or (1.0, 0.0)   # None 방어
                     self.flow.build_directional_channels(_rd[0], _rd[1])
                     gevent.sleep(0)
-                    st.relearning      = False
-                    st.cooldown_until  = st.frame_num + cfg.cooldown_frames
+                    st.relearning                = False
+                    st.waiting_stable_entered_frame = 0   # 재학습 완료 → 진입 프레임 리셋
+                    st.cooldown_until            = st.frame_num + cfg.cooldown_frames
                     self.switch.set_reference(frame)
                     print(f"✅ [{self.camera_id}] 재학습 완료!")
                     # 재학습 결과도 저장 → 카메라 전환 후 새 화면을 캐시로 보존
@@ -1389,6 +1365,18 @@ class MonitoringDetector(BaseDetector):
                 self.traffic_analyzer_b.update(tracks_b, speeds_b, st.frame_num)
                 self.predictor_a.update(self.traffic_analyzer_a.get_avg_speed())
                 self.predictor_b.update(self.traffic_analyzer_b.get_avg_speed())
+
+                # ── HistoricalPredictor: jam_score 이력 누적 ──────────────
+                # grace period 내(재연결 직후 속도 이력 미구성 구간)는 기록하지 않는다.
+                # 오염된 jam_score가 CSV에 쌓이는 것을 방지하기 위함이다.
+                _post_grace = getattr(cfg, "post_skip_grace_frames", 30)
+                _skip_frame = getattr(st, "_last_skip_frame", -9999)    # 없으면 -9999
+                _in_grace   = (st.frame_num - _skip_frame) <= _post_grace
+                if not _in_grace:
+                    if self._hist_pred_a is not None:
+                        self._hist_pred_a.record(self.traffic_analyzer_a.get_jam_score())
+                    if self._hist_pred_b is not None:
+                        self._hist_pred_b.record(self.traffic_analyzer_b.get_jam_score())
 
             # ── 최신 상태 저장 (frame_lock: BaseDetector 제공) ──
             with self.frame_lock:

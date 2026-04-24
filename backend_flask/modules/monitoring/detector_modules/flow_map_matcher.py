@@ -151,14 +151,12 @@ class FlowMapMatcher:
                 continue
 
             s = score_frames(current_frame, ref_img)
-            print(f"  [매칭] {road_dir.name}: {s:.3f}")
 
             if s > best_score:
                 best_score = s
                 best_dir   = road_dir
 
         if best_score < self.min_score:
-            print(f"  [매칭] 최고 점수 {best_score:.3f} < 기준 {self.min_score} → 새 학습 필요")
             return None, best_score
 
         print(f"  [매칭] ✅ 선택: {best_dir.name} (score={best_score:.3f})")

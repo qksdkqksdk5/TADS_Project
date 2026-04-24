@@ -14,7 +14,9 @@ const ROADS = [
   { key: 'jungang',   label: '중앙' },
 ];
 
-export default function SectionList({ host, cameras, selectedId, onSelect, onViewItsCctv, onCctvListChange, onRemoveCameras }) {
+// onRoadChange: 도로 탭이 바뀔 때 부모(index.jsx)에게 새 road 키를 알려주는 콜백
+// → 부모가 MonitoringMap의 road prop을 갱신해 지도 오버레이도 함께 교체한다
+export default function SectionList({ host, cameras, selectedId, onSelect, onViewItsCctv, onCctvListChange, onRemoveCameras, onRoadChange }) {
   const [road,        setRoad]        = useState('gyeongbu');
   const [cctvList,    setCctvList]    = useState([]);
   const [icList,      setIcList]      = useState([]);
@@ -45,6 +47,12 @@ export default function SectionList({ host, cameras, selectedId, onSelect, onVie
       .catch(() => setSegError('CCTV 목록 로드 실패'))
       .finally(() => setLoadingCctv(false));
   }, [road, host]);
+
+  // 도로 탭 변경 시 부모(index.jsx)에게 알린다
+  // → 부모는 이 값을 MonitoringMap의 road prop으로 전달해 지도 오버레이를 교체한다
+  useEffect(() => {
+    onRoadChange?.(road);
+  }, [road]);
 
   // IC 드롭다운 기본값: 첫/마지막 IC
   useEffect(() => {
