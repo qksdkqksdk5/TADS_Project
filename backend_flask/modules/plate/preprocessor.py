@@ -76,13 +76,13 @@ def _denoise(img: np.ndarray) -> np.ndarray:
 
 
 def _morph(img: np.ndarray) -> np.ndarray:
-    """
-    모폴로지 클로징 (팽창 → 침식)
-    - 끊어지거나 번진 글자 획을 연결
-    - 빗물, 오염 등으로 인한 번호판 글자 손상에 효과적
-    - 그레이스케일 변환 후 처리 → BGR로 복원
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    """ 색상 정보를 보존하는 모폴로지 클로징 """
+    # LAB으로 변환하여 L(명도) 채널에만 모폴로지 적용
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    closed = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-    return cv2.cvtColor(closed, cv2.COLOR_GRAY2BGR)
+    closed_l = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel)
+    
+    lab = cv2.merge([closed_l, a, b])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
