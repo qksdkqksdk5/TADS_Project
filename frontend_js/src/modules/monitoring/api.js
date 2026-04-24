@@ -16,7 +16,8 @@ const createClient = (host) => axios.create({
 // >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
   headers: {
     'ngrok-skip-browser-warning': 'true'
-  }
+  },
+  timeout: 15000,   // 15초 후 자동으로 에러 발생 → catch 블록 실행 → 처리중 버튼 해제
 });
 
 export const startCamera = (host, params) =>
