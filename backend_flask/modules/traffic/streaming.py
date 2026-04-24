@@ -2,6 +2,7 @@ import os
 import cv2
 from datetime import datetime
 from flask import Blueprint, Response, request, jsonify, current_app
+from matplotlib.pylab import rint
 from models import db, DetectionResult, ManualResult
 from modules.traffic.detectors.manager import detector_manager
 from modules.traffic.detectors.fire_detector import FireDetector
@@ -98,7 +99,6 @@ def video_feed():
     video_type = request.args.get('type', 'webcam')
     socketio   = current_app.extensions['socketio']
     app        = current_app._get_current_object()
-
     detector = _get_detector(video_type, socketio, app)
 
     if detector is None:
@@ -122,6 +122,7 @@ def capture_now():
             video_type = shared.current_broadcast_type or next(iter(shared.latest_frames), 'webcam')
 
         frame = shared.latest_frames.get(video_type)
+
         if frame is None:
             return jsonify({"status": "error", "message": "영상을 찾을 수 없습니다."}), 400
 

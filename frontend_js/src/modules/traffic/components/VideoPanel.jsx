@@ -91,6 +91,13 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
     }
   }, [cctvData]);
 
+  useEffect(() => {
+    return () => {
+      setReverseOn(false);
+      setFireOn(false);
+    };
+  }, [activeTab]);
+
   const handleToggle = async (type, currentOn, setOn) => {
     const idx = type === 'reverse' ? 0 : 1;
     const item = cctvData[idx];

@@ -48,7 +48,10 @@ class FireDetector(BaseDetector):
         self.lat           = lat
         self.lng           = lng
         self.is_simulation = is_simulation
-        self.video_origin  = video_origin
+        if is_simulation:
+            self.video_origin = video_origin
+        else:
+            self.video_origin = f"{video_origin}_{cctv_name}"
 
         self.model = get_shared_fire_model()
         print(f"💻 [{cctv_name}] FireDetector 준비 완료 (공유 모델 사용)")

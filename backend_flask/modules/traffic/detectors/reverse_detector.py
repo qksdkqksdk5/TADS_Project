@@ -130,7 +130,10 @@ class ReverseDetector(BaseDetector):
         self.is_simulation = is_simulation
         self.realtime_url  = realtime_url if realtime_url else url
         self.original_url  = url
-        self.video_origin  = f"{video_origin}_{cctv_name}"
+        if is_simulation:
+            self.video_origin = video_origin
+        else:
+            self.video_origin = f"{video_origin}_{cctv_name}"
 
         # ── DetectorConfig (detector_modules 버전) ────────────────────────
         conf_val = float(os.getenv('CONFIDENCE_THRESHOLD') or conf or 0.5)

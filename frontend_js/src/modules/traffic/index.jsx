@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import VideoPanel   from './components/VideoPanel';
 import MapPanel     from './components/MapPanel';
 import ControlPanel from './components/ControlPanel';
-import { fetchCctvUrl, startSimulation, stopSimulation } from './api';
+import { fetchCctvUrl, startSimulation, stopSimulation, stopDetection } from './api';
 
 export default function TrafficModule({ socket, user, activeTab, isMobile, host,
   isEmergency, pendingAlerts, logs, mapRef, resolveEmergency, resolveAllAlertsAction, moveToAlert,
@@ -33,14 +33,32 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
     }
   }, [activeTab, host]);
 
-  // sim 탭에서 다른 탭으로 이동할 때만 stop
   useEffect(() => {
     const prevTab = prevTabRef.current;
-    prevTabRef.current = activeTab;
-    if (prevTab === "sim" && activeTab !== "sim") {
-      stopSimulation(host);
+    
+    if (prevTab !== activeTab) {
+      // 1. 시뮬레이션 탭을 완전히 벗어날 때만 시뮬레이션 중지
+      if (prevTab === "sim" && activeTab !== "sim") {
+        console.log("🛑 시뮬레이션 종료 (시뮬레이션 탭을 벗어남)");
+        stopSimulation(host);
+      }
+
+      // 2. CCTV 관제 탭을 벗어날 때 (일반 분석기만 종료)
+      if (prevTab === "cctv" && cctvData.length > 0) {
+        console.log("🧹 실시간 분석 리소스 정리 (시뮬레이션 제외)");
+        cctvData.forEach(item => {
+          if (!item.name) return;
+          
+          // 핵심: 일반 분석(reverse, fire)만 중지 명령을 보냅니다.
+          // 백엔드 stopDetection에서 명시적으로 일반 이름만 타겟팅해야 합니다.
+          stopDetection(host, { name: item.name, type: 'reverse' }).catch(() => {});
+          stopDetection(host, { name: item.name, type: 'fire' }).catch(() => {});
+        });
+      }
     }
-  }, [activeTab, host]);
+
+    prevTabRef.current = activeTab;
+  }, [activeTab, host, cctvData]);
 
   useEffect(() => {
     if (!mapRef.current) return;
