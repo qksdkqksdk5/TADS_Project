@@ -227,3 +227,8 @@ mysql_data/
 **/chroma_db/
 *.sqlite3
 *.bin
+
+# Event Storage 로컬 데이터 제외
+**/event_storage/
+*.json
+*.

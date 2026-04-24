@@ -18,6 +18,10 @@ npm run dev
 - `assets` 폴더를 다운로드하여  
   `backend_flask/` 경로에 삽입합니다.
 
+### 📁 test 설정
+- `test` 폴더를 다운로드하여  
+  `backend_flask/modules/plate/` 경로에 삽입합니다.
+
 ### 🔑 환경 변수 설정
 - `env.txt` 파일을 다운로드 후  
 - 프로젝트 최상단 폴더에 위치시키고  

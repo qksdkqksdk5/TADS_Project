@@ -1,7 +1,7 @@
 # 🚦 TADS: Traffic Anomaly Detection System
 
 > **AI 기반 실시간 교통 이상 탐지 및 관제 시스템**
-> YOLO · ByteTrack · FlowMap 기반 역주행/화재 탐지 + 웹 관제 플랫폼
+> 역주행/화재 탐지 + 교통 흐름 모니터링 + 번호판 인식 + 라즈베리파이 CCTV + AI AGENT
 
 ---
 
@@ -47,11 +47,15 @@ TADS는 이를 해결하기 위해:
 
 ### 🚦 Traffic Flow Monitoring
 
-![traffic](./assets/traffic_flow.png)
+![traffic](./assets/traffic_flow_1.png)
+
+![traffic](./assets/traffic_flow_2.png)
 
 ### 🚇 Smart Tunnel
 
-![tunnel](./assets/smart_tunnel.png)
+![tunnel](./assets/smart_tunnel_1.png)
+
+![tunnel](./assets/smart_tunnel_2.png)
 
 ### 🔍 License Plate Recognition
 
@@ -64,6 +68,10 @@ TADS는 이를 해결하기 위해:
 ### 📊 Statistics
 
 ![stats](./assets/statistics.png)
+
+### 👤 AI-AGENT
+
+![llm](./assets/AI_AGENT.png)
 
 ---
 
@@ -286,7 +294,6 @@ TADS는 이를 해결하기 위해:
 * Socket.IO
 * MySQL
 * SQLAlchemy
-* Gevent
 
 ### Frontend
 

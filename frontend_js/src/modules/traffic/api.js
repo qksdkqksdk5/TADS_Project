@@ -5,38 +5,59 @@ import axios from 'axios';
  * 공공 CCTV 목록 및 스트리밍 URL 조회
  * AWS에서 ITS API 직접 호출이 차단되므로 브라우저에서 직접 호출 후 백엔드 캐시에 저장
  */
+// export const fetchCctvUrl = async (host) => {
+//   try {
+//     // 1. 백엔드에 이미 캐시된 데이터가 있는지 확인 (우선순위 1)
+//     const checkRes = await axios.get(`http://${host}:5000/api/its/get_cctv_url`);
+//     if (checkRes.data.success && checkRes.data.cctvData.length > 0) {
+//       return { data: checkRes.data };
+//     }
+
+//     // 2. 캐시가 비어있을 때만 브라우저에서 직접 ITS API 호출 (최초 1회 실행용)
+//     const res = await axios.get('https://openapi.its.go.kr:9443/cctvInfo', {
+//       params: {
+//         apiKey: '9241caeb859d43b0aaadf26b6b64988a',
+//         type: 'ex', cctvType: '1',
+//         minX: '126.8', maxX: '127.89',
+//         minY: '36.8', maxY: '37.0', getType: 'json'
+//       }
+//     });
+
+//     const list = res.data.response?.data || [];
+//     const shuffled = [...list].sort(() => Math.random() - 0.5).slice(0, 4);
+//     const cctvData = shuffled.map(item => ({
+//       url: item.cctvurl, name: item.cctvname,
+//       lat: parseFloat(item.coordy), lng: parseFloat(item.coordx)
+//     }));
+
+//     // 3. 백엔드 캐시에 저장 (이후 모든 사용자가 이 데이터를 공유)
+//     await axios.post(`http://${host}:5000/api/its/set_cctv_list`, { cctvData });
+
+//     return { data: { success: true, cctvData } };
+
+//   } catch (e) {
+//     console.warn('ITS API 실패, 테스트 채널 사용:', e);
+//     const testUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+//     const cctvData = Array.from({ length: 4 }, (_, i) => ({
+//       url: testUrl, name: `테스트 채널 ${i + 1}`, lat: 37.5, lng: 127.0
+//     }));
+//     return { data: { success: true, cctvData } };
+//   }
+// };
+
 export const fetchCctvUrl = async (host) => {
   try {
-    // 1. 백엔드에 이미 캐시된 데이터가 있는지 확인 (우선순위 1)
-    const checkRes = await axios.get(`http://${host}:5000/api/its/get_cctv_url`);
-    if (checkRes.data.success && checkRes.data.cctvData.length > 0) {
-      return { data: checkRes.data };
+    // 이제 백엔드가 모든 걸 처리합니다.
+    const res = await axios.get(`http://${host}:5000/api/its/get_cctv_url`);
+    
+    if (res.data.success) {
+      return { data: res.data };
     }
-
-    // 2. 캐시가 비어있을 때만 브라우저에서 직접 ITS API 호출 (최초 1회 실행용)
-    const res = await axios.get('https://openapi.its.go.kr:9443/cctvInfo', {
-      params: {
-        apiKey: '9241caeb859d43b0aaadf26b6b64988a',
-        type: 'ex', cctvType: '1',
-        minX: '126.8', maxX: '127.89',
-        minY: '36.8', maxY: '37.0', getType: 'json'
-      }
-    });
-
-    const list = res.data.response?.data || [];
-    const shuffled = [...list].sort(() => Math.random() - 0.5).slice(0, 4);
-    const cctvData = shuffled.map(item => ({
-      url: item.cctvurl, name: item.cctvname,
-      lat: parseFloat(item.coordy), lng: parseFloat(item.coordx)
-    }));
-
-    // 3. 백엔드 캐시에 저장 (이후 모든 사용자가 이 데이터를 공유)
-    await axios.post(`http://${host}:5000/api/its/set_cctv_list`, { cctvData });
-
-    return { data: { success: true, cctvData } };
+    throw new Error("데이터 로드 실패");
 
   } catch (e) {
-    console.warn('ITS API 실패, 테스트 채널 사용:', e);
+    console.warn('CCTV 데이터 획득 실패:', e);
+    // 비상용 로컬 테스트 데이터
     const testUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
     const cctvData = Array.from({ length: 4 }, (_, i) => ({
       url: testUrl, name: `테스트 채널 ${i + 1}`, lat: 37.5, lng: 127.0
