@@ -228,7 +228,6 @@ mysql_data/
 *.sqlite3
 *.bin
 
-# Event Storage 로컬 데이터 제외
+# Smart Tunnel local runtime data
 **/event_storage/
-*.json
-*.
+**/runtime_data/

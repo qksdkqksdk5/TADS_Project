@@ -21,21 +21,43 @@ import threading
 import cv2
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .pipeline_adapter import TunnelPipelineAdapter
 from .ventilation_risk import VentilationRiskManager
 from .ventilation_bridge import build_ventilation_result
+from .event_logger import TunnelEventLogger
+
+
+BAD_CCTV_COOLDOWN = 60
+MAX_OPEN_RETRY = 8
+ACCIDENT_POPUP_COOLDOWN_SEC = 30
 
 
 class TunnelLiveService:
     def __init__(self):
         self.lock = threading.Lock()
+        self.tunnel_dir = Path(__file__).resolve().parent
+        self.runtime_root = self.tunnel_dir / "runtime_data"
+        self.runtime_log_dir = self.runtime_root / "logs"
+        self.runtime_capture_dir = self.runtime_root / "captures"
+        self.runtime_lane_memory_dir = self.runtime_root / "lane_memory"
+        self.good_cctv_cache_path = self.runtime_root / "good_cctv_cache.json"
+
+        for path in (
+            self.runtime_root,
+            self.runtime_log_dir,
+            self.runtime_capture_dir,
+            self.runtime_lane_memory_dir,
+        ):
+            path.mkdir(parents=True, exist_ok=True)
 
         # 프론트가 넘겨준 CCTV 후보 리스트
         self.cached_cctv_list = []
 
         self.current_cctv = None
         self.pipeline = TunnelPipelineAdapter()
+        self.pipeline.current_dir = str(self.runtime_root)
         self.active_cctv_name = None
 
         # CCTV 변경 시 이전 스트림 종료용 토큰
@@ -44,9 +66,17 @@ class TunnelLiveService:
         # 단일 스트림 보호용
         self.stream_lock = threading.Lock()
         self.stream_active = False
+        self.active_capture = None
+        self.latest_frame_bytes = None
 
         # CCTV 연결 상태 관리
         self.cctv_health = {}
+        self.bad_cctv_cache = {}
+        self.good_cctv_cache = {}
+        self.bad_cctv_ttl_sec = BAD_CCTV_COOLDOWN
+        self.pending_user_random = False
+        self.user_random_candidates = []
+        self.user_random_exclude_name = None
 
         # ==================================================
         # 환기 대응 매니저
@@ -74,6 +104,9 @@ class TunnelLiveService:
         # --------------------------------------------------
         self.latest_status = {
             "state": "READY",
+            "traffic_state": "NORMAL",
+            "accident_status": "NONE",
+            "pending_accident_event": None,
             "avg_speed": 0.0,
             "vehicle_count": 0,
             "accident": False,
@@ -106,14 +139,16 @@ class TunnelLiveService:
         # 사고 이벤트 저장 폴더
         # ==================================================
         self.event_root = os.path.join(os.path.dirname(__file__), "event_storage")
-        self.event_snapshot_dir = os.path.join(self.event_root, "snapshots")
-        self.event_log_dir = os.path.join(self.event_root, "logs")
+        self.event_snapshot_dir = str(self.runtime_capture_dir)
+        self.event_log_dir = str(self.runtime_log_dir)
 
-        os.makedirs(self.event_snapshot_dir, exist_ok=True)
-        os.makedirs(self.event_log_dir, exist_ok=True)
-
+        self.event_logger = TunnelEventLogger(self.runtime_root)
+        self.current_accident_event = None
+        self.resolved_event_ids = set()
+        self.false_alarm_suppress_until_frame = -1
         self.last_saved_accident_frame = -999999
         self.accident_save_cooldown = 180
+        self.last_accident_popup_ts = 0.0
 
     # =========================================================
     # 1) CCTV 목록 관리
@@ -150,6 +185,8 @@ class TunnelLiveService:
         self.cached_cctv_list = cleaned
 
         self.cctv_health = {}
+        self.bad_cctv_cache = {}
+        self.good_cctv_cache = self._load_good_cctv_cache()
         for cctv in self.cached_cctv_list:
             self.cctv_health[cctv["url"]] = {
                 "ok": None,
@@ -170,6 +207,9 @@ class TunnelLiveService:
         data.setdefault("lane_reestimate_frame_count", 0)
         data.setdefault("lane_reestimate_window", 50)
         data.setdefault("minute_vehicle_count", 0)
+        data.setdefault("traffic_state", data.get("state", "NORMAL"))
+        data.setdefault("accident_status", "NONE")
+        data.setdefault("pending_accident_event", None)
         data.setdefault("ventilation", {
             "risk_score_base": 0.0,
             "risk_score_final": 0.0,
@@ -188,6 +228,9 @@ class TunnelLiveService:
             self.latest_status.setdefault("lane_reestimate_frame_count", 0)
             self.latest_status.setdefault("lane_reestimate_window", 50)
             self.latest_status.setdefault("minute_vehicle_count", 0)
+            self.latest_status.setdefault("traffic_state", self.latest_status.get("state", "NORMAL"))
+            self.latest_status.setdefault("accident_status", "NONE")
+            self.latest_status.setdefault("pending_accident_event", None)
             self.latest_status.setdefault("ventilation", {
                 "risk_score_base": 0.0,
                 "risk_score_final": 0.0,
@@ -249,6 +292,8 @@ class TunnelLiveService:
                 "message": "lane_estimator 객체를 찾지 못했습니다."
             }
 
+        self._redirect_lane_memory_to_runtime()
+
         if not hasattr(lane_template, "save_lane_memory"):
             return {
                 "ok": False,
@@ -277,39 +322,100 @@ class TunnelLiveService:
     # =========================================================
     # 2-2) 사고 이벤트 캡처/저장
     # =========================================================
+    def _traffic_state_from_status(self, status_data):
+        state = str(status_data.get("traffic_state") or status_data.get("state") or "NORMAL").upper()
+        if state == "ACCIDENT":
+            return str(self.latest_status.get("traffic_state") or "JAM").upper()
+        if state in ("NORMAL", "CONGESTION", "JAM"):
+            return state
+        return "NORMAL"
+
+    def _build_accident_reason(self, status_data):
+        events = status_data.get("events") or status_data.get("event_logs") or []
+        if isinstance(events, list):
+            accident_events = [str(event) for event in events if "사고" in str(event)]
+            if accident_events:
+                return " / ".join(accident_events[-2:])
+        return "속도 급감/거리 변화/정지 패턴"
+
     def _save_accident_event(self, frame, status_data):
         accident_flag = bool(status_data.get("accident", False))
         frame_id = int(status_data.get("frame_id", 0))
 
         if not accident_flag:
+            if self.latest_status.get("accident_status") == "SUSPECT":
+                return
+            if self.latest_status.get("accident_status") != "CONFIRMED":
+                self.current_accident_event = None
+                self._update_status({
+                    "accident": False,
+                    "accident_status": "NONE",
+                    "pending_accident_event": None,
+                    "traffic_state": self._traffic_state_from_status(status_data),
+                })
+            return
+
+        if frame_id <= self.false_alarm_suppress_until_frame:
+            self._update_status({
+                "accident": False,
+                "accident_status": "FALSE_ALARM",
+                "pending_accident_event": None,
+                "traffic_state": self._traffic_state_from_status(status_data),
+            })
+            return
+
+        if self.current_accident_event:
+            self._update_status({
+                "accident": False,
+                "accident_status": "SUSPECT",
+                "pending_accident_event": self.current_accident_event,
+                "traffic_state": self.current_accident_event.get("traffic_state", self._traffic_state_from_status(status_data)),
+            })
+            return
+
+        now_ts = time.time()
+        if now_ts - self.last_accident_popup_ts < ACCIDENT_POPUP_COOLDOWN_SEC:
             return
 
         if frame_id - self.last_saved_accident_frame < self.accident_save_cooldown:
             return
 
         self.last_saved_accident_frame = frame_id
+        self.last_accident_popup_ts = now_ts
 
         now = datetime.now()
         ts_compact = now.strftime("%Y%m%d_%H%M%S")
         ts_text = now.strftime("%Y-%m-%d %H:%M:%S")
+        event_date = now.strftime("%Y-%m-%d")
+        event_time = now.strftime("%H:%M:%S")
 
-        event_id = f"accident_{ts_compact}_{frame_id}"
+        event_id = f"EVT_{ts_compact}_{frame_id}"
 
         image_path = os.path.join(self.event_snapshot_dir, f"{event_id}.jpg")
         cv2.imwrite(image_path, frame)
+        capture_path = os.path.relpath(image_path, self.tunnel_dir).replace("\\", "/")
+        traffic_state = self._traffic_state_from_status(status_data)
+        reason = self._build_accident_reason(status_data)
 
         payload = {
             "event_id": event_id,
             "timestamp": ts_text,
+            "event_date": event_date,
+            "event_time": event_time,
+            "event_datetime": ts_text,
             "frame_id": frame_id,
             "type": "accident",
-            "state": "pending",
+            "state": "SUSPECT",
+            "event_status": "SUSPECT",
             "cctv_name": status_data.get("cctv_name", "-"),
             "cctv_url": status_data.get("cctv_url", ""),
             "avg_speed": float(status_data.get("avg_speed", 0.0)),
             "vehicle_count": int(status_data.get("vehicle_count", 0)),
             "lane_count": int(status_data.get("lane_count", 0)),
+            "traffic_state": traffic_state,
+            "reason": reason,
             "snapshot_path": image_path,
+            "capture_path": capture_path,
             "events": status_data.get("events", []),
             "ventilation": status_data.get("ventilation", {}),
         }
@@ -318,7 +424,107 @@ class TunnelLiveService:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
+        pending_event = {
+            "event_id": event_id,
+            "event_date": event_date,
+            "event_time": event_time,
+            "event_datetime": ts_text,
+            "cctv_name": payload["cctv_name"],
+            "reason": reason,
+            "frame_id": frame_id,
+            "traffic_state": traffic_state,
+        }
+        self.current_accident_event = pending_event
+        self.event_logger.append_suspect_event({
+            "event_id": event_id,
+            "event_date": event_date,
+            "event_time": event_time,
+            "event_datetime": ts_text,
+            "cctv_name": payload["cctv_name"],
+            "event_type": "ACCIDENT",
+            "event_status": "SUSPECT",
+            "operator_action": "",
+            "frame_id": frame_id,
+            "traffic_state": traffic_state,
+            "avg_speed": payload["avg_speed"],
+            "vehicle_count": payload["vehicle_count"],
+            "lane_count": payload["lane_count"],
+            "reason": reason,
+            "capture_path": capture_path,
+        })
+        event_logs = list(status_data.get("event_logs") or self.latest_status.get("event_logs") or [])
+        event_logs.append(f"[{event_time}] 사고 의심")
+        self._update_status({
+            "accident": False,
+            "accident_status": "SUSPECT",
+            "pending_accident_event": pending_event,
+            "traffic_state": traffic_state,
+            "event_logs": event_logs[-10:],
+            "events": ["사고 의심"],
+        })
+
         print(f"📸 사고 이벤트 저장 완료: {event_id}")
+
+    def resolve_accident_event(self, event_id, action):
+        action = str(action or "").strip().lower()
+        if action not in ("confirm", "normal"):
+            return {"ok": False, "message": "지원하지 않는 action입니다."}
+
+        if action == "confirm":
+            event_status = "CONFIRMED"
+            operator_action = "사고 확정"
+            accident_status = "CONFIRMED"
+            accident_flag = True
+            event_message = "사고 확정"
+        else:
+            event_status = "FALSE_ALARM"
+            operator_action = "이상 없음"
+            accident_status = "FALSE_ALARM"
+            accident_flag = False
+            event_message = "이상 없음"
+
+        row = self.event_logger.resolve_event(event_id, event_status, operator_action)
+        self.resolved_event_ids.add(event_id)
+
+        if self.current_accident_event and self.current_accident_event.get("event_id") == event_id:
+            frame_id = int(self.current_accident_event.get("frame_id") or self.latest_status.get("frame_id") or 0)
+            traffic_state = self.current_accident_event.get("traffic_state") or self.latest_status.get("traffic_state") or "NORMAL"
+            self.current_accident_event = None
+        else:
+            frame_id = int(self.latest_status.get("frame_id") or 0)
+            traffic_state = self.latest_status.get("traffic_state") or "NORMAL"
+
+        if action == "normal":
+            self.false_alarm_suppress_until_frame = max(
+                self.false_alarm_suppress_until_frame,
+                frame_id + self.accident_save_cooldown,
+            )
+            if hasattr(self.pipeline, "clear_accident_state"):
+                self.pipeline.clear_accident_state()
+
+        now_text = datetime.now().strftime("%H:%M:%S")
+        event_logs = list(self.latest_status.get("event_logs") or [])
+        event_logs.append(f"[{now_text}] {event_message}")
+        self._update_status({
+            "accident": accident_flag,
+            "accident_status": accident_status,
+            "pending_accident_event": None,
+            "traffic_state": traffic_state,
+            "state": "ACCIDENT" if action == "confirm" else traffic_state,
+            "event_logs": event_logs[-10:],
+            "events": [event_message],
+        })
+
+        return {
+            "ok": True,
+            "event_id": event_id,
+            "event_status": event_status,
+            "operator_action": operator_action,
+            "event": row,
+        }
+
+    def get_event_stats(self, date_text=None):
+        return self.event_logger.get_stats(date_text)
 
     # =========================================================
     # 2-3) 저장된 이벤트 목록 조회
@@ -347,8 +553,122 @@ class TunnelLiveService:
     # =========================================================
     # 3) health 관리
     # =========================================================
+    def _load_good_cctv_cache(self):
+        if not self.good_cctv_cache_path.exists():
+            return {}
+
+        try:
+            with open(self.good_cctv_cache_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            return {}
+
+        loaded = {}
+        items = raw if isinstance(raw, list) else raw.get("items", []) if isinstance(raw, dict) else []
+        for item in items:
+            cctv = item.get("cctv", item) if isinstance(item, dict) else None
+            if not isinstance(cctv, dict):
+                continue
+
+            name = str(cctv.get("name", "")).strip()
+            url = str(cctv.get("url", "")).strip()
+            if not name or not url:
+                continue
+
+            loaded[url] = {
+                "cctv": {"name": name, "url": url},
+                "last_success_at": float(item.get("last_success_at", 0) or 0),
+            }
+
+        return loaded
+
+    def _save_good_cctv_cache(self):
+        items = sorted(
+            self.good_cctv_cache.values(),
+            key=lambda item: item.get("last_success_at", 0),
+            reverse=True,
+        )
+        payload = {"items": items[:20]}
+
+        with open(self.good_cctv_cache_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        print("💾 good_cctv_cache 저장 완료")
+
+    def _is_known_cctv_url(self, url):
+        return any(cctv.get("url") == url for cctv in self.cached_cctv_list)
+
+    def _is_bad_cached(self, cctv):
+        url = cctv.get("url", "")
+        expires_at = self.bad_cctv_cache.get(url)
+
+        if not expires_at:
+            return False
+
+        if time.time() >= expires_at:
+            self.bad_cctv_cache.pop(url, None)
+            return False
+
+        return True
+
+    def _remember_bad_cctv(self, cctv):
+        url = cctv.get("url", "")
+        if not url:
+            return
+
+        self.bad_cctv_cache[url] = time.time() + self.bad_cctv_ttl_sec
+
+    def _clear_bad_cctv(self, cctv):
+        self.bad_cctv_cache.pop(cctv.get("url", ""), None)
+
+    def _remember_good_cctv(self, cctv):
+        url = cctv.get("url", "")
+        if not url:
+            return
+
+        self.good_cctv_cache[url] = {
+            "cctv": cctv,
+            "last_success_at": time.time(),
+        }
+        self._save_good_cctv_cache()
+
+    def _get_good_candidates(self, tried_urls=None):
+        tried_urls = tried_urls or set()
+        items = []
+
+        for url, entry in list(self.good_cctv_cache.items()):
+            if url in tried_urls or not self._is_known_cctv_url(url):
+                continue
+
+            cctv = entry.get("cctv")
+            if not cctv or self._is_bad_cached(cctv):
+                continue
+
+            items.append((entry.get("last_success_at", 0), cctv))
+
+        items.sort(key=lambda item: item[0], reverse=True)
+        return [cctv for _, cctv in items]
+
+    def _get_fixed_candidates(self, tried_urls=None, limit=5):
+        tried_urls = tried_urls or set()
+        candidates = []
+
+        for cctv in self.cached_cctv_list:
+            url = cctv["url"]
+            if url in tried_urls or self._is_bad_cached(cctv):
+                continue
+
+            candidates.append(cctv)
+            if len(candidates) >= limit:
+                break
+
+        return candidates
+
     def _mark_cctv_success(self, cctv):
         url = cctv["url"]
+        self._clear_bad_cctv(cctv)
+        self._remember_good_cctv(cctv)
+
         if url not in self.cctv_health:
             self.cctv_health[url] = {"ok": True, "fail_count": 0}
             return
@@ -358,6 +678,8 @@ class TunnelLiveService:
 
     def _mark_cctv_failure(self, cctv):
         url = cctv["url"]
+        self._remember_bad_cctv(cctv)
+
         if url not in self.cctv_health:
             self.cctv_health[url] = {"ok": False, "fail_count": 1}
             return
@@ -365,33 +687,265 @@ class TunnelLiveService:
         self.cctv_health[url]["ok"] = False
         self.cctv_health[url]["fail_count"] += 1
 
-    def _get_healthy_candidates(self):
+    def _get_recent_failure_candidates(self, tried_urls=None):
+        tried_urls = tried_urls or set()
+        items = []
+        now = time.time()
+
+        for cctv in self.cached_cctv_list:
+            url = cctv["url"]
+            if url in tried_urls:
+                continue
+
+            expires_at = self.bad_cctv_cache.get(url)
+            if not expires_at:
+                continue
+
+            failed_at = expires_at - self.bad_cctv_ttl_sec
+            remaining = max(0, expires_at - now)
+            items.append((failed_at, remaining, cctv))
+
+        items.sort(key=lambda item: item[0])
+        return [cctv for _, _, cctv in items]
+
+    def _get_healthy_candidates(self, tried_urls=None):
+        tried_urls = tried_urls or set()
         healthy = []
 
         for cctv in self.cached_cctv_list:
             url = cctv["url"]
+            if url in tried_urls:
+                continue
+
             health = self.cctv_health.get(url, {})
             fail_count = health.get("fail_count", 0)
+
+            if self._is_bad_cached(cctv):
+                continue
 
             if fail_count < 10:  #ITS 스트림이 흔들리는 환경이면 나중에 10 → 15 정도로 완화
                 healthy.append(cctv)
 
         return healthy
 
+    def _get_open_candidates(self, tried_urls=None, prefer_good=True, allow_bad_relax=False):
+        tried_urls = tried_urls or set()
+
+        if not self.cached_cctv_list:
+            print("❌ 캐시된 CCTV 목록 비어있음")
+            return []
+
+        good = self._get_good_candidates(tried_urls) if prefer_good else []
+        fixed = self._get_fixed_candidates(tried_urls)
+        healthy = self._get_healthy_candidates(tried_urls)
+
+        seen = set()
+        candidates = []
+        for cctv in good + fixed + healthy:
+            url = cctv["url"]
+            if url in seen:
+                continue
+            seen.add(url)
+            candidates.append(cctv)
+
+        if candidates:
+            if good:
+                print("✅ good_cctv_cache 우선 후보 사용")
+            elif fixed:
+                print("🔄 고정 후보 CCTV 재시도")
+            else:
+                print("🔍 일반 캐시 후보 탐색")
+            return candidates
+
+        bad_candidates = self._get_recent_failure_candidates(tried_urls)
+        if bad_candidates:
+            print("⚠️ CCTV 후보는 있으나 최근 실패 목록에 모두 포함됨")
+
+            if allow_bad_relax:
+                print("🔄 가장 오래된 실패 후보부터 재시도")
+                return bad_candidates
+
+        return []
+
+    def _get_user_random_candidates(self, tried_urls=None, exclude_name=None, allow_bad_relax=False):
+        tried_urls = tried_urls or set()
+        exclude_name = exclude_name or ""
+
+        if not self.cached_cctv_list:
+            print("❌ 캐시된 CCTV 목록 비어있음")
+            return []
+
+        candidates = [
+            cctv for cctv in self.cached_cctv_list
+            if cctv.get("url") not in tried_urls
+            and cctv.get("name") != exclude_name
+            and not self._is_bad_cached(cctv)
+        ]
+
+        if candidates:
+            random.shuffle(candidates)
+            print("🎲 [RANDOM] 현재 CCTV 제외 후 후보 선택")
+            return candidates
+
+        bad_candidates = [
+            cctv for cctv in self._get_recent_failure_candidates(tried_urls)
+            if cctv.get("name") != exclude_name
+        ]
+
+        if bad_candidates:
+            print("⚠️ CCTV 후보는 있으나 최근 실패 목록에 모두 포함됨")
+            if allow_bad_relax:
+                print("🔄 가장 오래된 실패 후보부터 재시도")
+                return bad_candidates
+
+        return []
+
+    def _open_user_random_stream_with_retry(self, tried_urls=None, max_retry=MAX_OPEN_RETRY):
+        if tried_urls is None:
+            tried_urls = set()
+
+        ordered = []
+        seen = set()
+
+        for cctv in self.user_random_candidates:
+            url = cctv.get("url")
+            if not url or url in tried_urls or url in seen:
+                continue
+            if cctv.get("name") == self.user_random_exclude_name:
+                continue
+            if self._is_bad_cached(cctv):
+                continue
+            seen.add(url)
+            ordered.append(cctv)
+
+        for cctv in self._get_user_random_candidates(
+            tried_urls=tried_urls | seen,
+            exclude_name=self.user_random_exclude_name,
+            allow_bad_relax=False,
+        ):
+            url = cctv.get("url")
+            if url in seen:
+                continue
+            seen.add(url)
+            ordered.append(cctv)
+
+        if not ordered:
+            ordered = self._get_user_random_candidates(
+                tried_urls=tried_urls,
+                exclude_name=self.user_random_exclude_name,
+                allow_bad_relax=True,
+            )
+
+        retry_count = 0
+        for cctv in ordered:
+            if retry_count >= max_retry:
+                break
+
+            tried_urls.add(cctv["url"])
+            cap = self._try_open_cctv(cctv)
+            if cap is not None:
+                self.current_cctv = cctv
+                self.pending_user_random = False
+                return cap, cctv
+
+            retry_count += 1
+
+        print("🎲 [RANDOM] 랜덤 후보 연결 실패 → good_cctv_cache fallback 허용")
+        cap, cctv = self._open_stream_with_retry(
+            tried_urls=tried_urls,
+            max_retry=max(0, MAX_OPEN_RETRY - retry_count),
+        )
+        self.pending_user_random = False
+        return cap, cctv
+
+    # =========================================================
+    # 3-1) 스트림 상태 제어
+    # =========================================================
+    def _request_stream_stop(self, wait_timeout=2.0, log_if_idle=True):
+        if not self.stream_active and not self.stream_lock.locked():
+            if log_if_idle:
+                print("ℹ️ 이미 정지 상태 → stop 요청 무시")
+            return False
+
+        self.stream_active = False
+        self.stream_token += 1
+
+        started_at = time.time()
+        while self.stream_lock.locked() and time.time() - started_at < wait_timeout:
+            time.sleep(0.05)
+
+        if self.stream_lock.locked() and self.active_capture is not None:
+            try:
+                self.active_capture.release()
+            except Exception:
+                pass
+
+        return True
+
+    def _reset_runtime_after_open(self, cctv):
+        if self.active_cctv_name == cctv["name"]:
+            self._redirect_lane_memory_to_runtime()
+            return
+
+        self.pipeline.reset_pipeline()
+        self.active_cctv_name = cctv["name"]
+
+        self.ventilation_manager.vehicle_entry_memory.clear()
+        self.ventilation_manager.current_level = "NORMAL"
+        self.ventilation_manager.pending_level = "NORMAL"
+        self.ventilation_manager.pending_count = 0
+        self.ventilation_manager.release_count = 0
+
+        print(f"♻️ 스트림 시작 시 reset 완료: {self.active_cctv_name}")
+
+    def _redirect_lane_memory_to_runtime(self):
+        if not hasattr(self.pipeline, "get_lane_template"):
+            return
+
+        lane_template = self.pipeline.get_lane_template()
+        if lane_template is None:
+            return
+
+        runtime_lane_debug = self.runtime_root / "lane_debug"
+        runtime_lane_debug.mkdir(parents=True, exist_ok=True)
+        self.runtime_lane_memory_dir.mkdir(parents=True, exist_ok=True)
+
+        if hasattr(lane_template, "output_dir"):
+            lane_template.output_dir = str(runtime_lane_debug)
+        if hasattr(lane_template, "memory_dir"):
+            lane_template.memory_dir = str(self.runtime_lane_memory_dir)
+
     # =========================================================
     # 4) CCTV 선택
     # =========================================================
-    def select_random_cctv(self):
-        candidates = self._get_healthy_candidates()
+    def select_random_cctv(self, user_random=False):
+        previous_name = (
+            self.active_cctv_name
+            or (self.current_cctv or {}).get("name")
+            or self.latest_status.get("cctv_name")
+            or ""
+        )
 
-        if not candidates:
-            print("⚠️ 건강한 CCTV 후보 없음 → 전체 캐시 리스트 사용")
-            candidates = self.cached_cctv_list
+        if self.stream_active or self.stream_lock.locked():
+            print("🔄 [SWITCH] 기존 CCTV에서 새 CCTV로 전환")
+            self._request_stream_stop(wait_timeout=2.0, log_if_idle=False)
+
+        if user_random:
+            print("🎲 [RANDOM] 사용자 랜덤 CCTV 선택 요청")
+            candidates = self._get_user_random_candidates(
+                exclude_name=previous_name,
+                allow_bad_relax=True,
+            )
+        else:
+            candidates = self._get_open_candidates(allow_bad_relax=True)
 
         if not candidates:
             return None
 
-        self.current_cctv = random.choice(candidates)
+        self.current_cctv = candidates[0]
+        self.pending_user_random = bool(user_random)
+        self.user_random_exclude_name = previous_name if user_random else None
+        self.user_random_candidates = candidates[1:] if user_random else []
         self.active_cctv_name = None
 
         self.stream_active = False
@@ -399,6 +953,9 @@ class TunnelLiveService:
 
         self._update_status({
             "state": "READY",
+            "traffic_state": "NORMAL",
+            "accident_status": "NONE",
+            "pending_accident_event": None,
             "avg_speed": 0.0,
             "vehicle_count": 0,
             "accident": False,
@@ -424,7 +981,10 @@ class TunnelLiveService:
             }
         })
 
-        print(f"✅ 랜덤 선택 CCTV(캐시): {self.current_cctv['name']}")
+        if user_random:
+            print(f"🎲 [RANDOM] 선택된 CCTV: {self.current_cctv['name']}")
+        else:
+            print(f"✅ 랜덤 선택 CCTV(캐시): {self.current_cctv['name']}")
         return self.current_cctv
 
     def select_cctv_by_name(self, name):
@@ -433,10 +993,27 @@ class TunnelLiveService:
             return None
 
         def _reset_selected(cctv):
+            already_active = (
+                (self.stream_active or self.stream_lock.locked())
+                and self.active_cctv_name == cctv["name"]
+            )
+
+            if self.stream_active or self.stream_lock.locked():
+                if already_active:
+                    print(f"✅ 이미 실행 중인 CCTV 유지: {cctv['name']}")
+                else:
+                    print("🔄 [SWITCH] 기존 CCTV에서 새 CCTV로 전환")
+                    self._request_stream_stop(wait_timeout=2.0, log_if_idle=False)
+
             self.current_cctv = cctv
-            self.active_cctv_name = None
-            self.stream_active = False
-            self.stream_token += 1
+
+            if already_active:
+                return
+
+            if not already_active:
+                self.active_cctv_name = None
+                self.stream_active = False
+                self.stream_token += 1
 
             self.ventilation_manager.vehicle_entry_memory.clear()
             self.ventilation_manager.current_level = "NORMAL"
@@ -446,6 +1023,9 @@ class TunnelLiveService:
 
             self._update_status({
                 "state": "READY",
+                "traffic_state": "NORMAL",
+                "accident_status": "NONE",
+                "pending_accident_event": None,
                 "avg_speed": 0.0,
                 "vehicle_count": 0,
                 "accident": False,
@@ -500,7 +1080,7 @@ class TunnelLiveService:
         name = cctv["name"]
         url = cctv["url"]
 
-        print(f"🎥 CCTV 연결 시도: {name}")
+        print(f"🎥 [OPEN] CCTV 연결 시도: {name}")
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 
     # --------------------------------------------------
@@ -514,7 +1094,7 @@ class TunnelLiveService:
             time.sleep(0.15)
 
         if not open_ok:
-            print(f"❌ CCTV 연결 실패(open): {name}")
+            print(f"❌ [OPEN] CCTV 연결 실패(open): {name}")
             self._mark_cctv_failure(cctv)
             cap.release()
             return None
@@ -531,34 +1111,30 @@ class TunnelLiveService:
             time.sleep(0.1)
 
         if not frame_ok:
-            print(f"❌ CCTV 연결 실패(first frame): {name}")
+            print(f"❌ [OPEN] CCTV 연결 실패(first frame): {name}")
             self._mark_cctv_failure(cctv)
             cap.release()
             return None
 
-        print(f"✅ CCTV 연결 성공: {name}")
+        print(f"✅ [OPEN] CCTV 연결 성공: {name}")
         self._mark_cctv_success(cctv)
         return cap
 
     # =========================================================
     # 6) 랜덤 열기
     # =========================================================
-    def _open_stream_with_retry(self, tried_urls=None, max_retry=5):
+    def _open_stream_with_retry(self, tried_urls=None, max_retry=MAX_OPEN_RETRY):
         if tried_urls is None:
             tried_urls = set()
 
-        candidates = self._get_healthy_candidates()
+        candidates = self._get_open_candidates(
+            tried_urls=tried_urls,
+            prefer_good=True,
+            allow_bad_relax=True,
+        )
 
         if not candidates:
-            print("⚠️ 건강한 CCTV 후보 없음 → 전체 캐시 리스트 사용")
-            candidates = self.cached_cctv_list
-
-        if not candidates:
-            print("❌ 캐시된 CCTV 목록 비어있음")
             return None, None
-
-        candidates = [c for c in candidates if c["url"] not in tried_urls]
-        random.shuffle(candidates)
 
         retry_count = 0
 
@@ -580,58 +1156,88 @@ class TunnelLiveService:
     # =========================================================
     # 7) 스트리밍
     # =========================================================
+    def _generate_cached_frames(self):
+        empty_started_at = time.time()
+
+        while self.stream_active:
+            frame_bytes = self.latest_frame_bytes
+
+            if frame_bytes:
+                empty_started_at = time.time()
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" +
+                    frame_bytes +
+                    b"\r\n"
+                )
+                time.sleep(0.08)
+                continue
+
+            if time.time() - empty_started_at > 3.0:
+                return
+
+            time.sleep(0.1)
+
     def generate_frames(self):
         if not self.stream_lock.acquire(blocking=False):
-            print("⚠️ 기존 스트림 실행 중 → 새 요청 거절")
-            self._update_status({
-                "state": "READY",
-                "events": ["기존 스트림 종료 후 다시 시도"],
-            })
-            return
+            if self.current_cctv and self.active_cctv_name == self.current_cctv["name"]:
+                print(f"✅ 이미 실행 중인 CCTV 유지: {self.current_cctv['name']}")
+                yield from self._generate_cached_frames()
+                return
+            else:
+                print("🔄 [SWITCH] 기존 CCTV에서 새 CCTV로 전환")
 
+                self._request_stream_stop(wait_timeout=2.0, log_if_idle=False)
+
+                if not self.stream_lock.acquire(timeout=2.0):
+                    self._update_status({
+                        "state": "READY",
+                        "events": ["기존 스트림 종료 대기 중"],
+                    })
+                    return
+
+        print("🚦 [START] 요청 수신")
         self.stream_active = True
         tried_urls = set()
         cap = None
+        selected_cctv = None
         my_token = self.stream_token
 
         try:
             if self.current_cctv is not None:
                 selected_cctv = self.current_cctv
-                print(f"🎯 선택된 CCTV 우선 사용: {selected_cctv['name']}")
-                cap = self._try_open_cctv(selected_cctv)
+                if self._is_bad_cached(selected_cctv):
+                    print(f"⚠️ 선택된 CCTV 최근 실패 상태 → 우선 사용 제외: {selected_cctv['name']}")
+                    tried_urls.add(selected_cctv["url"])
+                    self.current_cctv = None
+                    selected_cctv = None
+                else:
+                    print(f"🎯 선택된 CCTV 우선 사용: {selected_cctv['name']}")
+                    cap = self._try_open_cctv(selected_cctv)
 
-                if cap is None:
-                    print(f"❌ 선택된 CCTV 열기 실패: {selected_cctv['name']}")
-                    self._update_status({
-                        "state": "ERROR",
-                        "events": [f"선택한 CCTV 연결 실패: {selected_cctv['name']}"],
-                        "cctv_name": selected_cctv["name"],
-                        "cctv_url": selected_cctv["url"],
-                    })
-                    return
+                    if cap is None:
+                        print(f"❌ 선택된 CCTV 열기 실패: {selected_cctv['name']}")
+                        tried_urls.add(selected_cctv["url"])
+                        self.current_cctv = None
+                        cap = None
+                        selected_cctv = None
             else:
                 selected_cctv = None
 
             if cap is None or selected_cctv is None:
-                cap, selected_cctv = self._open_stream_with_retry(
-                    tried_urls=tried_urls,
-                    max_retry=5
-                )
-
-            if selected_cctv is not None:
-                if self.active_cctv_name != selected_cctv["name"]:
-                    self.pipeline.reset_pipeline()
-                    self.active_cctv_name = selected_cctv["name"]
-
-                    self.ventilation_manager.vehicle_entry_memory.clear()
-                    self.ventilation_manager.current_level = "NORMAL"
-                    self.ventilation_manager.pending_level = "NORMAL"
-                    self.ventilation_manager.pending_count = 0
-                    self.ventilation_manager.release_count = 0
-
-                    print(f"♻️ 스트림 시작 시 reset 완료: {self.active_cctv_name}")
+                if self.pending_user_random:
+                    cap, selected_cctv = self._open_user_random_stream_with_retry(
+                        tried_urls=tried_urls,
+                        max_retry=max(0, MAX_OPEN_RETRY - len(tried_urls)),
+                    )
+                else:
+                    cap, selected_cctv = self._open_stream_with_retry(
+                        tried_urls=tried_urls,
+                        max_retry=max(0, MAX_OPEN_RETRY - len(tried_urls))
+                    )
 
             if cap is None or selected_cctv is None:
+                self.pending_user_random = False
                 self._update_status({
                     "state": "ERROR",
                     "events": ["실시간 CCTV 연결 실패"],
@@ -639,6 +1245,12 @@ class TunnelLiveService:
                     "cctv_url": "",
                 })
                 return
+
+            self.pending_user_random = False
+
+            self.active_capture = cap
+            self.latest_frame_bytes = None
+            self._reset_runtime_after_open(selected_cctv)
 
             frame_id = 0
             fail_count = 0
@@ -670,33 +1282,46 @@ class TunnelLiveService:
                         cap = None
 
                         if self.current_cctv is not None:
-                            print(f"🔁 현재 CCTV 재연결 시도: {self.current_cctv['name']}")
-                            cap = self._try_open_cctv(self.current_cctv)
+                            if self._is_bad_cached(self.current_cctv):
+                                print(f"⚠️ 현재 CCTV 최근 실패 상태 → 재연결 우선 제외: {self.current_cctv['name']}")
+                                tried_urls.add(self.current_cctv["url"])
+                                self.current_cctv = None
+                            else:
+                                print(f"🔁 현재 CCTV 재연결 시도: {self.current_cctv['name']}")
+                                cap = self._try_open_cctv(self.current_cctv)
 
-                            if cap is not None:
-                                selected_cctv = self.current_cctv
-                                fail_count = 0
+                                if cap is not None:
+                                    self.active_capture = cap
+                                    selected_cctv = self.current_cctv
+                                    fail_count = 0
 
-                                if self.active_cctv_name != selected_cctv["name"]:
-                                    self.pipeline.reset_pipeline()
-                                    self.active_cctv_name = selected_cctv["name"]
+                                    self._reset_runtime_after_open(selected_cctv)
 
-                                    self.ventilation_manager.vehicle_entry_memory.clear()
-                                    self.ventilation_manager.current_level = "NORMAL"
-                                    self.ventilation_manager.pending_level = "NORMAL"
-                                    self.ventilation_manager.pending_count = 0
-                                    self.ventilation_manager.release_count = 0
+                                    self._update_status({
+                                        "cctv_name": selected_cctv["name"],
+                                        "cctv_url": selected_cctv["url"],
+                                        "events": [f"{selected_cctv['name']} 재연결 완료"],
+                                    })
+                                    continue
 
-                                    print(f"♻️ 재연결 후 reset 완료: {self.active_cctv_name}")
+                                print(f"❌ 현재 CCTV 재연결 실패: {self.current_cctv['name']}")
 
-                                self._update_status({
-                                    "cctv_name": selected_cctv["name"],
-                                    "cctv_url": selected_cctv["url"],
-                                    "events": [f"{selected_cctv['name']} 재연결 완료"],
-                                })
-                                continue
+                        cap, fallback_cctv = self._open_stream_with_retry(
+                            tried_urls=tried_urls,
+                            max_retry=MAX_OPEN_RETRY,
+                        )
 
-                            print(f"❌ 현재 CCTV 재연결 실패: {self.current_cctv['name']}")
+                        if cap is not None and fallback_cctv is not None:
+                            self.active_capture = cap
+                            selected_cctv = fallback_cctv
+                            fail_count = 0
+                            self._reset_runtime_after_open(selected_cctv)
+                            self._update_status({
+                                "cctv_name": selected_cctv["name"],
+                                "cctv_url": selected_cctv["url"],
+                                "events": [f"{selected_cctv['name']} 대체 연결 완료"],
+                            })
+                            continue
 
                         self._update_status({
                             "state": "ERROR",
@@ -714,6 +1339,7 @@ class TunnelLiveService:
                 self.pipeline.current_cctv_name = selected_cctv["name"]
 
                 annotated, result = self.pipeline.process_frame(frame, frame_id)
+                self._redirect_lane_memory_to_runtime()
 
                 if result is None:
                     result = {}
@@ -733,6 +1359,10 @@ class TunnelLiveService:
                 if "minute_vehicle_count" not in result:
                     result["minute_vehicle_count"] = self.latest_status.get("minute_vehicle_count", 0)
 
+                result["traffic_state"] = self._traffic_state_from_status(result)
+                result["accident_status"] = self.latest_status.get("accident_status", "NONE")
+                result["accident_confirmed"] = result["accident_status"] == "CONFIRMED"
+
                 result["ventilation"] = build_ventilation_result(
                     result=result,
                     ventilation_manager=self.ventilation_manager
@@ -747,6 +1377,7 @@ class TunnelLiveService:
                     continue
 
                 frame_bytes = buffer.tobytes()
+                self.latest_frame_bytes = frame_bytes
 
                 yield (
                     b"--frame\r\n"
@@ -769,17 +1400,20 @@ class TunnelLiveService:
             if cap is not None:
                 cap.release()
 
+            self.active_capture = None
+
             if self.stream_lock.locked():
                 self.stream_lock.release()
 
-            print("🛑 CCTV 스트리밍 종료")
+            print("🛑 [STOP] 스트림 종료")
         
             # =========================================================
     # 8) 스트림 명시 종료
     # =========================================================
     def stop_stream(self):
-        self.stream_active = False
-        self.stream_token += 1
+        stopped = self._request_stream_stop(wait_timeout=2.0)
+        if stopped:
+            print("🛑 [STOP] 스트림 종료")
 
         # 현재 스트림만 끊고, 상태는 READY로 갱신
         self._update_status({
@@ -790,10 +1424,9 @@ class TunnelLiveService:
             "lane_reestimate_window": 50,
         })
 
-        print("🛑 [API] 사용자의 요청으로 터널 스트림 종료")
         return {
             "ok": True,
-            "message": "스트림 종료 완료"
+            "message": "스트림 종료 완료" if stopped else "이미 정지 상태"
         }
 
     # =========================================================
@@ -804,8 +1437,9 @@ class TunnelLiveService:
     # =========================================================
     def restart_with_random_cctv(self):
         # 기존 스트림 완전 종료
-        self.stream_active = False
-        self.stream_token += 1
+        if self.stream_active or self.stream_lock.locked():
+            print("🔄 [SWITCH] 기존 CCTV에서 새 CCTV로 전환")
+            self._request_stream_stop(wait_timeout=2.0, log_if_idle=False)
 
         # 이전 선택을 끊고 새 랜덤 선택
         selected = self.select_random_cctv()
