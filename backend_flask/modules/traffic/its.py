@@ -27,7 +27,7 @@ def get_cctv_url():
         return jsonify({"success": True, "cctvData": cached_cctv_list})
 
     params = {
-        'apiKey': ITS_API_KEY, 'type': 'ex', 'cctvType': '1',
+        'apiKey': ITS_API_KEY, 'type': 'ex', 'cctvType': '4',
         'minX': '126.8', 'maxX': '127.89',
         'minY': '36.8',  'maxY': '37.0', 'getType': 'json'
     }

@@ -26,8 +26,19 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
         hls.attachMedia(videoRef.current);
         hls.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
-            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-            else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.log("🌐 네트워크 에러 발생 - URL 갱신 시도");
+                // 부모 컴포넌트(VideoPanel)로부터 전달받은 갱신 함수 호출
+                onRefreshUrl(); 
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                break;
+            }
           }
         });
         hlsRef.current = hls;

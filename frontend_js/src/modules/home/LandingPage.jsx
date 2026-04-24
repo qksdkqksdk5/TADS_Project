@@ -66,8 +66,8 @@ export default function LandingPage() {
         />
       ),
       title: 'Smart Tunnel System',
-      desc: 'AI 기술을 활용하여 터널 내 정체, 급정거, 사고를 탐지하고, 차량 밀집도 및 체류시간 분석을 통해 터널 내 교통 상황을 실시간으로 모니터링하는 시스템입니다.',
-      tags: ['분석', 'AI', 'Dashboard'],
+      desc: '터널 CCTV 영상을 기반으로 YOLO11n 모델을 활용해 차량 객체탐지, 추적, ROI 자동설정, 차선추정, 교통상태 분석, 사고탐지, 센서리스 기반 환기대응지원을 통합 수행하는 스마트 터널 관제 시스템입니다. 실시간 영상 분석 결과를 웹 대시보드에 시각화하여 운영자가 터널 내 교통흐름과 위험상황을 직관적으로 모니터링할 수 있도록 지원합니다.',
+      tags: ['YOLO11n', 'ByteTrack', 'ROI Estimation', 'Lane Estimation', 'State Logic', 'Accident Logic', 'Ventilation Logic'],
       color: '#10b981',
     },
     {

@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[경부선] [서울]경부동탄터널(서울3)",
+  "memory_key": "경부선_서울_경부동탄터널_서울3",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.981259822845459,
+          790.5848999023438
+        ]
+      },
+      "x_mid": -29.65666675567627,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.2309881448745728,
+          740.8804321289062
+        ]
+      },
+      "x_mid": 231.25134015083313,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        5
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 16:02:02"
+}
