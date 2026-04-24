@@ -24,6 +24,15 @@ _geo_fetching: set = set()
 # key: (road, start_ic, end_ic) → threading.Thread
 _queue_greenlets: dict = {}
 
+# 큐 러너 비상 정지 버튼 보관함
+# key: (road, start_ic, end_ic) → threading.Event
+# stop_segment 호출 시 event.set() 으로 큐 러너에게 중지 신호를 보낸다
+_queue_stop_events: dict = {}
+
+# 구간별 시작된 카메라 목록 (stop_segment에서 ITS API 재호출 없이 사용)
+# key: (road, start_ic, end_ic) → [camera_id, ...]
+_segment_cameras: dict = {}
+
 # ── 큐 러너 실시간 진단 추적 ──────────────────────────────────────────────────
 # 큐 러너 내부 상태를 외부에서 조회할 수 있도록 전역에 기록한다.
 # /api/monitoring/its/queue_status 엔드포인트에서 읽는다.
@@ -627,7 +636,7 @@ def _count_learning_alive() -> int:
     return count
 
 
-def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj, db_inst):
+def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj, db_inst, stop_event=None):
     """
     초기 배치 이후 남은 카메라를 큐로 관리하는 백그라운드 그린렛.
     학습 중(스레드 생존 확인)인 카메라 수가 MAX_CONCURRENT_MONITORS 미만이 되면
@@ -636,6 +645,9 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
     camera_id 목록만 받고, 시작 직전에 ITS API 를 재호출해 최신 URL 을 사용한다.
     fresh_map 에 없는 카메라는 즉시 버리지 않고 최대 MAX_MISS_RETRIES 번까지
     재시도한 뒤 그래도 없으면 영구 스킵한다 (ITS API 일시 누락 대응).
+
+    stop_event: threading.Event — 설정되면 루프를 즉시 탈출한다.
+                its_stop_segment 에서 event.set() 으로 중지 신호를 보낸다.
     """
     MAX_MISS_RETRIES = 6   # fresh_map 에 없을 때 최대 재시도 횟수
     pending_ids = list(pending_ids)         # 원본 리스트를 변경하지 않기 위해 복사
@@ -653,6 +665,11 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
 
     try:   # 그린렛 무음 사망 방지 — 예외를 잡아 로그로 남긴다
         while pending_ids:
+            # 중지 신호 확인 — stop_segment가 event.set()을 호출하면 즉시 종료
+            if stop_event and stop_event.is_set():
+                print(f"⏹️ [큐 러너] 중지 신호 수신 — 종료: {road} {start_ic}→{end_ic}")
+                break
+
             _queue_diag['iteration_count'] += 1    # 루프 반복 횟수 기록
             _queue_diag['pending_ids']      = list(pending_ids)   # 현재 대기 목록 갱신
 
@@ -668,6 +685,10 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
             if free_slots <= 0:
                 # 슬롯이 없으면 10 초 후 재확인 (OS 스레드이므로 time.sleep 사용)
                 time.sleep(10)
+                # 잠든 사이에 중지 신호가 왔을 수 있으므로 sleep 후에도 재확인
+                if stop_event and stop_event.is_set():
+                    print(f"⏹️ [큐 러너] sleep 후 중지 신호 확인 — 종료: {road} {start_ic}→{end_ic}")
+                    break
                 continue
 
             # 슬롯이 생겼을 때만 ITS API 를 재호출해 최신 URL 을 취득한다
@@ -808,14 +829,25 @@ def its_start_segment():
     # 큐 러너가 실제 시작 직전에 its_helper를 재호출해 최신 URL을 가져오게 한다.
     queued_ids = [c['camera_id'] for c in queued_cams]
     seg_key = (road, start_ic, end_ic)
+
+    # 이 구간에서 시작한 모든 카메라 목록을 저장한다.
+    # stop_segment에서 ITS API를 재호출하지 않고 이 목록으로 중지할 카메라를 찾는다.
+    _segment_cameras[seg_key] = started + already_running + queued_ids
+
     if queued_cams:
-        # 이전 큐 러너 스레드가 있으면 중단 신호를 줄 수 없으므로 딕셔너리만 교체한다.
-        # (스레드는 daemon=True 이므로 서버 종료 시 자동 정리됨)
+        # 이전 큐 러너가 있으면 중지 신호를 먼저 보낸다
+        old_stop_event = _queue_stop_events.pop(seg_key, None)
+        if old_stop_event:
+            old_stop_event.set()    # 이전 큐 러너에게 "지금 바로 멈춰" 신호
+
         old_t = _queue_greenlets.pop(seg_key, None)
         if old_t and old_t.is_alive():
-            # 이전 스레드는 daemon=True 이므로 강제 종료는 불가하지만,
-            # pending_ids 가 교체되므로 사실상 새 스레드가 덮어쓴다.
-            print(f"ℹ️  [큐 러너] 이전 스레드 실행 중 — 새 스레드로 교체")
+            print(f"ℹ️  [큐 러너] 이전 스레드에 중지 신호 전송 후 새 스레드로 교체")
+
+        # 새 큐 러너용 비상 정지 버튼 생성
+        new_stop_event = threading.Event()
+        _queue_stop_events[seg_key] = new_stop_event   # 나중에 stop_segment에서 꺼내 씀
+
         t = threading.Thread(
             target=_segment_queue_runner,
             args=(
@@ -823,6 +855,7 @@ def its_start_segment():
                 road, start_ic, end_ic,  # 재조회에 필요한 구간 정보
                 socketio, app_obj, db_inst,
             ),
+            kwargs={'stop_event': new_stop_event},   # 비상 정지 버튼 전달
             daemon=True,   # 서버 종료 시 자동 정리 (사용자가 Ctrl+C 해도 안전)
             name=f"queue-runner-{road}-{start_ic}-{end_ic}",
         )
@@ -948,22 +981,41 @@ def its_stop_segment():
     if not road or not start_ic or not end_ic:
         return jsonify({"status": "error", "message": "road, start_ic, end_ic 필요"}), 400
 
-    cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
-
-    # 해당 구간 큐 러너 스레드 참조 제거
-    # threading.Thread 는 강제 종료가 불가하지만 daemon=True 이므로 서버 종료 시 자동 정리된다.
-    # 딕셔너리에서 제거하면 새로운 start_segment 호출 시 새 스레드가 생성된다.
     seg_key = (road, start_ic, end_ic)
+
+    # ── 1. 큐 러너에게 중지 신호 전송 ───────────────────────────────────────────
+    # stop_event.set() 으로 큐 러너 루프가 다음 반복에서 즉시 종료된다.
+    # ITS API 재호출 없이 중지 가능하도록 신호를 먼저 보낸다.
+    stop_event = _queue_stop_events.pop(seg_key, None)
+    if stop_event:
+        stop_event.set()
+        print(f"⏹️ 구간 큐 러너에게 중지 신호 전송: {road} {start_ic}→{end_ic}")
+
     old_t = _queue_greenlets.pop(seg_key, None)
     if old_t and old_t.is_alive():
-        print(f"⏹️ 구간 큐 러너 스레드 참조 제거 (스레드는 자연 종료 대기): {road} {start_ic}→{end_ic}")
+        print(f"⏹️ 구간 큐 러너 스레드 참조 제거 (stop_event로 종료 예정): {road} {start_ic}→{end_ic}")
+
+    # ── 2. 중지할 카메라 목록 조회 (ITS API 재호출 없음) ─────────────────────────
+    # start_segment 호출 시 저장해 둔 목록을 사용한다.
+    # ITS API를 재호출하지 않으므로 느린 외부 네트워크 지연이 없다.
+    cam_ids_to_stop = _segment_cameras.pop(seg_key, [])
+
+    # 저장된 목록이 없는 경우 (서버 재시작 후 stop 호출 등) active_detectors에서 직접 검색
+    if not cam_ids_to_stop:
+        print(f"⚠️ _segment_cameras 에 {seg_key} 없음 — active_detectors 에서 직접 중지")
+        with detector_manager._lock:
+            # 'monitoring_' 접두사를 가진 모든 감지기를 중지 대상으로 삼는다
+            cam_ids_to_stop = [
+                key.replace('monitoring_', '', 1)
+                for key in list(detector_manager.active_detectors.keys())
+                if key.startswith('monitoring_')
+            ]
 
     stopped   = []
     not_found = []
 
-    for cam in cameras_in_range:
-        camera_id   = cam['camera_id']
-        unique_name = _monitoring_key(camera_id)
+    for camera_id in cam_ids_to_stop:
+        unique_name = _monitoring_key(camera_id)   # 'monitoring_{camera_id}'
 
         with detector_manager._lock:
             det = detector_manager.active_detectors.pop(unique_name, None)
@@ -972,7 +1024,7 @@ def its_stop_segment():
         if det is None:
             not_found.append(camera_id)
         else:
-            det.stop()
+            det.stop()   # is_running=False 설정 — 스레드가 다음 프레임에서 종료
             stopped.append(camera_id)
             print(f"⏹️ ITS 구간 모니터링 중지: {camera_id}")
 
