@@ -22,11 +22,14 @@ def build_ventilation_result(result, ventilation_manager):
     frame_id = int(result.get("frame_id", 0))
     lane_count = int(result.get("lane_count", 0) or 0)
     avg_speed = float(result.get("avg_speed", 0.0) or 0.0)
-    accident = bool(result.get("accident", False))
+    accident_status = str(result.get("accident_status", "NONE") or "NONE").upper()
+    accident_confirmed = bool(result.get("accident_confirmed", False))
+    accident_applied = accident_status == "CONFIRMED" or accident_confirmed
     state = str(result.get("state", "NORMAL")).upper()
+    traffic_state = str(result.get("traffic_state", state) or state).upper()
 
-    # 사고면 ACCIDENT 우선 반영
-    traffic_state_for_vent = "ACCIDENT" if accident else state
+    # 관제 확인 전 사고 의심은 환기 위험도 사고 가중치에 반영하지 않는다.
+    traffic_state_for_vent = "ACCIDENT" if accident_applied else traffic_state
 
     # 허용 상태 외 값 방어
     allowed_states = {"NORMAL", "CONGESTION", "JAM", "ACCIDENT"}
@@ -71,7 +74,9 @@ def build_ventilation_result(result, ventilation_manager):
             traffic_state=traffic_state_for_vent,
             vehicles_in_roi=vehicles_in_roi,
             avg_speed_roi=avg_speed_roi,
-            roi_est_length=roi_est_length
+            roi_est_length=roi_est_length,
+            accident_status=accident_status,
+            accident_applied=accident_applied
         )
     except Exception as e:
         print(f"⚠️ 환기 대응 계산 실패: {e}")
@@ -85,6 +90,13 @@ def build_ventilation_result(result, ventilation_manager):
             "weighted_vehicle_count": 0.0,
             "traffic_density": 0.0,
             "avg_dwell_time_roi": 0.0,
+            "accident_status": accident_status,
+            "accident_applied": accident_applied,
         }
+
+    ventilation_result["accident_status"] = accident_status
+    ventilation_result["accident_applied"] = accident_applied
+    if accident_status == "SUSPECT" and not accident_applied:
+        ventilation_result["accident_note"] = "사고 의심은 관제 확인 전까지 공기질 가중치에 반영하지 않음"
 
     return ventilation_result

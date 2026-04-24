@@ -19,6 +19,9 @@ import time
 from collections import deque
 
 
+DEBUG_GET_LANE_TEMPLATE = False
+
+
 class TunnelPipelineAdapter:
     def __init__(self):
         self.current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -126,6 +129,15 @@ class TunnelPipelineAdapter:
         self.prev_roi_fallback = None
         self.prev_template_confirmed = None
 
+    def clear_accident_state(self):
+        if self.pipeline is None:
+            return
+
+        accident_model = getattr(self.pipeline, "accident_model", None)
+        if accident_model is not None and hasattr(accident_model, "clear_accident"):
+            accident_model.clear_accident()
+            self.prev_accident_flag = False
+
     # =========================================================
     # 2) 파이프라인 lazy init
     # =========================================================
@@ -157,19 +169,25 @@ class TunnelPipelineAdapter:
         이 메서드를 두면 service.py에서 내부 구조를 덜 의존하게 된다.
         """
         if self.pipeline is None:
-            print("❌ get_lane_template: self.pipeline is None")
+            if DEBUG_GET_LANE_TEMPLATE:
+                print("❌ get_lane_template: self.pipeline is None")
             return None
 
-        print("🧪 get_lane_template dir(self.pipeline):", dir(self.pipeline))
+        if DEBUG_GET_LANE_TEMPLATE:
+            print("🧪 get_lane_template dir(self.pipeline):", dir(self.pipeline))
+
         if hasattr(self.pipeline, "lane_template"):
-            print("✅ get_lane_template: self.pipeline.lane_template 찾음")
+            if DEBUG_GET_LANE_TEMPLATE:
+                print("✅ get_lane_template: self.pipeline.lane_template 찾음")
             return getattr(self.pipeline, "lane_template")
         
         if hasattr(self.pipeline, "lane_estimator"):
-            print("✅ get_lane_template: self.pipeline.lane_estimator 찾음")
+            if DEBUG_GET_LANE_TEMPLATE:
+                print("✅ get_lane_template: self.pipeline.lane_estimator 찾음")
             return getattr(self.pipeline, "lane_estimator")
 
-        print("❌ get_lane_template: lane template 관련 속성 못 찾음")
+        if DEBUG_GET_LANE_TEMPLATE:
+            print("❌ get_lane_template: lane template 관련 속성 못 찾음")
         return None
 
     # =========================================================

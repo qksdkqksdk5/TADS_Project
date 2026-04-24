@@ -367,7 +367,9 @@ class VentilationRiskManager:
         traffic_state,
         vehicles_in_roi,
         avg_speed_roi,
-        roi_est_length=None
+        roi_est_length=None,
+        accident_status="NONE",
+        accident_applied=False
     ):
         """
         Parameters
@@ -471,6 +473,8 @@ class VentilationRiskManager:
             "frame_id": int(frame_id),
             "lane_count": lane_count,
             "traffic_state": str(traffic_state).upper(),
+            "accident_status": str(accident_status or "NONE").upper(),
+            "accident_applied": bool(accident_applied),
 
             "vehicle_count_roi": vehicle_count_roi,
             "weighted_vehicle_count": round(weighted_vehicle_count, 3),

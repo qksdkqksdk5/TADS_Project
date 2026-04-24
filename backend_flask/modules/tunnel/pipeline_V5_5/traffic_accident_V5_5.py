@@ -11,6 +11,7 @@
 
 from collections import deque
 import numpy as np
+import time
 
 
 class AccidentDetector:
@@ -28,6 +29,7 @@ class AccidentDetector:
 
         # frame 사고 예측 history
         self.frame_prediction_history = deque()
+        self.strong_candidate_history = deque()
 
         # 사고 상태 lock
         self.accident_locked = False
@@ -61,11 +63,33 @@ class AccidentDetector:
         self.PAIR_SCORE_MAX = 10
 
         # frame 누적 사고 확정
-        self.ACCIDENT_WINDOW = 200
-        self.ACCIDENT_CONFIRM_COUNT = 3
+        self.ACCIDENT_WINDOW = 150
+        self.ACCIDENT_CONFIRM_COUNT = 1
+
+        # 실시간 CCTV 방어 필터
+        self.MAX_FRAME_TIME_GAP = 0.5
+        self.FRAME_GAP_FACTOR = 3.0
+        self.MIN_TRACK_AGE = 10
+        self.CENTER_JUMP_FACTOR = 4.0
+        self.MIN_CENTER_JUMP_ABS = 80.0
+        self.BBOX_AREA_JUMP_RATIO = 2.0
+        self.STRONG_WINDOW_FRAMES = 150
+        self.STRONG_WINDOW_SEC = 5.0
+        self.STRONG_REPEAT_COUNT = 5
+        self.STOP_SPEED_THR = 2.0
+        self.STOP_HOLD_SEC = 2.0
+        self.MIN_STRONG_VEHICLE_COUNT = 2
+        self.SKIP_LOG_COOLDOWN_SEC = 5.0
 
         # 메모리 정리용
         self.STALE_FRAME_GAP = 60
+
+        self.last_update_ts = None
+        self.recent_frame_intervals = deque(maxlen=20)
+        self.prev_track_metrics = {}
+        self.track_seen_count = {}
+        self.low_speed_started_at = None
+        self.last_skip_log_ts = {}
 
         # 디버그 정보
         self.last_debug = {
@@ -75,6 +99,8 @@ class AccidentDetector:
             "frame_accident_prediction": False,
             "recent_prediction_count": 0,
             "accident_locked": False,
+            "accident_candidate_only": False,
+            "accident_filter_skip": None,
             "pairs": []
         }
 
@@ -85,6 +111,8 @@ class AccidentDetector:
         self.accident_locked = False
         self.accident_start_frame = None
         self.frame_prediction_history.clear()
+        self.strong_candidate_history.clear()
+        self.low_speed_started_at = None
 
     # =========================================================
     # 내부 유틸
@@ -145,6 +173,146 @@ class AccidentDetector:
 
         return recent_prediction_count
 
+    def _log_skip(self, reason):
+        now = time.time()
+        last = self.last_skip_log_ts.get(reason, 0.0)
+        if now - last >= self.SKIP_LOG_COOLDOWN_SEC:
+            print(f"🧊 사고 판단 skip: {reason}")
+            self.last_skip_log_ts[reason] = now
+
+    def _is_frame_gap_abnormal(self, now_ts):
+        if self.last_update_ts is None:
+            self.last_update_ts = now_ts
+            return False, 0.0
+
+        time_gap = now_ts - self.last_update_ts
+        avg_interval = None
+        if self.recent_frame_intervals:
+            avg_interval = sum(self.recent_frame_intervals) / len(self.recent_frame_intervals)
+
+        dynamic_thr = self.MAX_FRAME_TIME_GAP
+        if avg_interval and avg_interval > 0:
+            dynamic_thr = max(dynamic_thr, avg_interval * self.FRAME_GAP_FACTOR)
+
+        self.last_update_ts = now_ts
+
+        if time_gap > dynamic_thr:
+            return True, time_gap
+
+        self.recent_frame_intervals.append(time_gap)
+        return False, time_gap
+
+    def _filter_valid_track_ids(self, tracks, analysis):
+        boxes = analysis.get("boxes", {})
+        history = analysis.get("track_history", {})
+
+        current_ids = set()
+        valid_ids = set()
+        skipped_age = 0
+        skipped_jump = 0
+
+        for t in tracks:
+            tid = t.get("id")
+            if tid is None:
+                continue
+
+            current_ids.add(tid)
+            self.track_seen_count[tid] = self.track_seen_count.get(tid, 0) + 1
+
+            box = boxes.get(tid, t.get("bbox"))
+            if not box:
+                continue
+
+            x1, y1, x2, y2 = box
+            cx = float((x1 + x2) / 2)
+            cy = float((y1 + y2) / 2)
+            area = float(max(int(x2) - int(x1), 1) * max(int(y2) - int(y1), 1))
+
+            hist_age = len(history.get(tid, [])) if isinstance(history, dict) else 0
+            age = max(hist_age, self.track_seen_count.get(tid, 0))
+
+            prev = self.prev_track_metrics.get(tid)
+            is_outlier = False
+
+            if prev:
+                dx = cx - prev["cx"]
+                dy = cy - prev["cy"]
+                move = float(np.sqrt(dx ** 2 + dy ** 2))
+                avg_move = prev.get("avg_move", 0.0)
+                jump_thr = max(self.MIN_CENTER_JUMP_ABS, avg_move * self.CENTER_JUMP_FACTOR)
+
+                prev_area = max(float(prev.get("area", area)), 1.0)
+                area_ratio = max(area / prev_area, prev_area / max(area, 1.0))
+
+                if move > jump_thr or area_ratio >= self.BBOX_AREA_JUMP_RATIO:
+                    is_outlier = True
+                    skipped_jump += 1
+
+                smooth_move = move if avg_move <= 0 else (0.8 * avg_move + 0.2 * move)
+            else:
+                smooth_move = 0.0
+
+            self.prev_track_metrics[tid] = {
+                "cx": cx,
+                "cy": cy,
+                "area": area,
+                "avg_move": smooth_move,
+            }
+
+            if age < self.MIN_TRACK_AGE:
+                skipped_age += 1
+                continue
+
+            if is_outlier:
+                continue
+
+            valid_ids.add(tid)
+
+        stale_ids = [tid for tid in self.prev_track_metrics.keys() if tid not in current_ids]
+        for tid in stale_ids:
+            self.prev_track_metrics.pop(tid, None)
+            self.track_seen_count.pop(tid, None)
+
+        if skipped_age:
+            self._log_skip("track_age 부족")
+        if skipped_jump:
+            self._log_skip("bbox jump")
+
+        return valid_ids, {
+            "track_age": skipped_age,
+            "bbox_jump": skipped_jump,
+        }
+
+    def _update_strong_suspect(self, frame_id, now_ts, candidate, avg_speed, vehicle_count):
+        if avg_speed < self.STOP_SPEED_THR:
+            if self.low_speed_started_at is None:
+                self.low_speed_started_at = now_ts
+        else:
+            self.low_speed_started_at = None
+
+        low_speed_hold = (
+            self.low_speed_started_at is not None
+            and now_ts - self.low_speed_started_at >= self.STOP_HOLD_SEC
+        )
+
+        if candidate:
+            self.strong_candidate_history.append((frame_id, now_ts))
+
+        while self.strong_candidate_history:
+            old_frame, old_ts = self.strong_candidate_history[0]
+            if frame_id - old_frame <= self.STRONG_WINDOW_FRAMES and now_ts - old_ts <= self.STRONG_WINDOW_SEC:
+                break
+            self.strong_candidate_history.popleft()
+
+        repeat_count = len(self.strong_candidate_history)
+        strong_suspect = (
+            repeat_count >= self.STRONG_REPEAT_COUNT
+            and (avg_speed < self.STOP_SPEED_THR or low_speed_hold)
+            and vehicle_count >= self.MIN_STRONG_VEHICLE_COUNT
+        )
+
+        return strong_suspect, repeat_count, low_speed_hold
+
     # =========================================================
     # 사고 판단
     # =========================================================
@@ -164,6 +332,33 @@ class AccidentDetector:
             }
         """
 
+        now_ts = time.time()
+        frame_gap_skip, time_gap = self._is_frame_gap_abnormal(now_ts)
+        if frame_gap_skip:
+            self._log_skip("frame_gap")
+            self.last_debug = {
+                "frame_id": frame_id,
+                "accident": False,
+                "acc_ratio": 0.0,
+                "frame_accident_prediction": False,
+                "recent_prediction_count": 0,
+                "accident_locked": self.accident_locked,
+                "accident_candidate_only": False,
+                "accident_filter_skip": "frame_gap",
+                "time_gap": round(time_gap, 3),
+                "pairs": []
+            }
+            return {
+                "accident": False,
+                "acc_ratio": 0.0,
+                "frame_accident_prediction": False,
+                "recent_prediction_count": 0,
+                "accident_locked": self.accident_locked,
+                "accident_candidate_only": False,
+                "strong_suspect": False,
+                "filter_skip": "frame_gap",
+            }
+
         self._cleanup_stale_pairs(frame_id)
 
         boxes = analysis.get("boxes", {})
@@ -171,8 +366,10 @@ class AccidentDetector:
         avg_speed = float(analysis.get("avg_speed", 0.0))
         lane_map = analysis.get("lane_map", {})
         smoke_fire_map = analysis.get("smoke_fire_map", {})
+        vehicle_count = int(analysis.get("vehicle_count", len(tracks)))
 
-        ids = list(boxes.keys())
+        valid_ids, filter_counts = self._filter_valid_track_ids(tracks, analysis)
+        ids = [tid for tid in boxes.keys() if tid in valid_ids]
 
         pair_debug = []
         total_pairs = 0
@@ -380,11 +577,21 @@ class AccidentDetector:
         # =====================================================
         # frame 사고 예측
         # =====================================================
-        frame_accident_prediction = (
+        candidate_prediction = (
             frame_has_strong_candidate
             or frame_has_repeat_strong_candidate
             or frame_has_high_score_pair
         )
+
+        strong_suspect, strong_repeat_count, low_speed_hold = self._update_strong_suspect(
+            frame_id=frame_id,
+            now_ts=now_ts,
+            candidate=candidate_prediction,
+            avg_speed=avg_speed,
+            vehicle_count=vehicle_count,
+        )
+
+        frame_accident_prediction = strong_suspect
 
         recent_prediction_count = self._update_frame_prediction_history(
             frame_id, frame_accident_prediction
@@ -393,9 +600,10 @@ class AccidentDetector:
         # =====================================================
         # 사고 확정 / 상태 lock
         # =====================================================
-        if (not self.accident_locked) and (recent_prediction_count >= self.ACCIDENT_CONFIRM_COUNT):
+        if (not self.accident_locked) and strong_suspect and (recent_prediction_count >= self.ACCIDENT_CONFIRM_COUNT):
             self.accident_locked = True
             self.accident_start_frame = frame_id
+            print("🚨 strong accident suspect 생성")
 
         accident_flag = self.accident_locked
 
@@ -409,6 +617,12 @@ class AccidentDetector:
             "recent_prediction_count": recent_prediction_count,
             "accident_locked": self.accident_locked,
             "accident_start_frame": self.accident_start_frame,
+            "accident_candidate_only": bool(candidate_prediction and not strong_suspect),
+            "strong_suspect": strong_suspect,
+            "strong_repeat_count": strong_repeat_count,
+            "low_speed_hold": low_speed_hold,
+            "filter_skip": None,
+            "filter_counts": filter_counts,
             "pairs": pair_debug
         }
 
@@ -417,7 +631,11 @@ class AccidentDetector:
             "acc_ratio": round(acc_ratio, 4),
             "frame_accident_prediction": frame_accident_prediction,
             "recent_prediction_count": recent_prediction_count,
-            "accident_locked": self.accident_locked
+            "accident_locked": self.accident_locked,
+            "accident_candidate_only": bool(candidate_prediction and not strong_suspect),
+            "strong_suspect": strong_suspect,
+            "strong_repeat_count": strong_repeat_count,
+            "filter_skip": None,
         }
 
     def get_debug_info(self):

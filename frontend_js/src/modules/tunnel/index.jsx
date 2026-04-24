@@ -5,7 +5,6 @@ import {
   fetchTunnelCctvUrl,
   selectRandomCctv,
   stopTunnelStream,
-  restartTunnelStreamRandom,
 } from "./api";
 
 /* =========================================================
@@ -38,6 +37,8 @@ function getStateClass(state) {
   if (state === "CONGESTION") return "congestion";
   if (state === "JAM") return "jam";
   if (state === "ACCIDENT") return "accident";
+  if (state === "SUSPECT") return "suspect";
+  if (state === "CONFIRMED") return "accident";
   if (state === "ERROR") return "error";
   return "ready";
 }
@@ -266,6 +267,9 @@ function AirPanel({ title, subtitle, ventData, showForecastBadge = false }) {
 function TunnelModule({ host }) {
   const [status, setStatus] = useState({
     state: "READY",
+    traffic_state: "NORMAL",
+    accident_status: "NONE",
+    pending_accident_event: null,
     avg_speed: 0,
     avg_speed_roi: 0,
     vehicle_count: 0,
@@ -298,24 +302,34 @@ function TunnelModule({ host }) {
   });
 
   const [cctvSource, setCctvSource] = useState("");
-  const [videoKey, setVideoKey] = useState(null);
+  const [videoFeedUrl, setVideoFeedUrl] = useState("");
   const [videoLoading, setVideoLoading] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [reestimateLoading, setReestimateLoading] = useState(false);
+  const [accidentModal, setAccidentModal] = useState(null);
+  const [resolvedAccidentIds, setResolvedAccidentIds] = useState(() => new Set());
+  const [eventTab, setEventTab] = useState("logs");
+  const [eventStats, setEventStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [lastSelectedCctv, setLastSelectedCctv] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(`tunnel_last_cctv_${host}`);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const BACKEND_URL = `http://${host}:5000`;
 
   const prevVentLevelRef = useRef("NORMAL");
   const initOnceRef = useRef(false);
   const videoRestartTimerRef = useRef(null);
+  const videoErrorTimerRef = useRef(null);
   const lastRestartAtRef = useRef(0);
   const wasHiddenRef = useRef(false);
-
-  const videoSrc = useMemo(() => {
-    if (!videoKey) return "";
-    return `${BACKEND_URL}/api/tunnel/video-feed?ts=${videoKey}`;
-  }, [videoKey, BACKEND_URL]);
+  const stoppedOnExitRef = useRef(false);
 
   const speedHintText = useMemo(() => getSpeedHintText(status.avg_speed), [status.avg_speed]);
   const laneReestimateText = useMemo(() => getLaneReestimateText(status), [
@@ -352,9 +366,38 @@ function TunnelModule({ host }) {
     return "";
   }, [cctvSource]);
 
+  const rememberCctv = (data) => {
+    const name = data?.cctv_name;
+    const url = data?.cctv_url;
+
+    if (!name || name === "-") return;
+
+    const next = { name, url: url || "" };
+    setLastSelectedCctv(next);
+
+    try {
+      sessionStorage.setItem(`tunnel_last_cctv_${host}`, JSON.stringify(next));
+    } catch {
+      // sessionStorage를 사용할 수 없는 환경에서는 메모리 상태만 유지한다.
+    }
+  };
+
+  const stopBackendStream = async () => {
+    try {
+      await stopTunnelStream(BACKEND_URL);
+    } catch (err) {
+      console.error("stop tunnel stream error:", err);
+    }
+  };
+
   const applyStatusData = (data) => {
+    rememberCctv(data);
+
     setStatus({
       state: data?.state ?? "READY",
+      traffic_state: data?.traffic_state ?? data?.state ?? "NORMAL",
+      accident_status: data?.accident_status ?? "NONE",
+      pending_accident_event: data?.pending_accident_event ?? null,
       avg_speed: Number(data?.avg_speed ?? 0),
       avg_speed_roi: Number(data?.avg_speed_roi ?? 0),
       vehicle_count: Number(data?.vehicle_count ?? 0),
@@ -392,13 +435,17 @@ function TunnelModule({ host }) {
       clearTimeout(videoRestartTimerRef.current);
       videoRestartTimerRef.current = null;
     }
-    setVideoKey(null);
+    if (videoErrorTimerRef.current) {
+      clearTimeout(videoErrorTimerRef.current);
+      videoErrorTimerRef.current = null;
+    }
+    setVideoFeedUrl("");
     setVideoLoading(false);
   };
 
-  const restartVideo = (delay = 900) => {
+  const restartVideo = (delay = 900, force = false) => {
     const now = Date.now();
-    if (now - lastRestartAtRef.current < 1200) return;
+    if (!force && now - lastRestartAtRef.current < 1200) return;
     lastRestartAtRef.current = now;
 
     setVideoLoading(true);
@@ -407,11 +454,21 @@ function TunnelModule({ host }) {
       clearTimeout(videoRestartTimerRef.current);
     }
 
-    setVideoKey(null);
+    setVideoFeedUrl("");
 
     videoRestartTimerRef.current = setTimeout(() => {
-      setVideoKey(Date.now());
+      stoppedOnExitRef.current = false;
+      setVideoFeedUrl(`${BACKEND_URL}/api/tunnel/video-feed?t=${Date.now()}`);
     }, delay);
+  };
+
+  const retryVideoAfterError = () => {
+    if (videoErrorTimerRef.current) return;
+
+    videoErrorTimerRef.current = setTimeout(() => {
+      videoErrorTimerRef.current = null;
+      restartVideo(0);
+    }, 1800);
   };
 
   useEffect(() => {
@@ -481,6 +538,8 @@ function TunnelModule({ host }) {
       mounted = false;
       clearInterval(timer);
       stopVideo();
+      stoppedOnExitRef.current = true;
+      stopBackendStream();
     };
   }, [BACKEND_URL, host]);
 
@@ -495,6 +554,34 @@ function TunnelModule({ host }) {
     prevVentLevelRef.current = currentLevel;
   }, [currentVent?.risk_level]);
 
+  useEffect(() => {
+    const event = status.pending_accident_event;
+    if (!event?.event_id) return;
+    if (resolvedAccidentIds.has(event.event_id)) return;
+    if (accidentModal?.event_id === event.event_id) return;
+
+    setAccidentModal(event);
+  }, [status.pending_accident_event, resolvedAccidentIds, accidentModal?.event_id]);
+
+  const loadEventStats = async () => {
+    try {
+      setStatsLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/tunnel/event/stats`);
+      const data = await res.json();
+      setEventStats(data);
+    } catch (err) {
+      console.error("event stats fetch error:", err);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (eventTab === "stats") {
+      loadEventStats();
+    }
+  }, [eventTab, BACKEND_URL]);
+
   /* =========================================================
    * 탭 이동 시: 종료
    * 다시 돌아오면: 새로 시작
@@ -504,17 +591,19 @@ function TunnelModule({ host }) {
     try {
       if (document.visibilityState === "hidden") {
         wasHiddenRef.current = true;
-        setVideoKey(null);
-        setVideoLoading(false);
-        await stopTunnelStream(BACKEND_URL);
+        stopVideo();
+        if (!stoppedOnExitRef.current) {
+          stoppedOnExitRef.current = true;
+          await stopBackendStream();
+        }
         return;
       }
 
       if (document.visibilityState === "visible" && wasHiddenRef.current) {
         wasHiddenRef.current = false;
-        await restartTunnelStreamRandom(BACKEND_URL);
-        await sleep(800);
-        restartVideo(600);
+        // 마지막 CCTV는 백엔드 service.current_cctv가 보존하므로
+        // select-random 없이 video-feed만 새 timestamp로 재연결한다.
+        restartVideo(300, true);
       }
     } catch (err) {
       console.error("tab visibility stream control error:", err);
@@ -540,7 +629,7 @@ function TunnelModule({ host }) {
 
     await selectRandomCctv(BACKEND_URL);
     await sleep(1200);
-    restartVideo(900);
+    restartVideo(900, true);
   } catch (err) {
     console.error(err);
     setVideoLoading(false);
@@ -555,15 +644,9 @@ function TunnelModule({ host }) {
       setLoading(true);
       setError("");
 
-      // 현재 스트림만 명시 종료
-      await stopTunnelStream(BACKEND_URL);
-
-      // 프론트 img도 끊기
+      // 현재 CCTV는 유지하고 img 연결만 끊은 뒤 새 timestamp로 재연결
       stopVideo();
-
-      // 같은 CCTV로 다시 video-feed 연결
-      await sleep(500);
-      restartVideo(700);
+      restartVideo(300, true);
     } catch (err) {
       console.error("refresh video error:", err);
       setVideoLoading(false);
@@ -623,7 +706,60 @@ function TunnelModule({ host }) {
     }
   };
 
-  const stateClass = getStateClass(status.state);
+  const handleResolveAccident = async (action) => {
+    if (!accidentModal?.event_id) return;
+
+    try {
+      setLoading(true);
+      const res = await fetch(`${BACKEND_URL}/api/tunnel/event/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: accidentModal.event_id,
+          action,
+        }),
+      });
+      const data = await res.json();
+
+      if (!data?.ok) {
+        setError(data?.message || "사고 이벤트 처리 실패");
+        return;
+      }
+
+      setResolvedAccidentIds((prev) => {
+        const next = new Set(prev);
+        next.add(accidentModal.event_id);
+        return next;
+      });
+      setAccidentModal(null);
+
+      const refreshed = await fetchTunnelStatus(BACKEND_URL);
+      applyStatusData(refreshed);
+
+      if (eventTab === "stats") {
+        loadEventStats();
+      }
+    } catch (err) {
+      console.error("resolve accident error:", err);
+      setError("사고 이벤트 처리 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const displayState = useMemo(() => {
+    if (status.accident_status === "CONFIRMED") return "🔴 사고 확정";
+    if (status.accident_status === "SUSPECT") return "🚨 사고 의심";
+    return status.traffic_state || status.state;
+  }, [status.accident_status, status.traffic_state, status.state]);
+
+  const stateClass = getStateClass(
+    status.accident_status === "CONFIRMED"
+      ? "CONFIRMED"
+      : status.accident_status === "SUSPECT"
+      ? "SUSPECT"
+      : status.traffic_state || status.state
+  );
 
   return (
     <div className="smart-page">
@@ -631,7 +767,7 @@ function TunnelModule({ host }) {
         <section className="panel panel-header">
           <div className="panel-header-left">
             <div className="panel-title">🚨 스마트 터널 시스템</div>
-            <div className="panel-subtitle">{status.cctv_name || "-"}</div>
+            <div className="panel-subtitle">{status.cctv_name || lastSelectedCctv?.name || "-"}</div>
           </div>
 
           <div className="panel-header-right">
@@ -661,10 +797,10 @@ function TunnelModule({ host }) {
                 </div>
               )}
 
-              {videoKey && (
+              {videoFeedUrl && (
                 <img
-                  key={videoKey}
-                  src={videoSrc}
+                  key={videoFeedUrl}
+                  src={videoFeedUrl}
                   alt="cctv"
                   className="video-image"
                   onLoad={() => {
@@ -674,82 +810,160 @@ function TunnelModule({ host }) {
                   onError={() => {
                     setVideoLoading(false);
                     setError("영상 스트리밍 연결 실패");
+                    retryVideoAfterError();
                   }}
                 />
               )}
             </div>
 
-            <div className="video-caption">{status.cctv_name || "-"}</div>
+            <div className="video-caption">{status.cctv_name || lastSelectedCctv?.name || "-"}</div>
             {cctvSourceText && <div className="video-debug-source">{cctvSourceText}</div>}
           </div>
 
           <div className="panel panel-status">
-            <div className="section-title">🚦 교통흐름 상태</div>
-
-            <div className={`state-badge ${stateClass}`}>{status.state}</div>
-
-            <div className="status-speed-line">
-              <span className="status-speed-main">
-                평균속도 : {status.avg_speed.toFixed(2)} px/s
-              </span>
-              <span className="status-speed-sub">({speedHintText})</span>
+            <div className="status-title-row">
+              <div className="section-title">🚦 교통흐름 상태</div>
+              <div className="traffic-legend">
+                <span className="traffic-legend-item normal">정상</span>
+                <span className="traffic-legend-item congestion">혼잡</span>
+                <span className="traffic-legend-item jam">정체</span>
+                <span className="traffic-legend-item accident">사고</span>
+              </div>
             </div>
 
-            <div className="traffic-summary-grid">
-              <div className="summary-card">
-                <div className="summary-card-label">차선수</div>
-                <div className="summary-card-value">{status.lane_count}차선</div>
-              </div>
+            <div className="status-subpanel traffic-state-card">
+              <div className={`state-badge ${stateClass}`}>{displayState}</div>
 
-              <div className="summary-card">
-                <div className="summary-card-label">차선재추정</div>
-                <div className="summary-card-value small">{laneReestimateText}</div>
+              <div className="status-speed-line">
+                <span className="status-speed-main">
+                  평균속도 : {status.avg_speed.toFixed(2)} px/s
+                </span>
+                <span className="status-speed-sub">({speedHintText})</span>
+              </div>
+            </div>
+
+            <div className="status-subpanel lane-management-card">
+              <div className="status-subpanel-title">차선 관리</div>
+
+              <div className="traffic-summary-grid">
+                <div className="summary-card">
+                  <div className="summary-card-label">차선수</div>
+                  <div className="summary-card-value">{status.lane_count}차선</div>
+                </div>
+
+                <div className="summary-card">
+                  <div className="summary-card-label">차선재추정</div>
+                  <div className="summary-card-value small">{laneReestimateText}</div>
+                  <button
+                    className="summary-mini-btn"
+                    onClick={handleLaneReestimate}
+                    disabled={reestimateLoading}
+                  >
+                    {reestimateLoading ? "요청중..." : "재추정"}
+                  </button>
+                </div>
+
+                <div className="summary-card">
+                  <div className="summary-card-label">차선저장</div>
+                  <div className="summary-card-value small">현재 차선 메모리</div>
+                  <button className="summary-mini-btn secondary" onClick={handleLaneSave}>
+                    저장
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="status-subpanel event-log-card">
+              <div className="event-card-tabs">
                 <button
-                  className="summary-mini-btn"
-                  onClick={handleLaneReestimate}
-                  disabled={reestimateLoading}
+                  className={`event-tab-btn ${eventTab === "logs" ? "active" : ""}`}
+                  onClick={() => setEventTab("logs")}
                 >
-                  {reestimateLoading ? "요청중..." : "재추정"}
+                  이벤트 로그
+                </button>
+                <button
+                  className={`event-tab-btn ${eventTab === "stats" ? "active" : ""}`}
+                  onClick={() => setEventTab("stats")}
+                >
+                  이벤트 통계관리
                 </button>
               </div>
 
-              <div className="summary-card">
-                <div className="summary-card-label">차선저장</div>
-                <div className="summary-card-value small">현재 차선 메모리</div>
-                <button className="summary-mini-btn secondary" onClick={handleLaneSave}>
-                  저장
-                </button>
-              </div>
-            </div>
-
-            <div className="divider" />
-
-            <div className="section-subtitle">📌 이벤트 로그</div>
-            <div className="event-log scrollable-log">
-              {status.event_logs && status.event_logs.length > 0 ? (
-                status.event_logs
-                  .slice()
-                  .reverse()
-                  .map((event, idx) => (
-                    <div key={`${event}-${idx}`} className="event-item">
-                      {event}
-                    </div>
-                  ))
-              ) : status.events.length > 0 ? (
-                status.events.map((event, idx) => (
-                  <div key={`${event}-${idx}`} className="event-item">
-                    {event}
-                  </div>
-                ))
+              {eventTab === "logs" ? (
+                <div className="event-log scrollable-log">
+                  {status.event_logs && status.event_logs.length > 0 ? (
+                    status.event_logs
+                      .slice()
+                      .reverse()
+                      .map((event, idx) => (
+                        <div key={`${event}-${idx}`} className="event-item">
+                          {event}
+                        </div>
+                      ))
+                  ) : status.events.length > 0 ? (
+                    status.events.map((event, idx) => (
+                      <div key={`${event}-${idx}`} className="event-item">
+                        {event}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="event-empty">이상 징후 없음 (정상 흐름 유지)</div>
+                  )}
+                </div>
               ) : (
-                <div className="event-empty">이상 징후 없음 (정상 흐름 유지)</div>
+                <div className="event-stats-panel scrollable-log">
+                  {statsLoading ? (
+                    <div className="event-empty">통계 불러오는 중...</div>
+                  ) : (
+                    <>
+                      <div className="stats-date-line">
+                        기준일: {eventStats?.date || "-"}
+                      </div>
+                      <div className="stats-grid">
+                        <div className="stats-row">
+                          <span>사고 의심</span>
+                          <strong>{eventStats?.total_suspect ?? 0}건</strong>
+                        </div>
+                        <div className="stats-row">
+                          <span>사고 확정</span>
+                          <strong>{eventStats?.confirmed ?? 0}건</strong>
+                        </div>
+                        <div className="stats-row">
+                          <span>이상 없음</span>
+                          <strong>{eventStats?.false_alarm ?? 0}건</strong>
+                        </div>
+                        <div className="stats-row">
+                          <span>확정률</span>
+                          <strong>{eventStats?.confirm_rate ?? 0}%</strong>
+                        </div>
+                        <div className="stats-row">
+                          <span>오탐률</span>
+                          <strong>{eventStats?.false_alarm_rate ?? 0}%</strong>
+                        </div>
+                      </div>
+                      <div className="recent-title">최근 처리 기록</div>
+                      <div className="recent-events-list">
+                        {(eventStats?.recent_events || []).length > 0 ? (
+                          eventStats.recent_events.map((event) => (
+                            <div key={event.event_id || `${event.event_datetime}-${event.cctv_name}`} className="recent-event-item">
+                              <span>{event.event_time}</span>
+                              <strong>{event.operator_action || event.event_status}</strong>
+                              <em>{event.cctv_name || "-"}</em>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="event-empty compact">최근 처리 기록 없음</div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
           </div>
         </section>
 
         <section className="panel panel-air">
-          <div className="panel-air-title">🌫️ 터널 공기질</div>
           <div className="panel-air-grid">
             <AirPanel
               title="현재 터널 공기질"
@@ -766,6 +980,48 @@ function TunnelModule({ host }) {
           </div>
         </section>
       </main>
+
+      {accidentModal && (
+        <div className="accident-modal-backdrop">
+          <div className="accident-modal">
+            <div className="accident-modal-title">🚨 사고 의심 이벤트 발생</div>
+            <div className="accident-modal-body">
+              <div>
+                <span>CCTV</span>
+                <strong>{accidentModal.cctv_name || "-"}</strong>
+              </div>
+              <div>
+                <span>날짜</span>
+                <strong>{accidentModal.event_date || "-"}</strong>
+              </div>
+              <div>
+                <span>시간</span>
+                <strong>{accidentModal.event_time || "-"}</strong>
+              </div>
+              <div>
+                <span>사유</span>
+                <strong>{accidentModal.reason || "속도 급감/거리 변화/정지 패턴"}</strong>
+              </div>
+            </div>
+            <div className="accident-modal-actions">
+              <button
+                className="accident-action-btn confirm"
+                onClick={() => handleResolveAccident("confirm")}
+                disabled={loading}
+              >
+                사고 확정
+              </button>
+              <button
+                className="accident-action-btn normal"
+                onClick={() => handleResolveAccident("normal")}
+                disabled={loading}
+              >
+                이상 없음
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

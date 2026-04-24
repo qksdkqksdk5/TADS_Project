@@ -96,7 +96,7 @@ def select_random():
     """
     캐시된 CCTV 중 하나를 랜덤 선택
     """
-    cctv = service.select_random_cctv()
+    cctv = service.select_random_cctv(user_random=True)
 
     if not cctv:
         return jsonify({
@@ -251,6 +251,61 @@ def lane_save():
 
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
+
+
+# =========================================================
+# 사고 이벤트 처리
+# =========================================================
+@tunnel_bp.route("/event/resolve", methods=["POST"])
+def event_resolve():
+    data = request.get_json(silent=True) or {}
+    event_id = str(data.get("event_id", "")).strip()
+    action = str(data.get("action", "")).strip()
+
+    if not event_id or not action:
+        return jsonify({
+            "ok": False,
+            "message": "event_id와 action이 필요합니다."
+        }), 400
+
+    try:
+        result = service.resolve_accident_event(event_id, action)
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 resolve_accident_event() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"사고 이벤트 처리 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code
+
+
+# =========================================================
+# 사고 이벤트 통계 조회
+# =========================================================
+@tunnel_bp.route("/event/stats", methods=["GET"])
+def event_stats():
+    date_text = request.args.get("date", "").strip() or None
+
+    try:
+        result = service.get_event_stats(date_text)
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 get_event_stats() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"사고 이벤트 통계 조회 중 오류: {str(e)}"
+        }), 500
+
+    return jsonify(result)
 
 # =========================================================
 # 스트림 명시 종료
