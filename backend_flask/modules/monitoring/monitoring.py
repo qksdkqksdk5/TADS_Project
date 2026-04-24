@@ -660,16 +660,7 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
             learning_count = _count_learning_alive()
             free_slots     = MAX_CONCURRENT_MONITORS - learning_count
 
-            # 진단: _count_learning_alive() 세부 내역 출력
-            with detector_manager._lock:
-                _diag_details = [
-                    f"{k}(learning={d.state.is_learning},alive={detector_manager.threads.get(k, None) and detector_manager.threads[k].is_alive()})"
-                    for k, d in detector_manager.active_detectors.items()
-                    if isinstance(d, MonitoringDetector)
-                ]
-            print(f"🗂️  [큐 러너 #{_queue_diag['iteration_count']}] "
-                  f"학습중={learning_count} / 슬롯={free_slots} / 대기={len(pending_ids)}개 {pending_ids}")
-            print(f"    └ 감지기 상세: {_diag_details if _diag_details else '없음'}")
+            pass  # 슬롯/대기 상태 계산 완료
 
             _queue_diag['last_learning_count'] = learning_count
             _queue_diag['last_free_slots']     = free_slots
@@ -691,8 +682,6 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
             # camera_id → cam 딕셔너리 인덱스 (빠른 조회용)
             fresh_map  = {c['camera_id']: c for c in fresh_cams}
             no_match_in_batch = 0   # 이번 배치에서 fresh_map 미탐지 연속 횟수
-            print(f"    └ fresh_map 카메라 수: {len(fresh_map)}개 | "
-                  f"pending 중 fresh_map 매칭: {sum(1 for p in pending_ids if p in fresh_map)}개")
 
             while free_slots > 0 and pending_ids:
                 # 이번 배치의 모든 pending 카메라가 fresh_map 에 없으면 루프 탈출
@@ -721,17 +710,13 @@ def _segment_queue_runner(pending_ids, road, start_ic, end_ic, socketio, app_obj
                 no_match_in_batch = 0
 
                 try:
-                    print(f"🔧 [큐 러너] _try_start_camera 호출: {cam_id}")
                     started = _try_start_camera(cam, socketio, app_obj, db_inst)
                     pending_ids.pop(0)   # 성공·이미실행 모두 큐에서 제거
                     if started:
                         free_slots -= 1
                         _queue_diag['started_by_runner'].append(cam_id)   # 진단 기록
-                        print(f"🚀 [큐 러너] 카메라 시작 완료 [{cam_id}] — 남은 슬롯={free_slots}")
                         if pending_ids:
                             time.sleep(2)   # 순차 시작 딜레이 (monkey-patched → gevent.sleep)
-                    else:
-                        print(f"ℹ️  [큐 러너] 이미 실행 중 [{cam_id}] — 슬롯 소모 없음")
                 except Exception as e:
                     import traceback as _tb
                     pending_ids.pop(0)   # 실패해도 제거 — 무한 재시도 방지
@@ -779,14 +764,6 @@ def its_start_segment():
     # 오히려 스트림 열기 실패를 유발할 수 있으므로 제거한다.
     cameras_in_range = its_helper.get_cameras_in_range(road, start_ic, end_ic)
 
-    # ── 진단 로그: 수신된 파라미터와 범위 내 카메라 수를 터미널에 출력 ──────────
-    print(f"🔍 [start_segment] road={road!r}  start_ic={start_ic!r}  end_ic={end_ic!r}")
-    print(f"    └ get_cameras_in_range 결과: {len(cameras_in_range)}개")
-    if cameras_in_range:
-        # 첫/마지막 카메라 이름을 출력해 범위가 올바른지 확인한다
-        print(f"    └ 첫 카메라: {cameras_in_range[0]['ic_name']}  "
-              f"마지막 카메라: {cameras_in_range[-1]['ic_name']}")
-
     if not cameras_in_range:
         return jsonify({"status": "error", "message": "해당 범위 카메라 없음"}), 404
 
@@ -796,7 +773,6 @@ def its_start_segment():
 
     # 현재 학습 중인 MonitoringDetector 수 (스레드 생존 여부 포함 — dead thread 오염 방지)
     learning_count = _count_learning_alive()
-    print(f"    └ learning_count={learning_count}  MAX_CONCURRENT={MAX_CONCURRENT_MONITORS}")
 
     started         = []
     already_running = []

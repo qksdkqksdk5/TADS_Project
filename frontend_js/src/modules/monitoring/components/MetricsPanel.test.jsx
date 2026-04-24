@@ -34,8 +34,9 @@ describe('MetricsPanel — 방향별 뱃지 순서', () => {
   it('dir_label_a=상행이면 "상행" 레이블이 표시되어야 한다', () => {
     render(<MetricsPanel data={makeData({ dir_label_a: '상행', dir_label_b: '하행' })} />);
 
-    expect(screen.getByText('상행')).toBeTruthy();
-    expect(screen.getByText('하행')).toBeTruthy();
+    // 5분 후 예측 섹션에도 방향 레이블이 표시되므로 getAllByText 사용
+    expect(screen.getAllByText('상행').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('하행').length).toBeGreaterThan(0);
   });
 
   it('dir_label_a=하행이면 "하행" 레이블이 먼저 표시되어야 한다 (카메라 기준 왼쪽)', () => {
@@ -91,13 +92,13 @@ describe('MetricsPanel — 레벨·지수 통합 뱃지', () => {
 
 describe('MetricsPanel — 학습 중 상태', () => {
 
-  it('is_learning=true 이면 "학습 중" 단일 뱃지가 표시되어야 한다', () => {
+  it('is_learning=true 이면 레벨 뱃지 영역에 "학습 중" 이 표시되어야 한다', () => {
     render(<MetricsPanel data={makeData({ is_learning: true })} />);
 
-    expect(screen.getByText('학습 중')).toBeTruthy();
-    // 방향 레이블은 표시되면 안 됨
-    expect(screen.queryByText('상행')).toBeNull();
-    expect(screen.queryByText('하행')).toBeNull();
+    // 레벨 뱃지 + 예측 섹션 양쪽에서 "학습 중" 이 나타나므로 getAllByText 사용
+    expect(screen.getAllByText('학습 중').length).toBeGreaterThan(0);
+    // 예측 섹션에는 여전히 방향 레이블(상행/하행)이 표시되므로 존재 여부만 확인
+    expect(screen.getAllByText('상행').length).toBeGreaterThan(0);
   });
 
   it('relearning=true 이면 "재보정 중" 단일 뱃지가 표시되어야 한다', () => {
@@ -132,11 +133,21 @@ describe('MetricsPanel — 방향 기준 툴팁', () => {
 // E. 정체 예측 플레이스홀더
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('MetricsPanel — 정체 예측 플레이스홀더', () => {
+describe('MetricsPanel — 정체 예측 섹션', () => {
 
-  it('"정체 예측 준비 중" 문구가 표시되어야 한다', () => {
+  it('"5분 후 예측" 섹션 레이블이 표시되어야 한다', () => {
+    // PredictionBadge 구현 후 "정체 예측 준비 중" 플레이스홀더는 제거됨
+    // 현재는 "5분 후 예측" 섹션 자체가 항상 표시된다
     render(<MetricsPanel data={makeData()} />);
 
-    expect(screen.getByText('정체 예측 준비 중')).toBeTruthy();
+    expect(screen.getByText('5분 후 예측')).toBeTruthy();
+  });
+
+  it('예측 데이터가 없으면 PredictionBadge에 "학습 중" 이 표시된다', () => {
+    // prediction_a / prediction_b 를 전달하지 않으면 null → "학습 중" 표시
+    render(<MetricsPanel data={makeData()} />);
+
+    // 두 방향 모두 "학습 중" 이 나타나야 한다
+    expect(screen.getAllByText('학습 중').length).toBeGreaterThanOrEqual(2);
   });
 });

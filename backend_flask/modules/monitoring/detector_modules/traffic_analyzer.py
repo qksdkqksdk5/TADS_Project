@@ -40,14 +40,13 @@ class TrafficAnalyzer:
     JAM = "JAM"                           # 정체 (LOS E~F)
 
     def __init__(self, cfg, frame_w: int, frame_h: int, fps: float,
-                 flow_map=None, congestion_judge=None, gru_module=None):
+                 flow_map=None, congestion_judge=None):
         self.cfg = cfg                                # 설정 객체 저장
         self.frame_w = frame_w                        # 프레임 너비 (픽셀)
         self.frame_h = frame_h                        # 프레임 높이 (픽셀)
         self.fps = fps                                # 영상 FPS
-        self.flow_map = flow_map                      # FlowMap 참조 (Phase 2 확장용)
-        self._gru_module = gru_module                 # GRUModule 참조 (Phase 2, None이면 Phase 1 모드)
-        self._last_feature: dict | None = None        # 마지막 compute된 feature 벡터 (detector용)
+        self.flow_map = flow_map                      # FlowMap 참조
+        self._last_feature: dict | None = None        # 마지막 compute된 feature 벡터 (진단용)
 
         self.grid_size = cfg.grid_size                # 그리드 행/열 수 (기본 15)
         self.cell_w = frame_w / self.grid_size        # 셀 너비 (px)
@@ -70,12 +69,6 @@ class TrafficAnalyzer:
         self._last_norm_speed_ratio = 0.0             # 마지막 속도 비율 (0~1)
         self._last_affected_count = 0                 # 마지막 저속(정지) 차량 수
         self._last_rule_jam: float = 0.0              # 마지막 rule 기반 jam_score (로그용)
-        self._last_gru_score: float | None = None     # 마지막 GRU 예측값 (없으면 None)
-        self._last_future_pred: list | None = None    # 마지막 predict_future() 결과 (자기회귀)
-        self._last_direct_pred: list | None = None    # 마지막 predict_direct() 결과 (1·3·5분 직접 예측)
-        self._future_pred_interval: int = max(        # predict_future 호출 주기 (프레임)
-            cfg.gru_seq_len, 30                       # 최소 30프레임 — 자기회귀 연산 비용
-        )
 
     # ── DetectorState 설정 (detector.py에서 호출) ──────────────────
     def set_state(self, state):
@@ -176,43 +169,14 @@ class TrafficAnalyzer:
                 affected += 1                         # 저속 차량 수 증가
         self._last_affected_count = affected          # 결과 저장
 
-        # ── 3) rule_jam 계산 (x_t["rule_jam_score"] 역주입 포함) ────
+        # ── 3) rule_jam 계산 ─────────────────────────────────────────
         rule_jam = self.congestion_judge.compute_jam(x_t)  # rule 기반 jam_score
+        self._last_rule_jam = rule_jam                     # 로그용 저장
 
-        # ── 4) GRU 블렌딩 (Phase 2) ──────────────────────────────────
-        # GRUModule이 없거나 predict()가 None이면 rule_jam 그대로 사용
-        gru_score = None                              # GRU 예측값 초기값
-        if self._gru_module is not None:              # Phase 2 모드이면
-            self._gru_module.push(x_t)                # feature 벡터 버퍼에 추가
-            gru_score = self._gru_module.predict()    # gru_score (버퍼 부족 시 None)
+        # ── 4) 레벨 판정 (히스테리시스 포함) ────────────────────────
+        self.congestion_judge.apply_level(rule_jam, frame_num)
 
-        if gru_score is not None:                     # GRU 예측 가능하면 (pretrain 완료)
-            blend = self.cfg.gru_blend_ratio          # 블렌딩 비율 (기본 0.40)
-            final_jam = (1.0 - blend) * rule_jam + blend * gru_score  # 가중 평균
-        else:                                         # GRU 미훈련·버퍼 부족 → Phase 1 모드
-            final_jam = rule_jam                      # rule_jam 그대로 사용
-
-        self._last_rule_jam = rule_jam                # rule_jam 저장 (로그용)
-        self._last_gru_score = gru_score              # gru_score 저장 (로그용, None 허용)
-        # [CJ] 디버그 출력 제거 — raw jam score 튜닝용 로그로 운영 중 불필요
-
-        # ── 5) 레벨 판정 (히스테리시스 포함, final_jam 기준) ─────────
-        level, jam = self.congestion_judge.apply_level(final_jam, frame_num)
-
-        # ── 6) 미래 예측 (매 _future_pred_interval 프레임) ───────────────
-        if (self._gru_module is not None
-                and frame_num % self._future_pred_interval == 0):
-            # 자기회귀 롤아웃 (단기 — 수초)
-            pred = self._gru_module.predict_future()
-            if pred is not None:
-                self._last_future_pred = pred
-
-            # Direct 예측 (장기 — 1·3·5분 후)
-            direct = self._gru_module.predict_direct()
-            if direct is not None:                    # 학습 완료 후에만 결과 있음
-                self._last_direct_pred = direct
-
-        # ── feature 저장 (detector.py에서 GRU online_step용 레벨 확인에 사용) ─
+        # ── feature 저장 (진단용) ─────────────────────────────────────
         self._last_feature = x_t                      # 마지막 feature 벡터 저장
 
     # ── 공개 메서드: 조회 ─────────────────────────────────────────
@@ -248,33 +212,8 @@ class TrafficAnalyzer:
         return self.congestion_judge.get_jam_score()   # CJ에서 마지막 계산 값
 
     def get_rule_jam_score(self) -> float:
-        """마지막 rule 기반 jam_score(GRU 블렌딩 전)를 반환한다."""
+        """마지막 rule 기반 jam_score를 반환한다."""
         return self._last_rule_jam                     # rule_jam (로그·진단용)
-
-    def get_gru_score(self) -> float | None:
-        """마지막 GRU 예측값을 반환한다. GRU 미사용 또는 warmup 중이면 None."""
-        return self._last_gru_score                    # gru_score (로그·진단용)
-
-    def get_future_prediction(self) -> list | None:
-        """마지막 predict_future() 결과를 반환한다.
-
-        Returns:
-            [{"step": int, "p_smooth": float, "p_slow": float,
-              "p_JAM": float, "gru_score": float}, ...]
-            GRU 미훈련·버퍼 부족이면 None.
-        """
-        return self._last_future_pred                  # 자기회귀 예측 결과 (웹 API용)
-
-    def get_direct_prediction(self) -> list | None:
-        """1·3·5분 후 직접 예측 결과를 반환한다.
-
-        Returns:
-            [{"horizon_min": 1, "predicted_level": "SLOW",
-              "p_smooth": 0.1, "p_slow": 0.6, "p_JAM": 0.3,
-              "confidence": 0.6}, ...]
-            학습 미완료이면 None.
-        """
-        return self._last_direct_pred                  # direct 예측 결과 (웹 API·화면 표시용)
 
     def get_volume(self) -> float:
         """교통량(대/시)을 추정한다.

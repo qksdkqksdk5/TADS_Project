@@ -179,6 +179,8 @@ export default function MonitoringModule({ host, isMobile }) {
   const [selectedItsCctv, setSelectedItsCctv] = useState(null);
   const [itsCctvList,     setItsCctvList]     = useState([]);
   const [popupOpen,       setPopupOpen]       = useState(false);
+  // 현재 선택된 도로 키 — SectionList에서 탭 전환 시 갱신되고 MonitoringMap에 전달된다
+  const [road,            setRoad]            = useState('gyeongbu');
 
   // ── 사운드 훅 ─────────────────────────────────────────────
   const {
@@ -227,6 +229,9 @@ export default function MonitoringModule({ host, isMobile }) {
   const handleItsCctvListChange = useCallback((list) => {
     setItsCctvList(list);
   }, []);
+
+  // SectionList 탭 전환 시 호출 — road 상태를 갱신해 MonitoringMap이 새 도로를 그리도록 한다
+  const handleRoadChange = useCallback((r) => setRoad(r), []);
 
   // ── 카메라 선택 → 팝업 열기 ──────────────────────────────
   const handleSelect = useCallback((camera_id) => {
@@ -357,6 +362,7 @@ export default function MonitoringModule({ host, isMobile }) {
             onViewItsCctv={handleViewItsCctv}
             onCctvListChange={handleItsCctvListChange}
             onRemoveCameras={removeCameras}
+            onRoadChange={handleRoadChange}
           />
         </div>
 
@@ -371,6 +377,7 @@ export default function MonitoringModule({ host, isMobile }) {
             itsCctvList={itsCctvList}
             selectedItsId={selectedItsCctv?.camera_id}
             serverRoadGeo={serverRoadGeo}
+            road={road}
           />
         </div>
 

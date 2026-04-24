@@ -184,7 +184,6 @@ def get_cctv_list(road_key: str) -> list:
     result.sort(key=lambda x: x['lat'], reverse=True)
 
     _cctv_cache[road_key] = {'data': result, 'expires': now + CCTV_TTL}
-    print(f"📡 ITS CCTV 캐시 갱신 ({road_key}): {len(result)}개")
     return result
 
 

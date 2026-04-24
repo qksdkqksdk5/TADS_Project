@@ -295,17 +295,17 @@ class FlowMap:
                 self.smoothed_mask[r, c] = False
 
         # 디버그: 100회마다 학습 현황 출력
-        self._learn_call_count += 1
-        if self._learn_call_count % 100 == 0:
-            active_cells = int(np.sum(self.count > 0))
-            total_samples = int(self.count.sum())
-            angle = np.degrees(np.arctan2(ndy, ndx))
-            contra_total = int(self._bbox_contra_count.sum())
-            print(f"   📈 learn_step #{self._learn_call_count}: "
-                  f"cell[{_log_r},{_log_c}] cnt={self.count[_log_r,_log_c]}, "
-                  f"angle={angle:+.0f}°, "
-                  f"active_cells={active_cells}/{self.grid_size**2}, "
-                  f"total={total_samples}, contra_hits={contra_total}")
+        # self._learn_call_count += 1
+        # if self._learn_call_count % 100 == 0:
+        #     active_cells = int(np.sum(self.count > 0))
+        #     total_samples = int(self.count.sum())
+        #     angle = np.degrees(np.arctan2(ndy, ndx))
+        #     contra_total = int(self._bbox_contra_count.sum())
+            # print(f"   📈 learn_step #{self._learn_call_count}: "
+            #       f"cell[{_log_r},{_log_c}] cnt={self.count[_log_r,_log_c]}, "
+            #       f"angle={angle:+.0f}°, "
+            #       f"active_cells={active_cells}/{self.grid_size**2}, "
+            #       f"total={total_samples}, contra_hits={contra_total}")
 
     # ==================== 이중 선형 보간 ====================
     def _interpolate_arr(self, x, y, flow_arr):
@@ -917,8 +917,6 @@ class FlowMap:
                     self.count_b[r, c] = self.count[r, c]
                     b_cells += 1
 
-        print(f"✅ 양방향 채널 구축: A={a_cells}셀, B={b_cells}셀 "
-              f"(글로벌 {a_cells+b_cells}/{self.grid_size**2}셀 분리)")
 
     def save(self, path: Path):
         """학습된 flow_map, count, speed_ref, smoothed_mask를 .npy 파일로 저장.

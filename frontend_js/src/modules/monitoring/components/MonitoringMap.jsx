@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadKakaoMapSDK } from '../../traffic/loadKakaoMap';
 import { fetchRoadGeo } from '../api';
+import { loadRoadGeoCache, saveRoadGeoCache } from '../utils/roadGeoCache';
 
 // ── 상수 ──────────────────────────────────────────────────────
 const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
@@ -47,9 +48,10 @@ async function fetchOverpassDirect(roadKey) {
 
   for (const endpoint of OVERPASS_BROWSER_ENDPOINTS) {
     try {
-      // AbortController로 엔드포인트별 35초 타임아웃 적용
+      // AbortController로 엔드포인트별 10초 타임아웃 적용 (35초에서 단축)
+      // 10초 안에 응답 없으면 다음 엔드포인트로 넘어가 전체 대기 시간을 줄인다
       const ctrl = new AbortController();
-      const tid  = setTimeout(() => ctrl.abort(), 35000);
+      const tid  = setTimeout(() => ctrl.abort(), 10000);
 
       const resp = await fetch(endpoint, {
         method: 'POST',
@@ -180,6 +182,24 @@ function makePopupContent(cam) {
   </div>`;
 }
 
+// ── 병렬 fetch 헬퍼 ──────────────────────────────────────────
+/**
+ * 여러 Promise를 동시에 실행하고 null이 아닌 첫 번째 결과를 반환한다.
+ * 모두 null이거나 오류면 null을 반환한다.
+ * 기존의 순차 실행(백엔드 실패 → Overpass 시작) 대신 병렬로 실행해
+ * 더 빠른 쪽의 결과를 즉시 사용한다.
+ */
+function raceFirstValid(...promises) {
+  return new Promise(resolve => {
+    let remaining = promises.length;                          // 아직 완료되지 않은 Promise 수
+    promises.forEach(p =>
+      Promise.resolve(p)
+        .then(v  => { if (v != null) resolve(v); else if (--remaining === 0) resolve(null); })
+        .catch(() => { if (--remaining === 0) resolve(null); }),
+    );
+  });
+}
+
 // ── 도로 선형 색상 계산 ───────────────────────────────────────
 /**
  * GeoJSON의 각 LineString way를 카메라 위치로 분할하여 색상 폴리라인으로 반환.
@@ -236,9 +256,10 @@ function buildColoredSegments(features, cameras) {
 }
 
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
-// serverRoadGeo: 부모(index.jsx)가 Socket.IO road_geo_ready 이벤트로 수신한 GeoJSON
+// serverRoadGeo: 부모(index.jsx)가 Socket.IO road_geo_ready 이벤트로 수신한 { geo, road }
 // null이면 아직 서버로부터 데이터가 오지 않은 것 → 폴링 retry가 대신 처리
-export default function MonitoringMap({ host, cameras, selectedId, onSelect, onViewItsCctv, itsCctvList = [], selectedItsId, serverRoadGeo }) {
+// road: SectionList에서 선택된 도로 키 ('gyeongbu' | 'jungang' | ...)
+export default function MonitoringMap({ host, cameras, selectedId, onSelect, onViewItsCctv, itsCctvList = [], selectedItsId, serverRoadGeo, road = 'gyeongbu' }) {
   const mapRef        = useRef(null);
   const overlaysRef   = useRef({});     // 모니터링 카메라 마커
   const itsOverlayRef = useRef({});     // ITS CCTV 마커
@@ -257,72 +278,84 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
 
   // ── 도로 선형 GeoJSON 로드 ────────────────────────────────
   // [주 경로] Socket.IO road_geo_ready 이벤트 수신 시 즉시 반영
-  // serverRoadGeo는 useMonitoringSocket 훅이 관리하며 백엔드 push가 오면 갱신됨
+  // serverRoadGeo = { geo, road } — 현재 선택된 road와 일치할 때만 반영한다
+  // (경부선 보는 중에 다른 도로의 push가 와도 무시)
   useEffect(() => {
-    if (serverRoadGeo?.features?.length > 0) {
-      setRoadGeo(serverRoadGeo);   // 서버 push 도착 → 즉시 도로선 반영
+    if (
+      serverRoadGeo?.road === road &&             // 현재 선택된 도로의 데이터인지 확인
+      serverRoadGeo?.geo?.features?.length > 0    // 유효한 GeoJSON인지 확인
+    ) {
+      setRoadGeo(serverRoadGeo.geo);              // 서버 push 도착 → 즉시 도로선 반영
+      saveRoadGeoCache(road, serverRoadGeo.geo);  // 다음 방문을 위해 캐시에도 저장
     }
-  }, [serverRoadGeo]);
+  }, [serverRoadGeo, road]);
 
-  // [보조 경로] 초기 로드 + 브라우저 직접 Overpass 폴백
+  // [보조 경로] 도로 변경 or 초기 로드 시 GeoJSON 가져오기
   //
-  // 순서:
-  //   1. 백엔드 fetchRoadGeo 호출 (파일/메모리 캐시 히트 시 즉시 반환)
-  //   2. 백엔드가 빈 결과 반환 → 브라우저에서 직접 Overpass 쿼리 (서버 IP 차단 우회)
-  //   3. 브라우저도 실패 → 최대 3회 전체 재시도 (60초 간격)
+  // 개선된 흐름:
+  //   0. 도로 변경 즉시 → 기존 오버레이 초기화 + localStorage 캐시 즉시 표시
+  //   1. 백엔드 fetchRoadGeo + 브라우저 Overpass 를 동시(병렬)로 실행
+  //      → 먼저 유효한 응답이 오는 쪽을 사용 (raceFirstValid)
+  //   2. 성공 시 localStorage에도 저장 (다음 방문 때 즉시 표시용)
+  //   3. 둘 다 실패 → 최대 3회 재시도 (60초 간격)
   //
-  // roadGeo가 이미 있으면 (socket push 또는 이전 시도 성공) 즉시 중단한다.
+  // road가 바뀌면 effect가 재실행되므로 roadGeo 의존성 제외 (루프 방지 목적 유지)
   useEffect(() => {
-    if (!host) return;
+    if (!host || !road) return;
 
-    let cancelled = false;     // 언마운트 후 setState 방지 플래그
-    let retries   = 0;         // 전체 사이클 재시도 횟수
-    const MAX_RETRIES = 3;     // 최대 3회 (브라우저 직접 쿼리가 주 폴백이므로 충분)
-    const RETRY_MS    = 60000; // 60초 — 실패 캐시 TTL(60초)이 만료된 후 재시도
+    let cancelled = false;   // 언마운트 or 도로 재변경 시 진행 중 async 취소용
+    let retries   = 0;       // 전체 사이클 재시도 횟수
+    const MAX_RETRIES = 3;   // 최대 3회
+    const RETRY_MS    = 60000; // 60초 — 백엔드 실패 캐시 TTL과 맞춤
     let timer = null;
 
-    const load = async () => {
-      if (cancelled || roadGeo) return;   // 이미 데이터 있으면 중단
+    // ── 0단계: 도로가 바뀌면 기존 오버레이 즉시 초기화 ──────────────────
+    setRoadGeo(null);
 
-      // ── 1단계: 백엔드 캐시 확인 ────────────────────────────────────────
-      // 파일 또는 메모리 캐시에 데이터가 있으면 즉시 반환
-      try {
-        const res = await fetchRoadGeo(host, 'gyeongbu');
-        if (!cancelled && res.data?.features?.length > 0) {
-          setRoadGeo(res.data);
-          return;                         // 백엔드 캐시 히트 → 완료
-        }
-      } catch { /* 백엔드 오류는 무시하고 2단계로 진행 */ }
+    // localStorage 캐시가 있으면 즉시 표시 (stale-while-revalidate 패턴)
+    // 동시에 백그라운드에서 최신 데이터를 가져와 교체한다
+    const cached = loadRoadGeoCache(road);
+    if (cached) {
+      setRoadGeo(cached); // 캐시 즉시 표시 → 사용자는 바로 오버레이를 본다
+    }
+
+    const load = async () => {
+      if (cancelled) return;
+
+      // ── 1단계: 백엔드 + Overpass 병렬 실행 ────────────────────────────
+      // 기존: 백엔드 응답 대기 → 실패 시 Overpass 시작 (순차, 느림)
+      // 개선: 두 요청을 동시에 시작, 먼저 유효한 데이터가 오는 쪽 사용 (빠름)
+      const backendPromise = fetchRoadGeo(host, road)
+        .then(res => res.data?.features?.length > 0 ? res.data : null)
+        .catch(() => null); // 백엔드 오류는 무시
+
+      const overpassPromise = fetchOverpassDirect(road); // 브라우저 직접 쿼리
+
+      const geo = await raceFirstValid(backendPromise, overpassPromise);
 
       if (cancelled) return;
 
-      // ── 2단계: 브라우저 직접 Overpass 쿼리 ────────────────────────────
-      // 백엔드 서버 IP가 Overpass에서 차단/속도제한돼도
-      // 브라우저(사용자 IP)에서 직접 쿼리하면 허용되는 경우가 많다.
-      // Overpass API는 Access-Control-Allow-Origin: * 로 CORS를 지원한다.
-      const browserGeo = await fetchOverpassDirect('gyeongbu');
-      if (!cancelled && browserGeo) {
-        setRoadGeo(browserGeo);
-        return;                           // 브라우저 Overpass 성공 → 완료
+      if (geo) {
+        setRoadGeo(geo);             // 지도에 도로선 반영
+        saveRoadGeoCache(road, geo); // 다음 방문을 위해 캐시 저장
+        return;                      // 완료
       }
 
-      if (cancelled) return;
-
-      // ── 3단계: 전체 실패 → 재시도 예약 ────────────────────────────────
+      // ── 2단계: 둘 다 실패 → 재시도 예약 ───────────────────────────────
+      // socket push(road_geo_ready)가 오면 위 useEffect가 먼저 처리하므로
+      // 이 타이머는 socket push가 없을 경우의 마지막 보험이다
       if (retries < MAX_RETRIES) {
         retries++;
-        // socket push(road_geo_ready)가 오면 위 useEffect가 먼저 처리하므로
-        // 이 타이머는 socket push가 오지 않을 경우의 마지막 보험이다
         timer = setTimeout(load, RETRY_MS);
       }
     };
 
     load();
     return () => {
-      cancelled = true;                   // 언마운트 시 진행 중인 async 작업 취소
+      cancelled = true;              // 언마운트 or road 변경 시 진행 중 작업 취소
       if (timer) clearTimeout(timer);
     };
-  }, [host]); // roadGeo는 의존성 제외 — 변경마다 재실행하면 루프 위험
+  }, [host, road]); // road 추가 — 도로 탭이 바뀌면 즉시 재실행
 
   // 지도 초기화 + CSS 주입 (마운트 1회)
   useEffect(() => {

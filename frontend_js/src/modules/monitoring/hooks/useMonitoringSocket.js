@@ -120,8 +120,10 @@ export function useMonitoringSocket(host, callbacks = {}) {
     // 도로 선형 GeoJSON 수신 (Overpass 백그라운드 fetch 성공 시 서버가 push)
     // 폴링 없이 즉시 MonitoringMap에 도로선을 그리기 위한 이벤트
     sock.on('road_geo_ready', (data) => {
-      if (data?.geo?.features?.length > 0) {  // 유효한 GeoJSON인지 확인
-        setServerRoadGeo(data.geo);            // 상태 갱신 → MonitoringMap이 감지
+      if (data?.geo?.features?.length > 0) {
+        // { geo, road } 형태로 저장 — MonitoringMap이 현재 선택된 도로와 일치할 때만 반영
+        // road 필드가 없는 구버전 응답은 'gyeongbu'로 폴백
+        setServerRoadGeo({ geo: data.geo, road: data.road || 'gyeongbu' });
       }
     });
 

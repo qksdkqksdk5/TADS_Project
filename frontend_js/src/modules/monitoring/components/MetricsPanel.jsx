@@ -7,6 +7,11 @@ const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', 
 const LEVEL_LABEL = { SMOOTH: '원활',    SLOW: '서행',    CONGESTED: '정체',    JAM: '정체'    };
 const LEVEL_BG    = { SMOOTH: '#22c55e18', SLOW: '#eab30818', CONGESTED: '#ef444418', JAM: '#ef444418' };
 
+// 예측 레벨별 색상·배경 — 실시간 지표와 동일 팔레트 사용
+const PRED_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', JAM: '#ef4444' };
+const PRED_LABEL = { SMOOTH: '원활',    SLOW: '서행',    JAM: '정체'    };
+const PRED_BG    = { SMOOTH: '#22c55e14', SLOW: '#eab30814', JAM: '#ef444414' };
+
 export default function MetricsPanel({ data }) {
   const prevLevelRef  = useRef(null);
   const [fade,        setFade]        = useState(false);
@@ -41,6 +46,8 @@ export default function MetricsPanel({ data }) {
     dir_a_is_left,
     is_learning, relearning,
     learning_progress, learning_total,
+    // HistoricalPredictor가 계산한 5분 후 예측 배열 (없으면 null)
+    prediction_a, prediction_b,
   } = data;
 
   // 화면 왼쪽 뱃지와 오른쪽 뱃지를 dir_a_is_left에 따라 결정한다.
@@ -178,9 +185,21 @@ export default function MetricsPanel({ data }) {
         </div>
       )}
 
-      {/* 정체 예측 영역 — 예측 모듈 개발 완료 후 이 공간에 컴포넌트를 삽입한다 */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontSize: '11px', color: '#1e293b' }}>정체 예측 준비 중</span>
+      {/* 5분 후 예측 영역 — HistoricalPredictor 결과를 방향별로 표시한다 */}
+      <div style={{ ...sectionStyle, flex: 1, borderBottom: 'none' }}>
+        <div style={labelStyle}>5분 후 예측</div>
+        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+          {/* 왼쪽 방향(CCTV 기준) 예측 뱃지 */}
+          <PredictionBadge
+            direction={leftBadge.label}
+            prediction={aIsLeft ? prediction_a : prediction_b}
+          />
+          {/* 오른쪽 방향(CCTV 기준) 예측 뱃지 */}
+          <PredictionBadge
+            direction={rightBadge.label}
+            prediction={aIsLeft ? prediction_b : prediction_a}
+          />
+        </div>
       </div>
     </div>
   );
@@ -212,6 +231,53 @@ function DirectionBadge({ direction, level, jam, fade }) {
         <div style={{ fontSize: '11px', color: `${color}cc`, marginTop: '3px' }}>
           {jam.toFixed(2)}
         </div>
+      )}
+    </div>
+  );
+}
+
+// 5분 후 예측 뱃지
+// direction: 표시할 방향 레이블 (상행/하행 등)
+// prediction: HistoricalPredictor.predict() 결과 배열 또는 null
+//   배열 첫 번째 요소: { predicted_level, confidence, jam_score, interpolated }
+//   null이면 학습 데이터 부족 → "학습 중" 표시
+function PredictionBadge({ direction, prediction }) {
+  // 예측 결과 첫 번째 항목만 사용 (horizon=5분)
+  const pred  = prediction?.[0] ?? null;
+  const color = pred ? (PRED_COLOR[pred.predicted_level] || '#6b7280') : '#6b7280';
+  const bg    = pred ? (PRED_BG[pred.predicted_level]    || '#37415114') : '#37415114';
+  const label = pred ? (PRED_LABEL[pred.predicted_level] || '-') : '-';
+  // 신뢰도를 0~100% 정수로 변환한다
+  const conf  = pred ? Math.round((pred.confidence ?? 0) * 100) : null;
+
+  return (
+    <div style={{
+      flex: 1, padding: '8px', borderRadius: '8px',
+      background: bg, border: `1px solid ${color}44`,
+      textAlign: 'center',
+    }}>
+      {/* 방향 레이블 */}
+      <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '4px' }}>{direction}</div>
+      {pred ? (
+        <>
+          {/* 예측 레벨 텍스트 */}
+          <div style={{ fontSize: '14px', fontWeight: 700, color, lineHeight: 1 }}>{label}</div>
+          {/* 신뢰도 바 */}
+          <div style={{ marginTop: '5px', background: '#1e293b', borderRadius: '4px', height: '4px', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', width: `${conf}%`,
+              background: color, borderRadius: '4px',
+              transition: 'width 0.6s ease',
+            }} />
+          </div>
+          {/* 신뢰도 수치 */}
+          <div style={{ fontSize: '10px', color: `${color}cc`, marginTop: '3px' }}>
+            {conf}%{pred.interpolated ? ' ≈' : ''}
+          </div>
+        </>
+      ) : (
+        /* 데이터 부족 시 학습 중 안내 */
+        <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>학습 중</div>
       )}
     </div>
   );
