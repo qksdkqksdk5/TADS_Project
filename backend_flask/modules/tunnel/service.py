@@ -373,7 +373,7 @@ class TunnelLiveService:
             health = self.cctv_health.get(url, {})
             fail_count = health.get("fail_count", 0)
 
-            if fail_count < 10:
+            if fail_count < 10:  #ITS 스트림이 흔들리는 환경이면 나중에 10 → 15 정도로 완화
                 healthy.append(cctv)
 
         return healthy
@@ -503,8 +503,11 @@ class TunnelLiveService:
         print(f"🎥 CCTV 연결 시도: {name}")
         cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 
+    # --------------------------------------------------
+    # 1) open 확인: 기존보다 더 길게 대기
+    # --------------------------------------------------
         open_ok = False
-        for _ in range(10):
+        for _ in range(20):   # 기존 10 -> 20
             if cap.isOpened():
                 open_ok = True
                 break
@@ -516,8 +519,11 @@ class TunnelLiveService:
             cap.release()
             return None
 
+    # --------------------------------------------------
+    # 2) 첫 프레임 확인: 기존보다 더 길게 대기
+    # --------------------------------------------------
         frame_ok = False
-        for _ in range(20):
+        for _ in range(40):   # 기존 20 -> 40
             ok, frame = cap.read()
             if ok and frame is not None:
                 frame_ok = True
@@ -767,3 +773,52 @@ class TunnelLiveService:
                 self.stream_lock.release()
 
             print("🛑 CCTV 스트리밍 종료")
+        
+            # =========================================================
+    # 8) 스트림 명시 종료
+    # =========================================================
+    def stop_stream(self):
+        self.stream_active = False
+        self.stream_token += 1
+
+        # 현재 스트림만 끊고, 상태는 READY로 갱신
+        self._update_status({
+            "state": "READY",
+            "events": ["스트림 종료"],
+            "lane_reestimate_status": "idle",
+            "lane_reestimate_frame_count": 0,
+            "lane_reestimate_window": 50,
+        })
+
+        print("🛑 [API] 사용자의 요청으로 터널 스트림 종료")
+        return {
+            "ok": True,
+            "message": "스트림 종료 완료"
+        }
+
+    # =========================================================
+    # 9) 랜덤 CCTV로 새 시작 준비
+    # - 기존 스트림 종료
+    # - current_cctv 새로 선택
+    # - 이후 프론트가 /video-feed 다시 호출하면 새 시작
+    # =========================================================
+    def restart_with_random_cctv(self):
+        # 기존 스트림 완전 종료
+        self.stream_active = False
+        self.stream_token += 1
+
+        # 이전 선택을 끊고 새 랜덤 선택
+        selected = self.select_random_cctv()
+
+        if not selected:
+            return {
+                "ok": False,
+                "message": "새로 선택할 CCTV가 없습니다."
+            }
+
+        print(f"🔄 [API] 새 랜덤 CCTV 재시작 준비 완료: {selected['name']}")
+        return {
+            "ok": True,
+            "message": "새 랜덤 CCTV 재시작 준비 완료",
+            "cctv": selected
+        }

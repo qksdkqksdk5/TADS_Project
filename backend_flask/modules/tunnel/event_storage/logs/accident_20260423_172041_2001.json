@@ -1,0 +1,50 @@
+{
+  "event_id": "accident_20260423_172041_2001",
+  "timestamp": "2026-04-23 17:20:41",
+  "frame_id": 2001,
+  "type": "accident",
+  "state": "pending",
+  "cctv_name": "[수도권제1순환선] 사패터널(일산방향)",
+  "cctv_url": "http://cctvsec.ktict.co.kr/5009/BNNvpG0Y2Yt4c+e/jjy1bGs5AuzI/P5VeGSCmSjJ01vSVAk75pkGVSWwsgrsXVsnjQMNGhZ8jTGFIQxWwXHMpT5rioJOCXdW3+zhm1su9pk=",
+  "avg_speed": 3.128,
+  "vehicle_count": 5,
+  "lane_count": 1,
+  "snapshot_path": "D:\\파이널프로젝트\\TADS_Project\\backend_flask\\modules\\tunnel\\event_storage\\snapshots\\accident_20260423_172041_2001.jpg",
+  "events": [
+    "사고 감지"
+  ],
+  "ventilation": {
+    "frame_id": 2001,
+    "lane_count": 1,
+    "traffic_state": "ACCIDENT",
+    "vehicle_count_roi": 5,
+    "weighted_vehicle_count": 6.211,
+    "roi_capacity": 10.0,
+    "traffic_density": 0.621,
+    "avg_speed_roi": 4.26,
+    "avg_dwell_time_roi": 1.8,
+    "avg_dwell_time_used": 1.8,
+    "tunnel_scale_factor": 1.0,
+    "risk_score_base": 0.45,
+    "risk_score_final": 0.6,
+    "risk_level": "CAUTION",
+    "alarm": true,
+    "message": "차량 밀집 증가, 공기질 저하 가능성 주의",
+    "hold_seconds": 0.7,
+    "detail": {
+      "n_norm": 0.6211,
+      "d_norm": 0.6211,
+      "t_norm": 0.03,
+      "v_norm": 0.5325,
+      "state_bonus": 0.15,
+      "vehicle_weights": {
+        "892": 1.5,
+        "903": 0.8,
+        "924": 1.5,
+        "919": 1.5,
+        "922": 0.911
+      },
+      "bbox_ref_used": 3500.0
+    }
+  }
+}

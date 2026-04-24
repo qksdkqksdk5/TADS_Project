@@ -251,3 +251,46 @@ def lane_save():
 
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
+
+# =========================================================
+# 스트림 명시 종료
+# =========================================================
+@tunnel_bp.route("/stream/stop", methods=["POST"])
+def stream_stop():
+    try:
+        result = service.stop_stream()
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 stop_stream() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"스트림 종료 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code
+
+
+# =========================================================
+# 새 랜덤 CCTV 선택 + 다음 video-feed용 준비
+# =========================================================
+@tunnel_bp.route("/stream/restart-random", methods=["POST"])
+def stream_restart_random():
+    try:
+        result = service.restart_with_random_cctv()
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 restart_with_random_cctv() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"스트림 재시작 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code
