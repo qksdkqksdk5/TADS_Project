@@ -227,3 +227,7 @@ mysql_data/
 **/chroma_db/
 *.sqlite3
 *.bin
+
+# Smart Tunnel local runtime data
+**/event_storage/
+**/runtime_data/

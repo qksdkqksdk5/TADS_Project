@@ -9,7 +9,13 @@
 # - 이름으로 CCTV 선택
 # - 상태 조회
 # - 실시간 영상 스트리밍
-# - [추가] 차선 재추정 요청
+# - 차선 재추정 요청
+# - 차선 메모리 저장
+#
+# 참고:
+# - 환기 대응(ventilation) 정보는 routes.py에서 계산하지 않음
+# - service.py 내부에서 status에 ventilation 값을 포함하면
+#   /status 응답에서 그대로 프론트로 전달됨
 # ==========================================
 
 from flask import Blueprint, jsonify, Response, request
@@ -18,7 +24,7 @@ from .service import TunnelLiveService
 # ---------------------------------------------------------
 # Blueprint 생성
 # url_prefix="/api/tunnel" 이므로
-# 실제 주소는 예:
+# 실제 주소 예:
 #   /api/tunnel/health
 #   /api/tunnel/status
 #   /api/tunnel/lane/reestimate
@@ -90,7 +96,7 @@ def select_random():
     """
     캐시된 CCTV 중 하나를 랜덤 선택
     """
-    cctv = service.select_random_cctv()
+    cctv = service.select_random_cctv(user_random=True)
 
     if not cctv:
         return jsonify({
@@ -103,18 +109,6 @@ def select_random():
         "message": "랜덤 CCTV 선택 완료",
         "cctv": cctv
     })
-
-
-@tunnel_bp.route("/status", methods=["GET"])
-def status():
-    """
-    현재 터널 분석 상태 조회
-    주의:
-    - service.get_status() 안에서
-      lane_reestimate_status / lane_reestimate_frame_count 같은 값도 같이 넘겨주면
-      프론트에서 '재추정 중 (n/50)' 표시 가능
-    """
-    return jsonify(service.get_status())
 
 
 @tunnel_bp.route("/select-cctv", methods=["GET"])
@@ -147,6 +141,40 @@ def select_cctv():
     })
 
 
+@tunnel_bp.route("/status", methods=["GET"])
+def status():
+    """
+    현재 터널 분석 상태 조회
+
+    주의:
+    - service.get_status() 안에서 상태 dict를 만들어 반환한다.
+    - ventilation 정보가 포함되어 있으면 그대로 프론트로 전달된다.
+    - 예:
+        {
+            "ok": True,
+            "state": "CONGESTION",
+            "vehicle_count": 8,
+            "avg_speed": 3.2,
+            "lane_count": 2,
+            "accident": False,
+            "ventilation": {
+                "risk_score_final": 0.58,
+                "risk_level": "WARNING",
+                "alarm": True,
+                "message": "체류시간 증가 및 혼잡 발생, 환기 상태 점검 권고"
+            }
+        }
+    """
+    try:
+        result = service.get_status()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"상태 조회 중 오류: {str(e)}"
+        }), 500
+
+
 @tunnel_bp.route("/video-feed", methods=["GET"])
 def video_feed():
     """
@@ -158,10 +186,8 @@ def video_feed():
     )
 
 
-
-
 # =========================================================
-# [추가] 차선 재추정 요청
+# 차선 재추정 요청
 # =========================================================
 @tunnel_bp.route("/lane/reestimate", methods=["POST"])
 def lane_reestimate():
@@ -183,11 +209,9 @@ def lane_reestimate():
         "window": 50
     }
     """
-
     try:
         result = service.request_lane_reestimate()
     except AttributeError:
-        # service.py에 아직 메서드가 없을 때
         return jsonify({
             "ok": False,
             "message": "service.py에 request_lane_reestimate() 메서드가 없습니다."
@@ -201,9 +225,127 @@ def lane_reestimate():
     status_code = 200 if result.get("ok", False) else 400
     return jsonify(result), status_code
 
+
+# =========================================================
+# 차선 메모리 저장
+# =========================================================
 @tunnel_bp.route("/lane/save", methods=["POST"])
 def lane_save():
-    result = service.save_current_lane_memory()
+    """
+    현재 차선 메모리를 저장하는 API
+    service.py 안에 아래 메서드가 있어야 함:
+        service.save_current_lane_memory()
+    """
+    try:
+        result = service.save_current_lane_memory()
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 save_current_lane_memory() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"차선 저장 요청 중 오류: {str(e)}"
+        }), 500
+
     status_code = 200 if result.get("ok") else 400
     return jsonify(result), status_code
 
+
+# =========================================================
+# 사고 이벤트 처리
+# =========================================================
+@tunnel_bp.route("/event/resolve", methods=["POST"])
+def event_resolve():
+    data = request.get_json(silent=True) or {}
+    event_id = str(data.get("event_id", "")).strip()
+    action = str(data.get("action", "")).strip()
+
+    if not event_id or not action:
+        return jsonify({
+            "ok": False,
+            "message": "event_id와 action이 필요합니다."
+        }), 400
+
+    try:
+        result = service.resolve_accident_event(event_id, action)
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 resolve_accident_event() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"사고 이벤트 처리 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code
+
+
+# =========================================================
+# 사고 이벤트 통계 조회
+# =========================================================
+@tunnel_bp.route("/event/stats", methods=["GET"])
+def event_stats():
+    date_text = request.args.get("date", "").strip() or None
+
+    try:
+        result = service.get_event_stats(date_text)
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 get_event_stats() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"사고 이벤트 통계 조회 중 오류: {str(e)}"
+        }), 500
+
+    return jsonify(result)
+
+# =========================================================
+# 스트림 명시 종료
+# =========================================================
+@tunnel_bp.route("/stream/stop", methods=["POST"])
+def stream_stop():
+    try:
+        result = service.stop_stream()
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 stop_stream() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"스트림 종료 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code
+
+
+# =========================================================
+# 새 랜덤 CCTV 선택 + 다음 video-feed용 준비
+# =========================================================
+@tunnel_bp.route("/stream/restart-random", methods=["POST"])
+def stream_restart_random():
+    try:
+        result = service.restart_with_random_cctv()
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 restart_with_random_cctv() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"스트림 재시작 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
+    return jsonify(result), status_code

@@ -31,21 +31,32 @@ class DetectionManager:
         self._lock = threading.Lock()
 
     def get_or_create(self, name, detector_class, **kwargs):
-        """분석기 생성 및 관리"""
+        """분석기 생성 및 관리 (URL 갱신 로직 추가)"""
+        url = kwargs.get('url') # kwargs에서 url 추출
+
         with self._lock:
             if name in self.active_detectors:
-                if self.threads[name].is_alive():
-                    return self.active_detectors[name]
+                existing = self.active_detectors[name]
+                
+                # ✅ [핵심 추가] URL이 변경되었는지 확인 (토큰 만료 대응)
+                # 기존 객체의 URL과 새로 들어온 URL이 다르면 교체해야 함
+                if hasattr(existing, 'url') and existing.url != url:
+                    print(f"🔄 [Manager] {name} URL 변경 감지. 기존 분석기 교체 중...")
+                    self._stop_internal(name) # 기존 꺼 안전하게 중지
+                
+                # 아직 살아있고 URL도 같다면 그대로 반환
+                elif self.threads[name].is_alive():
+                    return existing
+                
                 else:
-                    print(f"⚠️ [Manager] {name} 재시작 시도")
-                    del self.active_detectors[name]
-                    del self.threads[name]
+                    print(f"⚠️ [Manager] {name} 스레드 죽음 확인, 재시작")
+                    self._stop_internal(name)
 
-            print(f"🚀 [Manager] {name} 분석기 생성")
+            # 새 분석기 생성
+            print(f"🚀 [Manager] {name} 분석기 생성 (URL: {url[:30]}...)")
             instance = detector_class(name, **kwargs)
             
-            # 1. daemon=False로 변경하여 종료 시점 제어
-            # 2. name을 명확히 주어 로그 추적 용이하게 설정
+            # daemon=False로 유지하되, stop 시 join으로 회수
             t = threading.Thread(target=instance.run, name=f"Thread_{name}", daemon=False)
             t.start()
             
@@ -53,27 +64,31 @@ class DetectionManager:
             self.threads[name] = t
             return instance
 
+    def _stop_internal(self, name):
+        """내부용 정지 함수 (Lock 없이 호출)"""
+        if name in self.active_detectors:
+            self.active_detectors[name].stop()
+            self.threads[name].join(timeout=1.0)
+            del self.active_detectors[name]
+            del self.threads[name]
+
     def stop(self, name):
         """특정 detector 정지 및 제거"""
         with self._lock:
-            if name not in self.active_detectors:
-                return
-            print(f"🛑 [Manager] {name} 분석기 정지")
-            self.active_detectors[name].stop()
-            self.threads[name].join(timeout=2.0)
-            del self.active_detectors[name]
-            del self.threads[name]
+            print(f"🛑 [Manager] {name} 분석기 정지 요청")
+            self._stop_internal(name)
 
     def stop_all(self):
         """종료 시 안전하게 모든 스레드 회수"""
         with self._lock:
             print(f"🛑 [Manager] 모든 분석기 정지 중...")
+            # 1. 모든 플래그 먼저 끄기
             for name, instance in self.active_detectors.items():
-                instance.stop()  # stop_flag를 True로 변경
+                instance.stop()
             
-            # 스레드가 완전히 끝날 때까지 대기 (선택 사항)
+            # 2. 순차적으로 대기하며 회수
             for name, t in self.threads.items():
-                t.join(timeout=2.0)
+                t.join(timeout=1.0)
                 
             self.active_detectors.clear()
             self.threads.clear()

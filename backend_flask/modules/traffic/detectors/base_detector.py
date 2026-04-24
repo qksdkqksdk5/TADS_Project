@@ -97,4 +97,8 @@ class BaseDetector:
 
     def stop(self):
         self.is_running = False
+        # ✅ 추가: cap 객체가 있다면 안전하게 릴리즈
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
+            print(f"📹 [{self.cctv_name}] VideoCapture 해제 완료")
         print(f"🛑 [{self.cctv_name}] 분석 프로세스 종료")
