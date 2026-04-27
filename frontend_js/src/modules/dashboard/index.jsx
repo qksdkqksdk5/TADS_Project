@@ -113,7 +113,7 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
               user={user}
               activeTab={activeTab}
               isMobile={isMobile}
-              host={outsideHost}
+              host={host}
               isEmergency={isEmergency}
               pendingAlerts={pendingAlerts}
               logs={logs}

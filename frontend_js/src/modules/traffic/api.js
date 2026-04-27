@@ -66,24 +66,26 @@ const getBaseUrl = (host) => {
 /**
  * 공공 CCTV 목록 및 스트리밍 URL 조회
  */
-export const fetchCctvUrl = async (host) => {
-  try {
-    const res = await axios.get(`${getBaseUrl(host)}/its/get_cctv_url`);
-    
-    if (res.data.success) {
-      return { data: res.data };
-    }
-    throw new Error("데이터 로드 실패");
+  export const fetchCctvUrl = async (host, force = false) => {
+    try {
+      // 2. force가 true일 때만 URL 뒤에 ?force=true를 붙여줍니다.
+      const url = `${getBaseUrl(host)}/its/get_cctv_url${force ? '?force=true' : ''}`;
+      const res = await axios.get(url);
+      
+      if (res.data.success) {
+        return { data: res.data };
+      }
+      throw new Error("데이터 로드 실패");
 
-  } catch (e) {
-    console.warn('CCTV 데이터 획득 실패:', e);
-    const testUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
-    const cctvData = Array.from({ length: 4 }, (_, i) => ({
-      url: testUrl, name: `테스트 채널 ${i + 1}`, lat: 37.5, lng: 127.0
-    }));
-    return { data: { success: true, cctvData } };
-  }
-};
+    } catch (e) {
+      console.warn('CCTV 데이터 획득 실패 (Fallback 데이터 반환):', e);
+      const testUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+      const cctvData = Array.from({ length: 4 }, (_, i) => ({
+        url: testUrl, name: `테스트 채널 ${i + 1}`, lat: 37.5, lng: 127.0
+      }));
+      return { data: { success: true, cctvData } };
+    }
+  };
 
 /**
  * 시뮬레이션 시작 요청

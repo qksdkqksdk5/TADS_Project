@@ -4,7 +4,13 @@ import Hls from 'hls.js';
 import Swal from 'sweetalert2';
 import { captureNow, updateCaptureMemo, stopDetection, getDetectionStatus } from '../api';
 
-const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle }) => {
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
+const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle, onRefreshUrl}) => {
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
 
@@ -16,26 +22,36 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
         videoRef.current.src = url;
       } else if (Hls.isSupported()) {
         const hls = new Hls({
-          fragLoadingMaxRetry:      10,
-          manifestLoadingMaxRetry:  10,
-          levelLoadingMaxRetry:     10,
-          fragLoadingRetryDelay:    1000,
+          fragLoadingMaxRetry: 10,
+          manifestLoadingMaxRetry: 10,
+          levelLoadingMaxRetry: 10,
+          fragLoadingRetryDelay: 1000,
           manifestLoadingRetryDelay: 1000,
         });
+
         hls.loadSource(url);
         hls.attachMedia(videoRef.current);
+
         hls.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                console.log("🌐 네트워크 에러 발생 - URL 갱신 시도");
-                // 부모 컴포넌트(VideoPanel)로부터 전달받은 갱신 함수 호출
-                onRefreshUrl(); 
+                // ✅ 403 Forbidden(토큰 만료)인지 확인
+                if (data.response && data.response.code === 403) {
+                  console.warn(`🔒 [${name}] 토큰 만료됨 (403). URL 갱신을 요청합니다.`);
+                  if (onRefreshUrl) onRefreshUrl(); // 부모의 갱신 함수 실행
+                } else {
+                  // 일반적인 네트워크 끊김은 다시 시도
+                  console.log("🌐 네트워크 오류 - 재시도 중...");
+                  hls.startLoad();
+                }
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
+                console.log("🎬 미디어 오류 - 복구 시도...");
                 hls.recoverMediaError();
                 break;
               default:
+                console.error("❌ 치명적 오류 - 스트림 종료");
                 hls.destroy();
                 break;
             }
@@ -45,7 +61,7 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
       }
     }
     return () => { if (hlsRef.current) hlsRef.current.destroy(); };
-  }, [url, isHls]);
+  }, [url, isHls, onRefreshUrl]); // dependency에 onRefreshUrl 추가
 
   return (
     <div style={gridItemStyle}>
@@ -125,13 +141,27 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
       const { db_id, image_url } = res.data;
       const { value: text, isConfirmed } = await Swal.fire({
         title: '장면 캡처 완료', text: '기록할 메모가 있나요?', input: 'text',
-        imageUrl: `https://${host}${image_url}`, 
-        // imageUrl: `http://${host}:5000${image_url}`, 
+        imageUrl: `${getOrigin(host)}${image_url}`,
         imageWidth: 300,
         showCancelButton: true, confirmButtonText: '메모 저장', cancelButtonText: '사진만 저장'
       });
       if (isConfirmed && text) await updateCaptureMemo(host, db_id, text);
     } catch (err) { console.error("캡처 오류:", err); }
+  };
+
+  // 1. URL 갱신 함수 추가
+  const handleUrlRefresh = async () => {
+    console.log("🔄 CCTV 토큰 만료 감지: 전체 URL 갱신 시도...");
+    try {
+      const response = await fetchCctvUrl(host, true); // force=true 전달
+      if (response.data.success) {
+        // 부모인 TrafficModule 등에서 내려준 setCctvData가 있다면 호출
+        // (만약 props에 없다면 VideoPanel 내부 state로 관리하도록 수정 필요)
+        setCctvData(response.data.cctvData); 
+      }
+    } catch (err) {
+      console.error("URL 갱신 실패:", err);
+    }
   };
 
   return (
@@ -156,12 +186,11 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
               let isHls    = true;
 
               if (isReverse && reverseOn) {
-                finalUrl = `https://${host}/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
-                // finalUrl = `http://${host}:5000/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                finalUrl = `${getOrigin(host)}/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                
                 isHls    = false;
               } else if (isFire && fireOn) {
-                finalUrl = `https://${host}/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
-                // finalUrl = `http://${host}:5000/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                finalUrl = `${getOrigin(host)}/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
                 isHls    = false;
               }
               const displayName = isReverse
@@ -182,6 +211,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
                       ? handleToggle('reverse', reverseOn, setReverseOn)
                       : handleToggle('fire', fireOn, setFireOn)
                     }
+                    onRefreshUrl={handleUrlRefresh}
                   />
                 </div>
               );

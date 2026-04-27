@@ -143,12 +143,12 @@ class ReverseDetector(BaseDetector):
             _model_path = os.path.join(_DIR, "detect_models/best_DW.pt")
             print(f"🖥️ [{cctv_name}] GPU 모드로 로드")
         else:
-            _model_path = os.path.join(_DIR, "detect_models/best_DW.pt")
+            _model_path = os.path.join(_DIR, "detect_models/best_DW_openvino_model")
             print(f"💻 [{cctv_name}] CPU(OpenVINO) 모드로 로드")
 
         self.cfg = DetectorConfig(
             model_path    = Path(_model_path),
-            conf          = conf_val,
+            conf          = 0.3,
             detect_only   = False,
             flow_map_path = None,
             log_dir       = None,

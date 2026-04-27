@@ -5,6 +5,12 @@ import axios from 'axios';
 import { useMapMarkers } from './useMapMarkers';
 import { useLocation } from 'react-router-dom';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl, host, adminName) {
   const location = useLocation();
 
@@ -23,7 +29,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
-        const response = await axios.get(`http://${host}:5000/api/pending_alerts`);
+        const response = await axios.get(`${getOrigin(host)}/api/pending_alerts`);
         if (response.data.length > 0) {
           setPendingAlerts(response.data);
           setIsEmergency(true);
@@ -62,7 +68,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
 
       const isCorrect = result.isConfirmed ? 1 : 0;
 
-      await axios.post(`http://${host}:5000/api/resolve_alert_db`, { 
+      await axios.post(`${getOrigin(host)}/api/resolve_alert_db`, {
         alertId, isCorrect, adminName: adminName, is_simulation: isSimulation ? 1 : 0 
       });
 
@@ -96,7 +102,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
       try {
         const alertIds = alerts.map(a => a.id);
         const isSim = alerts[0]?.isSimulation || false;
-        await axios.post(`http://${host}:5000/api/resolve_alerts_bulk`, { 
+        await axios.post(`${getOrigin(host)}/api/resolve_alerts_bulk`, { 
           alertIds: alertIds, 
           isCorrect: 1, 
           adminName: adminName
@@ -140,8 +146,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
       // 다른 접속자는 바로 sim 탭으로 이동 + 영상 세팅
       // setActiveTab("sim");
       setTimeout(() => {
-        const syncUrl = `https://${host}/api/video_feed?type=${data.type}&v=${Date.now()}`;
-        // const syncUrl = `http://${host}:5000/api/video_feed?type=${data.type}&v=${Date.now()}`;
+        const syncUrl = `${getOrigin(host)}/api/video_feed?type=${data.type}&v=${Date.now()}`;
         setVideoUrl(syncUrl);
       }, 1500);
     };
@@ -174,8 +179,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
 
         // DB 주소 업데이트 (기존 로직 유지)
         if (!data.video_origin.includes('realtime_its')) {
-          // axios.post(`http://${host}:5000/api/update_address`, { 
-          axios.post(`https://${host}/api/update_address`, { 
+          axios.post(`${getOrigin(host)}/api/update_address`, { 
             alertId: data.alert_id, 
             address: finalAddress 
           }).catch(err => console.error("❌ DB 주소 업데이트 실패:", err));
@@ -238,8 +242,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
           if (isSimulationValue && typeof setVideoUrl === 'function') {
             const select_type = data.type === "화재" ? "fire" : (data.type === "역주행" ? "reverse" : "unknown");
             setTimeout(() => {
-              const syncUrl = `https://${host}/api/video_feed?type=${select_type}&v=${Date.now()}`;
-              // const syncUrl = `http://${host}:5000/api/video_feed?type=${select_type}&v=${Date.now()}`;
+              const syncUrl = `${getOrigin(host)}/api/video_feed?type=${select_type}&v=${Date.now()}`;
               setVideoUrl(syncUrl);
             }, 1000);
           }

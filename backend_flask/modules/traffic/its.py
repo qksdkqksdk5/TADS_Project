@@ -40,7 +40,7 @@ def get_cctv_url():
             
             if cctv_list:
                 # ✅ [인덱스 고정 전략] 하암육교(7), 안성(1), 서해주탑(12), 입장(15)
-                target_indices = [7, 1, 12, 15]
+                target_indices = [7, 24, 12, 15]
                 selected_cctvs = []
                 
                 for idx in target_indices:
@@ -144,13 +144,18 @@ def stop_detection():
 
     with detector_manager._lock:
         if key in detector_manager.active_detectors:
-            detector_manager.active_detectors[key].stop()
-            del detector_manager.active_detectors[key]
-            del detector_manager.threads[key]
-            print(f"⏹️ [{key}] 감지 중지")
-            return jsonify({"status": "ok"}), 200
+            try:
+                detector_manager.active_detectors[key].stop()
+                del detector_manager.active_detectors[key]
+                del detector_manager.threads[key]
+                print(f"⏹️ [{key}] 감지 중지")
+                return jsonify({"status": "ok"}), 200
+            except Exception as e:
+                print(f"❌ [{key}] 감지 중지 실패: {e}")
+                return jsonify({"status": "error", "message": str(e)}), 500
 
-    return jsonify({"status": "not_found"}), 404
+    # 감지기가 없는 건 정상 케이스 → 200
+    return jsonify({"status": "not_found"}), 200
 
 # @its_bp.route('/stop_detection', methods=['POST'])
 # def stop_detection():

@@ -6,6 +6,12 @@ import MapPanel     from './components/MapPanel';
 import ControlPanel from './components/ControlPanel';
 import { fetchCctvUrl, startSimulation, stopSimulation, stopDetection } from './api';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 export default function TrafficModule({ socket, user, activeTab, isMobile, host,
   isEmergency, pendingAlerts, logs, mapRef, resolveEmergency, resolveAllAlertsAction, moveToAlert,
   videoUrl, setVideoUrl, createMarker, clearMarkersRef }) {
@@ -25,8 +31,7 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
   useEffect(() => {
     if (activeTab === "webcam") {
       setTimeout(() => {
-        setVideoUrl(`https://${host}/api/video_feed?type=webcam&v=${Date.now()}`);
-        // setVideoUrl(`http://${host}:5000/api/video_feed?type=webcam&v=${Date.now()}`);
+        setVideoUrl(`${getOrigin(host)}/api/video_feed?type=webcam&v=${Date.now()}`);
       }, 100);
     } else if (activeTab === "cctv") {
       setVideoUrl("");
@@ -82,8 +87,7 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
         navigate(`/dashboard/sim`);
         const encodedType = encodeURIComponent(type);
         setTimeout(() => {
-          setVideoUrl(`https://${host}/api/video_feed?type=${encodedType}&v=${Date.now()}`);
-          // setVideoUrl(`http://${host}:5000/api/video_feed?type=${encodedType}&v=${Date.now()}`);
+          setVideoUrl(`${getOrigin(host)}/api/video_feed?type=${encodedType}&v=${Date.now()}`);
         }, 500);
       })
       .catch(err => console.error("시뮬레이션 시작 실패:", err));
@@ -117,7 +121,7 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
 
       <div style={{ flex: 3.2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ ...panelWrapper, flex: 1, marginBottom: (isEmergency && showMap) ? (isMobile ? '10px' : '20px') : '0px', transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} host={host} user={user} />
+          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} host={host} user={user} loadCctvUrl={loadCctvUrl}/>
         </div>
 
         {isEmergency && !showMap && (
