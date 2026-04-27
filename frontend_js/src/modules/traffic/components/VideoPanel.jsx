@@ -125,7 +125,9 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
       const { db_id, image_url } = res.data;
       const { value: text, isConfirmed } = await Swal.fire({
         title: '장면 캡처 완료', text: '기록할 메모가 있나요?', input: 'text',
-        imageUrl: `http://${host}:5000${image_url}`, imageWidth: 300,
+        imageUrl: `https://${host}${image_url}`, 
+        // imageUrl: `http://${host}:5000${image_url}`, 
+        imageWidth: 300,
         showCancelButton: true, confirmButtonText: '메모 저장', cancelButtonText: '사진만 저장'
       });
       if (isConfirmed && text) await updateCaptureMemo(host, db_id, text);
@@ -154,10 +156,12 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
               let isHls    = true;
 
               if (isReverse && reverseOn) {
-                finalUrl = `http://${host}:5000/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                finalUrl = `https://${host}/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                // finalUrl = `http://${host}:5000/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
                 isHls    = false;
               } else if (isFire && fireOn) {
-                finalUrl = `http://${host}:5000/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                finalUrl = `https://${host}/api/its/fire_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
+                // finalUrl = `http://${host}:5000/api/its/video_feed?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(item.name)}&lat=${item.lat}&lng=${item.lng}`;
                 isHls    = false;
               }
               const displayName = isReverse

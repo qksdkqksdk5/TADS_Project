@@ -93,7 +93,7 @@ export default function RaspiModule({host}) {
       toggleTracking();
       return;
     }
-    const gcode = `G1 ${x !== 0 ? `X${x} ` : ""}${y !== 0 ? `Y${y} ` : ""}F500`;
+    const gcode = `G1 ${x !== 0 ? `X${x} ` : ""}${y !== 0 ? `Y${y} ` : ""}F100`;
     fetchStatus(gcode);
     setPanPos(p => p + x);
     setTiltPos(p => p + y);
@@ -179,7 +179,7 @@ export default function RaspiModule({host}) {
               <Btn text="▲" onClick={() => move(0, step)} active />
               <Btn text="↗" onClick={() => move(step, step)} />
               <Btn text="◀" onClick={() => move(-step, 0)} active />
-              <Btn text="🏠" bg="#f59e0b" onClick={() => { fetchStatus(`G1 X${-panPos} Y${-tiltPos} F500`); setPanPos(0); setTiltPos(0); }} />
+              <Btn text="🏠" bg="#f59e0b" onClick={() => { fetchStatus(`G1 X${-panPos} Y${-tiltPos} F100`); setPanPos(0); setTiltPos(0); }} />
               <Btn text="▶" onClick={() => move(step, 0)} active />
               <Btn text="↙" onClick={() => move(-step, -step)} />
               <Btn text="▼" onClick={() => move(0, -step)} active />

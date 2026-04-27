@@ -25,7 +25,8 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
   useEffect(() => {
     if (activeTab === "webcam") {
       setTimeout(() => {
-        setVideoUrl(`http://${host}:5000/api/video_feed?type=webcam&v=${Date.now()}`);
+        setVideoUrl(`https://${host}/api/video_feed?type=webcam&v=${Date.now()}`);
+        // setVideoUrl(`http://${host}:5000/api/video_feed?type=webcam&v=${Date.now()}`);
       }, 100);
     } else if (activeTab === "cctv") {
       setVideoUrl("");
@@ -81,7 +82,8 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
         navigate(`/dashboard/sim`);
         const encodedType = encodeURIComponent(type);
         setTimeout(() => {
-          setVideoUrl(`http://${host}:5000/api/video_feed?type=${encodedType}&v=${Date.now()}`);
+          setVideoUrl(`https://${host}/api/video_feed?type=${encodedType}&v=${Date.now()}`);
+          // setVideoUrl(`http://${host}:5000/api/video_feed?type=${encodedType}&v=${Date.now()}`);
         }, 500);
       })
       .catch(err => console.error("시뮬레이션 시작 실패:", err));

@@ -1,332 +1,292 @@
 import os
 import time
 import cv2
-import numpy as np
-import requests
-import threading
 import socket
 import pickle
 import struct
+import threading
+import numpy as np
 from flask import Blueprint, Response, jsonify, request
 from ultralytics import YOLO
+import uuid # 고유 세션 ID 생성용
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model_path = os.path.join(BASE_DIR, "best_SB.pt")
+# 모터 제어권 관리 변수
+current_controller_id = None  # 현재 제어 중인 클라이언트 ID
+last_control_time = 0         # 마지막 제어 시간 (타임아웃용)
+CONTROL_TIMEOUT = 10          # 10초 동안 명령이 없으면 제어권 해제
 
+# Flask Blueprint 설정
 raspi_bp = Blueprint('raspi', __name__)
 
-# --- [1. 설정 및 AI 모델] ---
-RASPI_BACKEND_URL  = "http://192.168.219.155:5000"
-RASPI_THERMAL_IP   = "192.168.219.155"
-RASPI_THERMAL_PORT = 9999
+# --- [ 하드웨어 및 네트워크 설정 ] ---
+# 💡 라즈베리 파이의 실제 개별 IP 주소를 입력하세요.
+RASPI_IP = "192.168.219.155" 
+PORT_MOTOR = 9997
+PORT_VIDEO = 9998
+PORT_THERMAL = 9999
 
-# ✅ 서버 시작 시 즉시 로드하지 않음 — /start 호출 시 로드
-model      = None
+# --- [ 전역 상태 관리 ] ---
+model = None
 model_lock = threading.Lock()
+frame_lock = threading.Lock()
 
-def load_model_if_needed():
+# 실시간 프레임 저장용 변수
+raw_frame = None            # 라즈베리파이 원본 MJPEG
+processed_rgb_frame = None  # YOLO + 180도 회전 완료본
+processed_thermal_frame = None  # 컬러맵 입혀진 열화상 프레임
+thermal_data = None         # MLX90640 센서 로우 데이터 (24x32)
+
+# 제어 플래그
+_stop_event = threading.Event()
+_workers_started = False
+detection_enabled = False
+
+# --- [ 1. AI 모델 로드 ] ---
+def load_model():
     global model
     with model_lock:
         if model is None:
-            try:
-                model = YOLO(model_path)
-                print("[INFO] YOLOv8 model loaded.")
-            except Exception as e:
-                print(f"[ERROR] Model load failed: {e}")
-                model = None
+            path = os.path.join(os.path.dirname(__file__), "best_SB.pt")
+            if os.path.exists(path):
+                model = YOLO(path)
+                print("✅ [AI] YOLOv8 Model Loaded Successfully")
+            else:
+                print(f"⚠️ [AI] Model file not found at: {path}")
 
-# 전역 상태 변수
-detection_enabled = False
-tracking_enabled  = False
-processed_frame   = None
-fire_detected     = False
-thermal_data      = None
-frame_lock        = threading.Lock()
-
-# 워커 제어 플래그
-_workers_started = False
-_workers_lock    = threading.Lock()
-_stop_event      = threading.Event()
-
-
-# --- [2. 열화상 데이터 수신 스레드] ---
-def thermal_receiver_worker():
-    global thermal_data
-    while not _stop_event.is_set():
-        client_socket = None
-        try:
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(2.0)
-            client_socket.connect((RASPI_THERMAL_IP, RASPI_THERMAL_PORT))
-            payload_size = struct.calcsize("Q")
-            data = b""
-            print(f"[THERMAL] Connected to {RASPI_THERMAL_IP}:{RASPI_THERMAL_PORT}")
-
-            while not _stop_event.is_set():
-                try:
-                    while len(data) < payload_size:
-                        packet = client_socket.recv(4096)
-                        if not packet:
-                            break
-                        data += packet
-                    if not data:
-                        break
-
-                    packed_msg_size = data[:payload_size]
-                    data            = data[payload_size:]
-                    msg_size        = struct.unpack("Q", packed_msg_size)[0]
-
-                    while len(data) < msg_size:
-                        data += client_socket.recv(4096)
-
-                    frame_data   = data[:msg_size]
-                    data         = data[msg_size:]
-                    temp_thermal = pickle.loads(frame_data)
-                    with frame_lock:
-                        thermal_data = temp_thermal
-
-                except socket.timeout:
-                    continue
-
-        except Exception as e:
-            if not _stop_event.is_set():
-                print(f"[THERMAL ERROR] {e}. 3초 후 재연결 시도...")
-                time.sleep(3)
-        finally:
-            if client_socket:
-                client_socket.close()
-
-    print("[THERMAL] 워커 종료")
-
-
-# --- [3. 모터 제어 로직] ---
-def send_motor_command(gcode):
-    if not gcode: 
-        print("[MOTOR-SKIP] 명령어가 비어있어 전송하지 않습니다.")
+# --- [ 2. 열화상 데이터 렌더링 로직 ] ---
+def process_thermal_logic():
+    global processed_thermal_frame, thermal_data
+    if thermal_data is None:
         return
-        
+
     try:
-        # 이 주소가 EC2에서 접속 가능한 주소인지 확인이 필요합니다!
-        url = f"{RASPI_BACKEND_URL}/api/raspi/control"
-        print(f"[MOTOR-SEND] {url}?cmd={gcode}")
+        # 24x32 어레이 변환
+        t_img = np.array(thermal_data).reshape(24, 32)
         
-        response = requests.get(url, params={"cmd": gcode}, timeout=1.0)
-        print(f"[MOTOR-RESULT] 응답코드: {response.status_code}")
-    except Exception as e:
-        print(f"[MOTOR-FATAL] 라즈베리파이로 전송 실패: {e}")
-
-def track_object(cx, cy):
-    if not tracking_enabled: return
-    error_x   = cx - 320
-    error_y   = cy - 240
-    threshold = 40
-    step      = 2
-    cmd_x, cmd_y = 0, 0
-    if abs(error_x) > threshold:
-        cmd_x = step if error_x > 0 else -step
-    if abs(error_y) > threshold:
-        cmd_y = -step if error_y > 0 else step
-    if cmd_x != 0 or cmd_y != 0:
-        gcode = f"G1 {f'X{cmd_x} ' if cmd_x != 0 else ''}{f'Y{cmd_y} ' if cmd_y != 0 else ''}F3500"
-        send_motor_command(gcode)
-
-
-# --- [4. AI 처리 로직] ---
-def process_ai_logic(jpg_data):
-    global processed_frame, fire_detected, detection_enabled, thermal_data
-
-    display_img = np.zeros((480, 640, 3), dtype=np.uint8)
-
-    if thermal_data is not None:
-        try:
-            t_img   = np.array(thermal_data).reshape(24, 32)
-            t_norm  = cv2.normalize(t_img, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-            t_color = cv2.applyColorMap(t_norm, cv2.COLORMAP_JET)
-            display_img = cv2.resize(t_color, (640, 480), interpolation=cv2.INTER_CUBIC)
-        except Exception as e:
-            print(f"[THERMAL ERROR] {e}")
-
-    if detection_enabled and model is not None:
-        results      = model(display_img, imgsz=320, stream=True, conf=0.5, verbose=False)
-        current_fire = False
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                label = model.names[int(box.cls[0])].lower()
-                color = (0, 0, 255) if 'fire' in label else (0, 255, 0)
-                if 'fire' in label: current_fire = True
-                cv2.rectangle(display_img, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(display_img, f"{label}", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        fire_detected = current_fire
-
-    enc_success, enc_buffer = cv2.imencode('.jpg', display_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    if enc_success:
+        # 💡 가시광선 카메라와 방향 일치 (상하좌우 반전 = 180도 회전)
+        t_img = np.flipud(np.fliplr(t_img))
+        
+        # 정규화 및 컬러맵 (JET) 적용
+        t_norm = cv2.normalize(t_img, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        t_color = cv2.applyColorMap(t_norm, cv2.COLORMAP_JET)
+        
+        # 640x480 확대
+        thermal_img = cv2.resize(t_color, (640, 480), interpolation=cv2.INTER_CUBIC)
+        
+        _, enc_thermal = cv2.imencode('.jpg', thermal_img)
         with frame_lock:
-            processed_frame = enc_buffer.tobytes()
+            processed_thermal_frame = enc_thermal.tobytes()
+    except Exception as e:
+        print(f"⚠️ [THERMAL LOGIC ERROR] {e}")
 
-# 전역 상태 변수 (상단에 추가)
-raw_frame = None  # 추가된 원본 프레임 변수
-
-# --- [5. 스트림 수신 워커] 수정 ---
+# --- [ 3. 라즈베리파이 스트림 수신 워커 ] ---
 def stream_proxy_worker():
-    global raw_frame  # 추가
-    stream_url = f"{RASPI_BACKEND_URL}/video_feed"
-    print(f"[INFO] Connecting to Raspi Stream: {stream_url}")
+    global raw_frame, processed_rgb_frame, detection_enabled, model
+    print("🎬 [VIDEO WORKER] Thread Started")
     
     while not _stop_event.is_set():
         try:
-            response = requests.get(stream_url, stream=True, timeout=5)
-            byte_data = b''
-            for chunk in response.iter_content(chunk_size=16384):
-                if _stop_event.is_set():
-                    return
-                if not chunk:
-                    break
-                byte_data += chunk
-                while True:
-                    start = byte_data.find(b'\xff\xd8')
-                    end   = byte_data.find(b'\xff\xd9')
-                    if start != -1 and end != -1 and end > start:
-                        jpg       = byte_data[start:end + 2]
-                        byte_data = byte_data[end + 2:]
-                        
-                        # 💡 원본 프레임 전역 변수에 저장
-                        with frame_lock:
-                            raw_frame = jpg
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5.0)
+                s.connect((RASPI_IP, PORT_VIDEO))
+                print(f"✅ [VIDEO] Connected to Pi at {RASPI_IP}")
+                
+                byte_data = b''
+                while not _stop_event.is_set():
+                    chunk = s.recv(65536)
+                    if not chunk: break
+                    byte_data += chunk
+                    
+                    while True:
+                        start = byte_data.find(b'\xff\xd8')
+                        end = byte_data.find(b'\xff\xd9')
+                        if start != -1 and end != -1 and end > start:
+                            jpg = byte_data[start:end+2]
+                            byte_data = byte_data[end+2:]
                             
-                        process_ai_logic(jpg)
-                    else:
-                        break
+                            with frame_lock:
+                                raw_frame = jpg
+                            
+                            # 가시광선 후처리
+                            nparr = np.frombuffer(jpg, np.uint8)
+                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            if img is not None:
+                                img = cv2.rotate(img, cv2.ROTATE_180) # 180도 회전
+                                
+                                if detection_enabled and model:
+                                    results = model(img, conf=0.5, verbose=False)
+                                    for r in results:
+                                        for box in r.boxes:
+                                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                
+                                _, enc_rgb = cv2.imencode('.jpg', img)
+                                with frame_lock:
+                                    processed_rgb_frame = enc_rgb.tobytes()
+                        else:
+                            break
         except Exception as e:
-            if not _stop_event.is_set():
-                time.sleep(2)
+            print(f"❌ [VIDEO PROXY ERROR] {e}")
+            time.sleep(2)
 
-    print("[STREAM] 워커 종료")
+# --- [ 4. 열화상 데이터 수신 워커 ] ---
+def thermal_receiver_worker():
+    global thermal_data
+    print("🔥 [THERMAL WORKER] Thread Started")
+    
+    while not _stop_event.is_set():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(10.0) # 클러스터 지연 고려
+                s.connect((RASPI_IP, PORT_THERMAL))
+                print(f"✅ [THERMAL] Connected to Pi at {RASPI_IP}")
+                
+                payload_size = struct.calcsize("Q")
+                data = b""
+                while not _stop_event.is_set():
+                    while len(data) < payload_size:
+                        packet = s.recv(4096)
+                        if not packet: break
+                        data += packet
+                    
+                    if len(data) < payload_size: break
+                    
+                    packed_msg_size = data[:payload_size]
+                    data = data[payload_size:]
+                    msg_size = struct.unpack("Q", packed_msg_size)[0]
+                    
+                    while len(data) < msg_size:
+                        packet = s.recv(4096)
+                        if not packet: break
+                        data += packet
+                    
+                    try:
+                        with frame_lock:
+                            thermal_data = pickle.loads(data[:msg_size])
+                        data = data[msg_size:]
+                        process_thermal_logic() 
+                    except Exception as pe:
+                        print(f"⚠️ [THERMAL PICKLE ERROR] {pe}")
+                        data = b"" 
+        except Exception as e:
+            print(f"❌ [THERMAL PROXY ERROR] {e}")
+            time.sleep(2)
 
-
-# --- [6. API 엔드포인트] ---
-
-# raspi.py 수정 제안
-@raspi_bp.route('/normal_feed')
-def normal_feed():
-    def generate():
-        while not _stop_event.is_set():
-            with frame_lock:
-                if raw_frame: # 저장된 원본 프레임을 그대로 스트리밍
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                           + raw_frame + b'\r\n')
-            time.sleep(0.04) # 약 25 FPS 유지
-
-    return Response(
-        generate(),
-        mimetype='multipart/x-mixed-replace; boundary=frame',
-        headers={
-            'Access-Control-Allow-Origin': '*',
-            'ngrok-skip-browser-warning': 'true',
-            'Cache-Control': 'no-cache',
-        }
-    )
-
-@raspi_bp.route('/start', methods=['POST'])
-def start_workers():
-    global _workers_started
-    with _workers_lock:
-        _stop_event.clear()
-        if not _workers_started:
-            # ✅ 탭 진입 시점에 모델 로드 (백그라운드로 — 서버 응답 블로킹 방지)
-            threading.Thread(target=load_model_if_needed, daemon=True).start()
-            threading.Thread(target=thermal_receiver_worker, daemon=True).start()
-            threading.Thread(target=stream_proxy_worker,    daemon=True).start()
-            _workers_started = True
-            print("🚀 [raspi] 워커 스레드 시작")
-    return jsonify({"status": "ok"}), 200
-
-
-@raspi_bp.route('/stop', methods=['POST'])
-def stop_workers():
-    global _workers_started, model
-    with _workers_lock:
-        _stop_event.set()
-        _workers_started = False
-        # ✅ 탭 이탈 시 모델도 메모리에서 해제
-        with model_lock:
-            model = None
-        print("🛑 [raspi] 워커 스레드 정지 + 모델 해제")
-    return jsonify({"status": "stopped"}), 200
-
+# --- [ 5. Flask 라우팅 ] ---
 
 @raspi_bp.route('/video_feed')
 def video_feed():
-    def generate():
-        while not _stop_event.is_set(): # 전역 정지 이벤트 확인
-            with frame_lock:
-                if processed_frame:
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                           + processed_frame + b'\r\n')
-            time.sleep(0.04) # 약 25 FPS 유지
+    feed_type = request.args.get('type', 'normal')
     
-    return Response(
-        generate(),
-        mimetype='multipart/x-mixed-replace; boundary=frame',
-        headers={
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': '*',
-            'ngrok-skip-browser-warning': 'true',
-            'Cache-Control': 'no-cache',
-        }
-    )
+    def gen():
+        while not _stop_event.is_set():
+            frame = None
+            with frame_lock:
+                if feed_type == 'thermal':
+                    frame = processed_thermal_frame
+                else:
+                    frame = processed_rgb_frame if processed_rgb_frame else raw_frame
+            
+            # 💡 데이터 수신 전까지 Placeholder 송출로 브라우저 끊김 방지
+            if frame is None:
+                placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+                text = "WAITING FOR THERMAL..." if feed_type == 'thermal' else "CONNECTING CAMERA..."
+                cv2.putText(placeholder, text, (120, 240), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 2)
+                _, enc = cv2.imencode('.jpg', placeholder)
+                frame = enc.tobytes()
 
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            time.sleep(0.05)
+            
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@raspi_bp.route('/start', methods=['POST'])
+def start():
+    global _workers_started
+    if _workers_started:
+        return jsonify({"status": "already_running"})
+    
+    _stop_event.clear()
+    _workers_started = True
+    
+    threading.Thread(target=load_model, daemon=True).start()
+    threading.Thread(target=thermal_receiver_worker, daemon=True).start()
+    threading.Thread(target=stream_proxy_worker, daemon=True).start()
+    
+    print("🚀 [BACKEND] All Workers Launched")
+    return jsonify({"status": "ok"})
+
+@raspi_bp.route('/stop', methods=['POST'])
+def stop():
+    global _workers_started
+    print("🛑 [BACKEND] Stop signal received")
+    _stop_event.set()
+    _workers_started = False
+    return jsonify({"status": "ok"})
+
+# [백엔드 raspi.py]
 @raspi_bp.route('/control')
 def control():
-    global tracking_enabled, detection_enabled, fire_detected
-    mode = request.args.get('mode')
-    cmd = request.args.get('cmd')
+    global current_controller_id, last_control_time
     
-    # 로그 추가: 어떤 요청이 들어왔는지 확인
-    print(f"[API-REQUEST] mode: {mode}, cmd: {cmd}")
-
-    if mode == 'detect_on':
-        detection_enabled = True
-        print("[STATE] Detection Enabled")
-    elif mode == 'detect_off':
-        detection_enabled = False
-        fire_detected = False
-        print("[STATE] Detection Disabled")
-    elif mode == 'auto_on':
-        tracking_enabled = True
-        print("[STATE] Auto-Tracking Enabled")
-    elif mode == 'auto_off':
-        tracking_enabled = False
-        print("[STATE] Auto-Tracking Disabled")
-
+    cmd = request.args.get('cmd')
+    mode = request.args.get('mode')
+    client_id = request.args.get('client_id') # 프론트에서 보낸 고유 ID
+    
+    current_time = time.time()
+    
+    # 1. 제어권 체크 (모터 명령 cmd가 있을 때만 체크)
     if cmd:
-        send_motor_command(cmd)
+        # 제어권 타임아웃 확인 (오랫동안 명령 없으면 자동 해제)
+        if current_controller_id and (current_time - last_control_time > CONTROL_TIMEOUT):
+            current_controller_id = None
+            print("🕒 [MOTOR] Control timeout. Permission released.")
 
-    return jsonify({
-        "status": "ok",
-        "detect": detection_enabled,
-        "auto": tracking_enabled,
-        "fire_alert": fire_detected
-    })
+        # 권한 검사
+        if current_controller_id is None:
+            # 아무도 제어 중이 아니면 권한 획득
+            current_controller_id = client_id
+            last_control_time = current_time
+        elif current_controller_id != client_id:
+            # 다른 사람이 제어 중이면 거절
+            print(f"🚫 [MOTOR] Blocked request from {client_id}. Occupied by {current_controller_id}")
+            return jsonify({
+                "status": "error", 
+                "message": "현재 다른 사용자가 모터를 제어 중입니다. 잠시 후 다시 시도하세요."
+            }), 403 # Forbidden
 
+        # 권한이 있는 경우 마지막 제어 시간 갱신
+        last_control_time = current_time
+        
+        # 모터 명령 전송
+        print(f"📡 [BACKEND] Executing G-Code: {cmd}")
+        threading.Thread(target=send_motor_command, args=(cmd,), daemon=True).start()
 
-@raspi_bp.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok", "module": "raspi"}), 200
+    # AI 감지 모드 변경 (이건 여러 명이 동시에 해도 무관하므로 권한 체크 제외 가능)
+    global detection_enabled
+    if mode == 'detect_on': detection_enabled = True
+    elif mode == 'detect_off': detection_enabled = False
+        
+    return jsonify({"status": "ok", "detect": detection_enabled})
 
-
-@raspi_bp.route('/snapshot_rgb')
-def snapshot_rgb():
-    with frame_lock:
-        if raw_frame:
-            return Response(raw_frame, mimetype='image/jpeg')
-    return "", 204
-
-@raspi_bp.route('/snapshot_thermal')
-def snapshot_thermal():
-    with frame_lock:
-        if processed_frame:
-            return Response(processed_frame, mimetype='image/jpeg')
-    return "", 204
+def send_motor_command(gcode):
+    try:
+        # 💡 하드웨어 장애 대응: Y축 명령을 Z축으로 리매핑
+        # G1 Y10 F3500 -> G1 Z10 F3500 으로 변경
+        remapped_gcode = gcode.replace('Y', 'Z').replace('y', 'z')
+        
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect((RASPI_IP, PORT_MOTOR))
+            
+            # 리매핑된 명령 전송
+            full_cmd = remapped_gcode if remapped_gcode.endswith('\n') else remapped_gcode + '\n'
+            s.sendall(full_cmd.encode())
+            
+            res = s.recv(1024)
+            print(f"🔄 [REMAPPED] {gcode.strip()} -> {remapped_gcode.strip()}")
+            print(f"🤖 [MOTOR] Response: {res.decode().strip()}")
+    except Exception as e:
+        print(f"❌ [MOTOR CONTROL ERROR] {e}")

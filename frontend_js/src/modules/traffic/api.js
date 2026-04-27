@@ -45,10 +45,30 @@ import axios from 'axios';
 //   }
 // };
 
+/**
+ * 환경(호스트명)에 따라 API Base URL을 자동으로 결정하는 헬퍼 함수
+ */
+const getBaseUrl = (host) => {
+  // 이미 http/https가 포함된 전체 URL이 넘어온 경우 그대로 사용
+  if (host.startsWith('http')) return host;
+
+  const outsideHost = 'itsras.illit.kr';
+
+  // 요청 호스트가 외부 도메인인 경우 무조건 HTTPS 적용
+  if (host === outsideHost) {
+    return `https://${host}/api`;
+  }
+
+  // 그 외 로컬(localhost)이나 내부망 IP 등인 경우 http + 5000 포트 적용
+  return `http://${host}:5000/api`;
+};
+
+/**
+ * 공공 CCTV 목록 및 스트리밍 URL 조회
+ */
 export const fetchCctvUrl = async (host) => {
   try {
-    // 이제 백엔드가 모든 걸 처리합니다.
-    const res = await axios.get(`http://${host}:5000/api/its/get_cctv_url`);
+    const res = await axios.get(`${getBaseUrl(host)}/its/get_cctv_url`);
     
     if (res.data.success) {
       return { data: res.data };
@@ -57,7 +77,6 @@ export const fetchCctvUrl = async (host) => {
 
   } catch (e) {
     console.warn('CCTV 데이터 획득 실패:', e);
-    // 비상용 로컬 테스트 데이터
     const testUrl = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
     const cctvData = Array.from({ length: 4 }, (_, i) => ({
       url: testUrl, name: `테스트 채널 ${i + 1}`, lat: 37.5, lng: 127.0
@@ -71,7 +90,7 @@ export const fetchCctvUrl = async (host) => {
  * @param {string} type - 'sim' | 'webcam'
  */
 export const startSimulation = (host, type) =>
-  axios.post(`http://${host}:5000/api/start_simulation`, { type });
+  axios.post(`${getBaseUrl(host)}/start_simulation`, { type });
 
 /**
  * 수동 캡처 요청
@@ -79,7 +98,7 @@ export const startSimulation = (host, type) =>
  * @param {string} adminName - 관리자 이름
  */
 export const captureNow = (host, type, adminName) =>
-  axios.post(`http://${host}:5000/api/capture_now`, { type, adminName });
+  axios.post(`${getBaseUrl(host)}/capture_now`, { type, adminName });
 
 /**
  * 캡처 메모 업데이트
@@ -87,20 +106,20 @@ export const captureNow = (host, type, adminName) =>
  * @param {string} memo
  */
 export const updateCaptureMemo = (host, db_id, memo) =>
-  axios.post(`http://${host}:5000/api/update_capture_memo`, { db_id, memo });
+  axios.post(`${getBaseUrl(host)}/update_capture_memo`, { db_id, memo });
 
 // ✅ 감지 시작 (스트리밍 없이 백그라운드 감지만)
 export const startDetection = (host, { url, name, lat, lng, type }) =>
-  axios.post(`http://${host}:5000/api/its/start_detection`, { url, name, lat, lng, type });
+  axios.post(`${getBaseUrl(host)}/its/start_detection`, { url, name, lat, lng, type });
 
 // ✅ 감지 중지
 export const stopDetection = (host, { name, type }) =>
-  axios.post(`http://${host}:5000/api/its/stop_detection`, { name, type });
+  axios.post(`${getBaseUrl(host)}/its/stop_detection`, { name, type });
 
 // ✅ 감지 상태 확인
 export const getDetectionStatus = (host) =>
-  axios.get(`http://${host}:5000/api/its/detection_status`);
+  axios.get(`${getBaseUrl(host)}/its/detection_status`);
 
 // ✅ 시뮬레이션 중지 요청 추가
 export const stopSimulation = (host) =>
-  axios.post(`http://${host}:5000/api/stop_simulation`).catch(() => {});
+  axios.post(`${getBaseUrl(host)}/stop_simulation`).catch(() => {});
