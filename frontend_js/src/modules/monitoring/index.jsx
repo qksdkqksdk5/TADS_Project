@@ -9,7 +9,7 @@ import MonitoringMap from './components/MonitoringMap';
 import CctvPlayer    from './components/CctvPlayer';
 import EventLog      from './components/EventLog';
 import ActionPanel   from './components/ActionPanel';
-import { fetchItsCctv } from './api';
+import { fetchItsCctv, restartCamera } from './api';
 
 // ── 시계 ─────────────────────────────────────────────────────
 function Clock() {
@@ -47,7 +47,7 @@ function LiveDot({ connected }) {
 // ── 카메라 팝업 모달 ──────────────────────────────────────────
 // onNavigate(dir): dir = -1(이전) | +1(다음) — 방향키 내비게이션 콜백
 // currentIdx, total: 팝업 헤더에 표시할 "현재/전체" 카운터 (없으면 숨김)
-function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose, onNavigate, currentIdx, total }) {
+function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose, onNavigate, currentIdx, total, streamFailures, onRestartCamera }) {
   // ESC → 닫기, ← → → 이전/다음 카메라
   useEffect(() => {
     const handler = (e) => {
@@ -151,6 +151,8 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose,
               cameraId={selectedId}
               cameraData={selectedData}
               itsCctv={selectedItsCctv}
+              streamStatus={selectedId ? streamFailures?.[selectedId] : undefined}
+              onRestartCamera={onRestartCamera}
             />
           </div>
 
@@ -190,7 +192,7 @@ export default function MonitoringModule({ host, isMobile }) {
   } = useSoundAlert(soundOn);
 
   // ── 소켓 훅 ───────────────────────────────────────────────
-  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent, removeCameras, serverRoadGeo } =
+  const { cameras, eventLogs, unresolvedCounts, connected, emitSelectCamera, resolveEvent, removeCameras, serverRoadGeo, streamFailures } =
     useMonitoringSocket(host, {
       onAnomalyAlert: useCallback((data) => {
         playAlert(data.level);
@@ -241,6 +243,16 @@ export default function MonitoringModule({ host, isMobile }) {
     emitSelectCamera(camera_id);
   }, [emitSelectCamera]);
 
+  // ── 연결 실패 카메라 재시작 ───────────────────────────────────
+  // "다시 시도" 버튼 클릭 시 호출 — 백엔드가 최신 ITS URL로 감지기를 재시작한다
+  const handleRestartCamera = useCallback(async (camera_id) => {
+    try {
+      await restartCamera(host, camera_id);
+    } catch (e) {
+      console.error('[재시작 실패]', camera_id, e);
+    }
+  }, [host]);
+
   // ── 팝업 닫기 ─────────────────────────────────────────────
   const handleClosePopup = useCallback(() => {
     setPopupOpen(false);
@@ -255,13 +267,20 @@ export default function MonitoringModule({ host, isMobile }) {
     }
   }, [cameras, selectedId]);
 
-  // ── 역주행 경보 해제 ──────────────────────────────────────
+  // ── 이벤트 조치 처리 (조치 완료 / 조치 불필요) ──────────────
+  // eventId: 처리할 이벤트 ID
+  // reason: 'action'(조치 완료) | 'no_action'(조치 불필요)
+  // 역주행 이벤트인 경우 경보음도 함께 중지한다
   const [wrongwayAdj, setWrongwayAdj] = useState(0);
-  const handleDismissWrongwayFull = useCallback((eventId) => {
-    stopWrongwayAlarm();
-    resolveEvent(eventId);
-    setWrongwayAdj(v => v + 1);
-  }, [stopWrongwayAlarm, resolveEvent]);
+  const handleDismiss = useCallback((eventId, reason) => {
+    // 해당 이벤트가 역주행인지 확인 — 역주행이면 경보음 중지
+    const target = eventLogs.find(ev => ev.id === eventId);
+    if (target?.event_type === 'wrongway') {
+      stopWrongwayAlarm();
+      setWrongwayAdj(v => v + 1); // 역주행 미해결 카운트 보정
+    }
+    resolveEvent(eventId, reason); // 이벤트 상태를 해소됨으로 변경
+  }, [eventLogs, stopWrongwayAlarm, resolveEvent]);
 
   // ── 방향키 카메라 전환 ────────────────────────────────────────
   // dir: -1(이전) | +1(다음)
@@ -386,7 +405,7 @@ export default function MonitoringModule({ host, isMobile }) {
           <EventLog
             eventLogs={eventLogs}
             onSelectCamera={handleSelect}
-            onDismissWrongway={handleDismissWrongwayFull}
+            onDismiss={handleDismiss}
           />
         </div>
       </div>
@@ -399,9 +418,11 @@ export default function MonitoringModule({ host, isMobile }) {
           selectedData={selectedData}
           selectedItsCctv={selectedItsCctv}
           onClose={handleClosePopup}
-          onNavigate={navigateCamera}          // 방향키 ← → 내비게이션 콜백
-          currentIdx={navInfo?.current}        // 현재 카메라 순번 (1-based)
-          total={navInfo?.total}               // 전체 카메라 수
+          onNavigate={navigateCamera}              // 방향키 ← → 내비게이션 콜백
+          currentIdx={navInfo?.current}            // 현재 카메라 순번 (1-based)
+          total={navInfo?.total}                   // 전체 카메라 수
+          streamFailures={streamFailures}          // 카메라별 연결 실패 상태
+          onRestartCamera={handleRestartCamera}    // "다시 시도" 버튼 클릭 시 호출
         />
       )}
 

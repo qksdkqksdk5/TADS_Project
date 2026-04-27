@@ -247,10 +247,11 @@ class FeatureExtractor:
             occupied_cells / max(valid_cell_count, 1), 0.0, 1.0
         ))
 
-        # dwell_cell_ratio: 체류 셀 / 유효 셀 전체
-        # 차량이 안 움직이는 셀 비율 — 차선 수 무관하게 도로 면적 기준으로 자동 정규화
+        # dwell_cell_ratio: 체류 셀 / 현재 점유 셀 (133차: valid_cell_count → occupied_cells)
+        # 의미 전환: "전체 유효 셀 대비 체류 비율" → "현재 점유 셀 중 체류 비율"
+        # congestion_judge dwell 가중치 × 0.50 하향과 세트로 적용 — 분모 축소로 인한 과대 반응 보정
         dwell_cell_ratio = float(np.clip(
-            len(_dwell_cells_set) / max(valid_cell_count, 1), 0.0, 1.0
+            len(_dwell_cells_set) / max(occupied_cells, 1), 0.0, 1.0
         ))
 
         bbox_coverage = flow_occupancy                     # 하위 호환 별칭 (= flow_occupancy)

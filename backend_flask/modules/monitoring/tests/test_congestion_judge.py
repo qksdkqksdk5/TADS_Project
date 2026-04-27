@@ -157,11 +157,15 @@ def test_cj06_highway_no_dwell_not_jam():
 
 
 # ======================================================================
-# CJ-07: dynamic occ_gate — valid_cell_count 변화 시 포화점 이동
+# CJ-07: dynamic occ_gate — known_cnt/count_ref 기반 포화점 (133차)
 # ======================================================================
 
 def test_cj07_dynamic_occ_gate_saturation():
-    """count_ref/valid_cell_count로 occ_gate 포화점이 결정된다."""
+    """known_cnt/count_ref로 occ_gate 포화점이 결정된다 (133차: valid_cell_count 기반 제거).
+
+    133차 변경: occ_gate = clip((known_cnt-2)/count_ref, 0, 1)
+    → valid_cell_count가 달라져도 known_cnt·count_ref가 같으면 동일한 occ_gate.
+    """
     base = {
         "cell_dwell_score":    0.50,
         "flow_occupancy":      0.20,
@@ -177,8 +181,13 @@ def test_cj07_dynamic_occ_gate_saturation():
     base2["valid_cell_count"] = 400
     score_v400 = compute_jam_score_fallback(base2)
 
-    assert score_v75  > 0.0, f"valid=75 결과 0: {score_v75}"
-    assert score_v400 > 0.0, f"valid=400 결과 0: {score_v400}"
+    # valid_cell_count가 달라도 동일 점수 (차량 수 기반이므로)
+    assert score_v75  > 0.0,  f"valid=75 결과가 0: {score_v75}"
+    assert score_v400 > 0.0,  f"valid=400 결과가 0: {score_v400}"
+    assert abs(score_v75 - score_v400) < 1e-9, (
+        f"133차: valid_cell_count 변화로 점수 달라짐 — occ_gate가 아직 셀 수 기반: "
+        f"v75={score_v75:.6f}, v400={score_v400:.6f}"
+    )
 
 
 # ======================================================================
