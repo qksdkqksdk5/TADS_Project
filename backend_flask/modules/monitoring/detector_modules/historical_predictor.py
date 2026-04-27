@@ -226,6 +226,20 @@ class HistoricalPredictor:
             return "SLOW"     # 서행
         return "JAM"          # 정체
 
+    # ==================== 방향 반전 스왑 ====================
+
+    def swap_slots_with(self, other: "HistoricalPredictor") -> None:
+        """두 HistoricalPredictor의 슬롯 데이터를 교환한다.
+
+        카메라가 180° 회전해 a/b 방향이 바뀌었을 때 호출한다.
+        메모리 내 _slots dict를 교환해 과거 이력이 올바른 방향에 남도록 한다.
+        """
+        # 두 예측기의 슬롯 딕셔너리를 서로 교환
+        self._slots, other._slots = other._slots, self._slots
+        # 버퍼도 함께 교환해 진행 중인 창이 잘못된 방향에 누적되지 않도록 함
+        self._buf_slot,   other._buf_slot   = other._buf_slot,   self._buf_slot
+        self._buf_values, other._buf_values = other._buf_values, self._buf_values
+
     # ==================== 진단 ====================
 
     def get_slot_count(self) -> int:

@@ -532,46 +532,41 @@ def its_road_geo():
     Returns:
         200  GeoJSON FeatureCollection (성공 캐시 또는 빈 FeatureCollection)
     """
-    import time as _time
     road = request.args.get('road', 'gyeongbu').strip()
     if road not in its_helper.ROAD_CONFIG:
         return jsonify({"status": "error", "message": f"지원하지 않는 road: {road}"}), 400
 
-    # ── 성공 캐시 히트 → 즉시 반환 ────────────────────────────────────────
-    # is_failure=True 인 실패 캐시는 여기서 건너뛰고 background retry로 진행
-    # (기존 로직은 실패 캐시도 즉시 반환해 background fetch를 막았던 버그)
-    cached = its_helper._geo_cache.get(road)
-    if cached and cached['expires'] > _time.time() and not cached.get('is_failure'):
-        return jsonify(cached['data']), 200
+    # ── 1단계: 메모리·파일 캐시 확인 → 데이터가 있으면 즉시 HTTP 반환 ────────
+    # 기존: 항상 빈 응답 반환 후 Socket.IO road_geo_ready 에 의존 (타이밍 문제 발생)
+    # 개선: 파일 캐시가 있으면 그냥 바로 반환 → Socket.IO 불필요
+    geo_cached = its_helper.get_road_geo_cached(road)  # Overpass 호출 없이 캐시만 확인
+    if geo_cached:
+        return jsonify(geo_cached), 200                 # 파일/메모리 캐시 히트 → 즉시 반환
 
-    # ── 캐시 미스 or 실패 캐시 → background greenlet 스폰 ─────────────────
+    # ── 2단계: 캐시 없음 → background greenlet으로 Overpass 요청 ─────────────
+    # generate_road_geo_cache.py 를 실행하지 않은 경우의 폴백 경로
     if road not in _geo_fetching:
         _geo_fetching.add(road)
 
         # request context 바깥(greenlet)에서 사용할 socketio 인스턴스를 미리 캡처
-        # current_app.extensions['socketio']는 실제 SocketIO 객체이므로
-        # 클로저로 캡처해도 greenlet 내에서 안전하게 emit 가능
         socketio = current_app.extensions['socketio']
 
         def _fetch_bg():
             """Overpass 요청 후 성공 시 road_geo_ready 이벤트 전파."""
-            geo = its_helper.get_road_geometry(road)   # 파일/메모리/Overpass 3단계 시도
+            geo = its_helper.get_road_geometry(road)    # 파일/메모리/Overpass 3단계 시도
             _geo_fetching.discard(road)                 # 완료 후 fetching 플래그 해제
-            if geo.get('features'):                     # 성공(features 있음) 시에만 emit
-                # 모든 연결된 프론트엔드 클라이언트에 도로 선형 데이터 푸시
-                # → 폴링 없이 즉시 지도에 도로선 반영
+            if geo.get('features'):
                 socketio.emit('road_geo_ready', {
-                    'road': road,   # 어느 도로인지 프론트가 구분할 수 있도록 포함
-                    'geo':  geo,    # GeoJSON FeatureCollection 전체
+                    'road': road,
+                    'geo':  geo,
                 })
                 print(f"📡 road_geo_ready emit ({road}): "
                       f"{len(geo['features'])}개 way → 모든 클라이언트")
 
         gevent.spawn(_fetch_bg)
 
-    # ── 즉시 빈 GeoJSON 반환 ───────────────────────────────────────────────
-    # 프론트엔드는 이것을 받아 지도 초기화를 진행하고,
-    # road_geo_ready Socket.IO 이벤트를 수신하면 도로선을 추가 렌더링한다.
+    # ── 즉시 빈 GeoJSON 반환 (Overpass 대기 중) ───────────────────────────────
+    # 프론트엔드는 road_geo_ready Socket.IO 이벤트 수신 시 도로선을 렌더링한다.
     return jsonify({'type': 'FeatureCollection', 'features': []}), 200
 
 

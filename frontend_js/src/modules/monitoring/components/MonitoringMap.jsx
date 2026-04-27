@@ -10,86 +10,159 @@ const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', 
 const LEVEL_LABEL = { SMOOTH: '원활',    SLOW: '서행',    CONGESTED: '정체',    JAM: '정체'    };
 const ROAD_LINE_GRAY = '#334155';
 
-// 도로 키 → OSM 도로명 (its_helper.py의 ROAD_CONFIG와 동기화)
-// 브라우저 직접 Overpass 쿼리 시 사용
-const OVERPASS_OSM_NAMES = {
-  gyeongbu:  '경부고속도로',
-  gyeongin:  '경인고속도로',
-  seohae:    '서해안고속도로',
-  jungang:   '중앙고속도로',
-  youngdong: '영동고속도로',
+// 도로 키 → Overpass 검색 설정 (its_helper.py의 ROAD_CONFIG와 동기화)
+// names     : OSM name 태그 목록
+// bounds    : 도로 전체 범위 bbox (없으면 전체 검색)
+// nameBounds: 이름별 개별 bbox — 링 도로 일부만 잘라낼 때 사용
+const OVERPASS_ROAD_CONFIG = {
+  gyeongbu:  { names: ['경부고속도로'],                    bounds: null, nameBounds: null },
+  gyeongin:  { names: ['경인고속도로', '제2경인고속도로'], bounds: null, nameBounds: null },
+  seohae:    { names: ['서해안고속도로'],                  bounds: null, nameBounds: null },
+  jungang:   { names: ['중앙고속도로'],                    bounds: null, nameBounds: null },
+  youngdong: {
+    // 영동고속도로(Route 50): 인천기점→판교→여주→원주→강릉
+    // 광주원주고속도로(Route 52) 구간은 its_helper.py/youngdong.json에서 패치로 추가됨
+    // (브라우저 직접 Overpass 쿼리에 3개 이름 포함 시 65초 타임아웃 발생 → 1개로 유지)
+    names:      ['영동고속도로'],
+    bounds:     { minY: 37.1, minX: 126.5, maxY: 37.9, maxX: 129.0 },
+    nameBounds: null,
+  },
 };
 
-// Overpass 브라우저 직접 쿼리 엔드포인트 목록
+// Overpass 브라우저 직접 쿼리 엔드포인트 목록 (백엔드 its_helper.py와 동일하게 3개 유지)
 // 서버 IP가 차단돼도 브라우저(사용자 IP)는 허용되는 경우가 많다.
 // Overpass API는 Access-Control-Allow-Origin: * 로 CORS를 허용한다.
 const OVERPASS_BROWSER_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',         // 1순위: 공식 서버 (독일)
+  'https://overpass.kumi.systems/api/interpreter',   // 2순위: kumi.systems EU 미러
+  'https://overpass.openstreetmap.fr/api/interpreter', // 3순위: OpenStreetMap 프랑스 미러
 ];
 
 /**
+ * 단일 Overpass 엔드포인트에 쿼리하고 GeoJSON을 반환하는 헬퍼.
+ * 실패(타임아웃·HTTP 오류·빈 결과) 시 null을 반환한다.
+ *
+ * @param {string} endpoint - Overpass API URL
+ * @param {string} query    - Overpass QL 쿼리 문자열
+ * @param {number} timeoutMs - 타임아웃 밀리초 (기본 25초)
+ * @returns {Promise<{type:'FeatureCollection', features:Array}|null>}
+ */
+async function fetchOneOverpass(endpoint, query, timeoutMs = 25000) {
+  const ctrl = new AbortController();                // 타임아웃용 중단 컨트롤러
+  const tid  = setTimeout(() => ctrl.abort(), timeoutMs); // 시간 초과 시 요청 취소
+  try {
+    const resp = await fetch(endpoint, {
+      method:  'POST',
+      // Overpass는 application/x-www-form-urlencoded POST를 표준으로 지원
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    `data=${encodeURIComponent(query)}`,
+      signal:  ctrl.signal,                          // AbortController 신호 연결
+    });
+    clearTimeout(tid);                               // 응답 도착 → 타임아웃 타이머 해제
+
+    if (!resp.ok) return null;                       // HTTP 4xx/5xx → 실패 처리
+
+    const json     = await resp.json();
+    const elements = json.elements || [];
+
+    // way 타입이고 좌표가 2개 이상인 요소만 LineString으로 변환
+    // name 태그를 properties에 포함 → fetchOverpassDirect 의 좌표 클리핑에서 사용
+    const features = elements
+      .filter(el => el.type === 'way' && (el.geometry?.length ?? 0) >= 2)
+      .map(el => ({
+        type: 'Feature',
+        properties: {
+          osm_id: el.id,
+          name: el.tags?.name || '', // 도로 이름 (예: '수도권제1순환고속도로') — 클리핑 판별용
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: el.geometry.map(pt => [pt.lon, pt.lat]), // [경도, 위도] 순서
+        },
+      }));
+
+    if (features.length === 0) return null;          // 유효한 도로 데이터 없음 → 실패 처리
+
+    console.log(`[MonitoringMap] 브라우저 Overpass 성공 (${endpoint.split('/')[2]}): ${features.length}개 way`);
+    return { type: 'FeatureCollection', features };  // 성공 → GeoJSON 반환
+  } catch {
+    clearTimeout(tid);                               // 오류 발생 시에도 타이머 해제
+    return null;                                     // 타임아웃·네트워크 오류 → 실패 처리
+  }
+}
+
+/**
  * 브라우저에서 직접 Overpass API에 쿼리해 도로 선형 GeoJSON을 가져온다.
- * 백엔드 서버 IP가 Overpass에서 차단/속도제한 당할 경우 이 경로로 우회한다.
+ * 3개 엔드포인트를 동시에(병렬) 요청하고 가장 먼저 응답하는 결과를 사용한다.
+ *
+ * 기존 방식(순차): 엔드포인트1 실패(10초) → 엔드포인트2 시도 → 최대 20초 대기
+ * 개선 방식(병렬): 3개 동시 시작 → 가장 빠른 쪽 결과 즉시 사용 → 실제 응답 시간만 대기
+ *
+ * bbox 지원: youngdong처럼 링 전체를 도는 도로를 포함할 때 해당 구간만 잘라낸다.
  *
  * @param {string} roadKey - 도로 키 (예: 'gyeongbu')
  * @returns {Promise<{type:'FeatureCollection', features:Array}|null>}
  *          성공 시 GeoJSON, 모든 엔드포인트 실패 시 null
  */
 async function fetchOverpassDirect(roadKey) {
-  const osmName = OVERPASS_OSM_NAMES[roadKey];     // 도로 키 → OSM 검색어
-  if (!osmName) return null;                        // 지원하지 않는 도로 키이면 즉시 포기
+  const cfg = OVERPASS_ROAD_CONFIG[roadKey];          // 도로별 검색 설정
+  if (!cfg) return null;                              // 지원하지 않는 도로 키이면 즉시 포기
 
-  // 고속도로 선형 조회 쿼리 (motorway/trunk/motorway_link만 포함)
+  // 이름별 개별 bbox 전략 — 링 도로를 이름 단위로 잘라낸다
+  // nameBounds에 해당 이름이 있으면 그 bbox 우선, 없으면 global bounds, 둘 다 없으면 bbox 없음
+  const nameBounds = cfg.nameBounds || {};
+  const nameLines = cfg.names
+    .map(n => {
+      const nb = nameBounds[n] || cfg.bounds;  // 이름별 bbox → global bounds 순으로 폴백
+      const bboxStr = nb
+        ? `(${nb.minY},${nb.minX},${nb.maxY},${nb.maxX})`  // Overpass way bbox 포맷
+        : '';
+      return `way["name"="${n}"]["highway"~"motorway|trunk|motorway_link"]${bboxStr};`;
+    })
+    .join('');
+
+  // Overpass QL 쿼리 — 고속도로 선형 조회 (전역 bbox 없음, per-way bbox 사용)
+  // timeout:60 = Overpass 서버 자체 처리 제한 (서해안 340km 등 장거리 도로 대응)
   const query =
-    `[out:json][timeout:30];` +
-    `(way["name"="${osmName}"]["highway"~"motorway|trunk|motorway_link"];);` +
+    `[out:json][timeout:60];` +
+    `(${nameLines});` +
     `out geom;`;
 
-  for (const endpoint of OVERPASS_BROWSER_ENDPOINTS) {
-    try {
-      // AbortController로 엔드포인트별 10초 타임아웃 적용 (35초에서 단축)
-      // 10초 안에 응답 없으면 다음 엔드포인트로 넘어가 전체 대기 시간을 줄인다
-      const ctrl = new AbortController();
-      const tid  = setTimeout(() => ctrl.abort(), 10000);
+  // 모든 엔드포인트를 동시에 요청 → raceFirstValid로 첫 번째 유효 결과 선택
+  // 한 서버가 빠르게 응답하면 나머지 느린 요청의 결과는 무시된다
+  const result = await raceFirstValid(
+    ...OVERPASS_BROWSER_ENDPOINTS.map(ep => fetchOneOverpass(ep, query, 45000)),
+  );
 
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        // Overpass는 application/x-www-form-urlencoded POST를 표준으로 지원
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body:    `data=${encodeURIComponent(query)}`,
-        signal:  ctrl.signal,
-      });
-      clearTimeout(tid);
-
-      if (!resp.ok) continue;                       // HTTP 오류 → 다음 엔드포인트
-
-      const json     = await resp.json();
-      const elements = json.elements || [];
-
-      // way 타입이고 좌표가 2개 이상인 요소만 LineString으로 변환
-      const features = elements
-        .filter(el => el.type === 'way' && (el.geometry?.length ?? 0) >= 2)
-        .map(el => ({
-          type: 'Feature',
-          properties: { osm_id: el.id },
-          geometry: {
-            type: 'LineString',
-            coordinates: el.geometry.map(pt => [pt.lon, pt.lat]),
-          },
-        }));
-
-      if (features.length > 0) {
-        console.log(`[MonitoringMap] 브라우저 Overpass 성공 (${endpoint.split('/')[2]}): ${features.length}개 way`);
-        return { type: 'FeatureCollection', features };
-      }
-    } catch {
-      continue;                                     // 타임아웃·네트워크 오류 → 다음 시도
-    }
+  if (!result) {
+    console.warn('[MonitoringMap] 브라우저 Overpass 전체 엔드포인트 실패');
+    return null;
   }
 
-  console.warn('[MonitoringMap] 브라우저 Overpass 전체 엔드포인트 실패');
-  return null;
+  // ── All-or-nothing 클리핑 ───────────────────────────────────────────────
+  // "좌표 일부만 남기기"를 하면 북부 링의 시작 구간(인천→부천 토막)이 남아
+  // 지도에 잘못된 선이 그려진다.
+  // bbox 밖 노드가 하나라도 있는 way 는 통째로 버린다.
+  // 제2영동선 남쪽 호는 모든 노드가 bbox 안에 있으므로 정상적으로 포함된다.
+  if (Object.keys(nameBounds).length > 0) {
+    const clipped = result.features.filter(f => {
+      const featureName = f.properties.name || '';     // 도로 이름 (예: '수도권제1순환고속도로')
+      const clipB = nameBounds[featureName];            // 이 이름에 대한 클리핑 bbox
+      if (!clipB) return true;                          // 클리핑 대상 아니면 그대로 통과
+
+      // bbox 밖 노드가 하나라도 있으면 이 way 전체 제거 (북부 링 제거)
+      return !f.geometry.coordinates.some(
+        ([lon, lat]) =>
+          lon < clipB.minX || lon > clipB.maxX ||
+          lat < clipB.minY || lat > clipB.maxY,
+      );
+    });
+
+    result.features = clipped;
+    if (clipped.length === 0) return null;
+  }
+
+  return result;
 }
 
 function fmtDuration(sec) {
@@ -225,31 +298,20 @@ function buildColoredSegments(features, cameras) {
       continue;
     }
 
-    // 각 좌표 점마다 가장 가까운 카메라 레벨 찾기
-    const pointLevels = coords.map(([lng, lat]) => {
-      let minD = Infinity, nearest = null;
-      for (const cam of camList) {
-        const d = dist2([lng, lat], [cam.lng, cam.lat]);
-        if (d < minD) { minD = d; nearest = cam; }
-      }
-      // 카메라가 300km^2 이내 (위도 기준 약 0.03도≒3.3km)에 없으면 회색
-      return minD < 0.001 ? nearest?.level : null;
-    });
-
-    // 연속하는 같은 레벨끼리 묶어 세그먼트 생성
-    let segStart = 0;
-    for (let i = 1; i <= coords.length; i++) {
-      const curLevel = i < coords.length ? pointLevels[i] : null;
-      const prevLevel = pointLevels[i - 1];
-      if (i === coords.length || curLevel !== prevLevel) {
-        const segCoords = coords.slice(segStart, i);
-        if (segCoords.length >= 2) {
-          const color = LEVEL_COLOR[prevLevel] || ROAD_LINE_GRAY;
-          colored.push({ coords: segCoords, color, strokeWeight: prevLevel ? 6 : 4 });
-        }
-        segStart = i;
-      }
+    // 피처 중점(중간 좌표)에서 가장 가까운 카메라로 이 way 전체 색상 결정
+    // 이전: 각 좌표마다 레벨 계산 후 세그먼트 분할 → 좌표 2개짜리 짧은 way에서
+    //        레벨 전환 경계가 생기면 1개짜리 토막이 버려져 선이 사라지는 버그 발생
+    const midIdx = Math.floor(coords.length / 2);       // 중간 좌표 인덱스
+    const [mLng, mLat] = coords[midIdx];                // 중간 좌표 [경도, 위도]
+    let minD = Infinity, nearest = null;
+    for (const cam of camList) {
+      const d = dist2([mLng, mLat], [cam.lng, cam.lat]);
+      if (d < minD) { minD = d; nearest = cam; }
     }
+    // 3.3km(≈0.001 제곱도) 이내 카메라가 있으면 그 레벨로, 없으면 회색
+    const level = minD < 0.001 ? nearest?.level : null;
+    const color = LEVEL_COLOR[level] || ROAD_LINE_GRAY;
+    colored.push({ coords, color, strokeWeight: level ? 6 : 4 });
   }
 
   return colored;
@@ -387,12 +449,13 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
 
   // ── 도로 폴리라인 그리기 ──────────────────────────────────
   useEffect(() => {
-    if (!mapRef.current || !roadGeo) return;
-    const map = mapRef.current;
+    // roadGeo가 null일 때도(도로 변경 직후) 기존 폴리라인을 반드시 지운다.
+    // 이전: null이면 early return → 이전 도로 폴리라인이 화면에 남아있는 버그 발생
+    polylinesRef.current.forEach(p => p.setMap(null));  // 기존 폴리라인 지도에서 제거
+    polylinesRef.current = [];                           // ref 배열 초기화
 
-    // 기존 폴리라인 제거
-    polylinesRef.current.forEach(p => p.setMap(null));
-    polylinesRef.current = [];
+    if (!mapRef.current || !roadGeo) return;             // 지도 미초기화 or 데이터 없음 → 그리기 건너뜀
+    const map = mapRef.current;
 
     const segments = buildColoredSegments(roadGeo.features, cameras);
     segments.forEach(({ coords, color, strokeWeight }) => {
