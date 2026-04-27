@@ -46,7 +46,6 @@ class TrafficAnalyzer:
         self.frame_h = frame_h                        # 프레임 높이 (픽셀)
         self.fps = fps                                # 영상 FPS
         self.flow_map = flow_map                      # FlowMap 참조
-        self._last_feature: dict | None = None        # 마지막 compute된 feature 벡터 (진단용)
 
         self.grid_size = cfg.grid_size                # 그리드 행/열 수 (기본 15)
         self.cell_w = frame_w / self.grid_size        # 셀 너비 (px)
@@ -176,21 +175,7 @@ class TrafficAnalyzer:
         # ── 4) 레벨 판정 (히스테리시스 포함) ────────────────────────
         self.congestion_judge.apply_level(rule_jam, frame_num)
 
-        # ── feature 저장 (진단용) ─────────────────────────────────────
-        self._last_feature = x_t                      # 마지막 feature 벡터 저장
-
     # ── 공개 메서드: 조회 ─────────────────────────────────────────
-    def get_last_feature(self) -> "dict | None":
-        """마지막 update()에서 계산된 feature 벡터를 반환한다.
-
-        detector.py에서 GRU online_step 레이블 판단에 사용.
-        baseline 미설정(학습 중)이면 None.
-
-        Returns:
-            feature dict or None.
-        """
-        return self._last_feature                     # 마지막 feature 벡터 반환
-
     def get_density_map(self) -> np.ndarray:
         """15×15 그리드 셀별 차량 밀도(대/셀)를 반환한다."""
         return self._density_map.copy()               # 복사본 반환 (외부 변경 방지)

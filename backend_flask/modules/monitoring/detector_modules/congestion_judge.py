@@ -42,7 +42,7 @@ def compute_jam_score_fallback(x_t: dict) -> float:
       - 서행 (cds=0.20, dwell=0.10): core≈0.210 → SLOW
       - 정체 (cds=0.60, dwell=0.50): core≈0.830 → JAM
 
-    ※ occ_gate 포화점: count_ref/valid_cell_count+0.04 (valid=80, count_ref=8 기준 ≈0.14)
+    ※ occ_gate 포화점: known_cnt/count_ref (count_ref=8 기준 → 차량 10대면 occ_gate=1.0)
 
     Args:
         x_t: feature 벡터 dict.
@@ -68,17 +68,15 @@ def compute_jam_score_fallback(x_t: dict) -> float:
     if known_cnt <= 2 or occupied_cnt <= 2 or flow_occ < 0.06:
         return _clip(0.08 * math.sqrt(flow_occ), 0.0, 0.10)  # 최대 0.10으로 제한
 
-    # ── 2) 규모 게이트: 차량 수·점유율이 충분할수록 체류 신호를 신뢰 ──
-    # count_gate: 2대 이하=0.0, 12대=1.0 — 소수 차량 오탐 억제 (분모 8→10: 6fps 저감지 환경 보정)
-    # occ_gate  : count_ref/valid_cell_count 동적 포화점 — 고정 0.26 제거
-    # scale_gate: 두 조건 모두 충족해야 체류 신호를 최대 반영
-    count_gate = _clip((known_cnt - 2) / 10.0, 0.0, 1.0)      # 2대 이하는 0, 12대면 1.0 (13→10)
-    _count_ref_val  = float(x_t.get("count_ref", 8.0))         # config.count_ref (기준 차량 수, 기본 8)
-    _valid_cnt      = max(int(x_t.get("valid_cell_count", 400)), 1)  # 방향별 유효 셀 수 (기본 400)
-    _occ_gate_lo    = 0.04                                      # 최소 점유율 하한 (4셀 미만 완전 억제)
-    _occ_gate_range = max(0.05, _count_ref_val / _valid_cnt)    # 기준 밀도: count_ref/valid (고정 0.30 제거)
-    occ_gate   = _clip((flow_occ - _occ_gate_lo) / _occ_gate_range, 0.0, 1.0)  # 기준 밀도 이상이면 1.0
-    scale_gate = count_gate * occ_gate                          # 두 게이트의 곱 (AND 조건)
+    # ── 2) 규모 게이트: 차량 수가 충분할수록 체류 신호를 신뢰 ──────────
+    # count_gate: 2대 이하=0.0, count_ref+2대=1.0 — 소수 차량 오탐 억제
+    # occ_gate  : known_cnt/count_ref 기반 — 플로우맵 크기(셀 수) 무관, 차량 수만으로 포화점 결정
+    #             이유: valid_cell_count 기반 flow_occ는 맵이 넓어질수록 희석되어 gate가 낮아지는 문제
+    # scale_gate: 두 게이트의 곱 (AND 조건) — 둘 다 충족해야 체류 신호를 최대 반영
+    count_gate = _clip((known_cnt - 2) / 10.0, 0.0, 1.0)       # 2대 이하는 0, 12대면 1.0
+    count_ref  = float(x_t.get("count_ref", 8.0))               # config.count_ref (기준 차량 수, 기본 8)
+    occ_gate   = _clip((known_cnt - 2) / max(count_ref, 1), 0.0, 1.0)  # 차량 수 기반 포화 (133차)
+    scale_gate = count_gate * occ_gate                           # 두 게이트의 곱 (AND 조건)
 
     # ── 3) 핵심 jam 계산 ─────────────────────────────────────────────
     # [설계 원칙]
@@ -93,10 +91,12 @@ def compute_jam_score_fallback(x_t: dict) -> float:
     core = (
         0.55 * cds                   # 교통 밀도 배경 신호 (1.90→0.55: 단독 JAM 유발 방지)
         + 0.20 * persist             # 점유 지속성 보조 (0.25→0.20)
-        + 1.00 * dwell               # 15f+ 체류 셀 비율 (0.10×√dwell→1.00×dwell: 진짜 정체 주 신호)
+        + 0.50 * dwell               # 15f+ 체류 셀 비율 (133차: 1.00→0.50, dwell 분모 변경 보정)
     )
 
-    jam = core * scale_gate + 0.12 * math.sqrt(flow_occ)  # 규모 게이트 적용 + 기저 신호
+    # 기저 신호: flow_occ(셀 수 기반) → known_cnt/count_ref(차량 수 기반) 으로 교체 (133차)
+    # 이유: 플로우맵이 넓어도 차량 수가 같으면 동일한 기저 신호를 보장
+    jam = core * scale_gate + 0.05 * math.sqrt(known_cnt / max(count_ref, 1))
 
     return _clip(jam, 0.0, 1.0)
 

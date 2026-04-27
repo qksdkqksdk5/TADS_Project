@@ -43,3 +43,8 @@ export const startSegment = (host, road, start_ic, end_ic) =>
 
 export const stopSegment = (host, road, start_ic, end_ic) =>
   createClient(host).post(`/its/stop_segment`, { road, start_ic, end_ic });
+
+// 연결 실패한 카메라를 최신 ITS URL로 강제 재시작한다.
+// 백엔드가 기존 감지기를 중지하고 새 MonitoringDetector를 시작한다.
+export const restartCamera = (host, camera_id) =>
+  createClient(host).post(`/restart_camera`, { camera_id });

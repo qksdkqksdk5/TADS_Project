@@ -26,11 +26,11 @@ function fmtElapsed(sec) {
   return `${m}분 ${s}초`;
 }
 
-// ── 로그 한 행 (2줄 레이아웃) ────────────────────────────────
+// ── 로그 한 행 (3줄 레이아웃) ────────────────────────────────
 // 1줄: 아이콘 + 카메라 ID + 이벤트 유형 레이블
-// 2줄: 감지 시각 + 경과 시간 + 경보 해제 버튼
-// 1줄 구성으로 두면 flexShrink:0 요소 합이 280px 컨테이너를 초과하므로 2줄로 분리한다.
-function EventItem({ event, onSelect, onDismissWrongway }) {
+// 2줄: 감지 시각 + 경과 시간
+// 3줄: 조치 완료 버튼 + 조치 불필요 버튼 (미해결 이벤트에만 표시)
+function EventItem({ event, onSelect, onDismiss }) {
   // received_at(클라이언트 수신 ms) 기준으로 경과 시간 계산
   // detected_at 은 감지 시각 표시용으로만 사용한다
   const elapsed     = useElapsed(event.received_at);
@@ -54,9 +54,13 @@ function EventItem({ event, onSelect, onDismissWrongway }) {
     ? `역주행 (${event.label || event.track_id || '-'})`
     : `${event.direction ? `${event.direction} ` : ''}${event.level} (${event.jam_score?.toFixed(2) ?? '-'})`;
 
+  // 해소 사유 텍스트 — resolve_reason 값에 따라 결정
+  const resolveLabel = event.resolve_reason === 'no_action' ? '조치 불필요' : '조치 완료';
+
   // 해소 여부에 따른 행 배경·테두리 스타일
+  // 해소된 경우: 배경색·테두리 모두 제거하고 투명도 낮춤
   const rowStyle = event.is_resolved
-    ? { background: 'transparent', opacity: 0.45 }
+    ? { background: 'transparent', opacity: 0.5 }
     : { background: `${accentColor}0d`, borderLeft: `3px solid ${accentColor}` };
 
   return (
@@ -85,18 +89,19 @@ function EventItem({ event, onSelect, onDismissWrongway }) {
           {event.camera_id || '-'}
         </span>
 
-        {/* 이벤트 유형 레이블 — 남은 공간 전부 차지, 초과 시 말줄임 */}
+        {/* 이벤트 유형 레이블 — 해소 시 색상 제거 + 줄긋기 효과 */}
         <span style={{
           color: event.is_resolved ? '#475569' : accentColor,
           flex: 1, minWidth: 0,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           fontWeight: 600,
+          textDecoration: event.is_resolved ? 'line-through' : 'none', // 해소 시 글씨 줄긋기
         }}>
           {labelText}
         </span>
       </div>
 
-      {/* ── 2줄: 감지 시각 + 경과 시간 + 경보 해제 버튼 ── */}
+      {/* ── 2줄: 감지 시각 + 경과 시간 또는 해소 사유 ── */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: '6px',
         marginTop: '3px', minWidth: 0,
@@ -109,42 +114,69 @@ function EventItem({ event, onSelect, onDismissWrongway }) {
         {/* 빈 공간 채우기 */}
         <span style={{ flex: 1 }} />
 
-        {/* 경과 시간 또는 해소됨 표시 */}
+        {/* 미해결: 경과 시간 표시 / 해소됨: 조치 완료 or 조치 불필요 표시 */}
         {!event.is_resolved && (
           <span style={{ color: '#475569', flexShrink: 0, fontSize: '10px' }}>
             {fmtElapsed(elapsed)}
           </span>
         )}
         {event.is_resolved && (
-          <span style={{ color: '#334155', flexShrink: 0, fontSize: '10px' }}>해소됨</span>
+          <span style={{ color: '#334155', flexShrink: 0, fontSize: '10px' }}>
+            {resolveLabel}
+          </span>
         )}
+      </div>
 
-        {/* 역주행 경보 해제 버튼 — 역주행 미해결 이벤트에만 표시 */}
-        {isWrongway && !event.is_resolved && (
+      {/* ── 3줄: 조치 버튼 2개 — 미해결 이벤트에만 표시 ── */}
+      {!event.is_resolved && (
+        <div style={{
+          display: 'flex', gap: '5px',
+          marginTop: '5px',
+        }}>
+          {/* 조치 완료 버튼 — 클릭 시 해소 처리 (reason: 'action') */}
           <button
-            onClick={(e) => { e.stopPropagation(); onDismissWrongway(event.id); }}
+            onClick={(e) => { e.stopPropagation(); onDismiss(event.id, 'action'); }}
             style={{
+              flex: 1,                        // 버튼 두 개가 공간을 반반 나눔
               background: 'transparent',
-              border: '1px solid #f97316',
-              color: '#f97316',
-              padding: '1px 6px',
+              border: `1px solid ${accentColor}`,
+              color: accentColor,
+              padding: '2px 0',
               borderRadius: '4px',
               fontSize: '10px',
               cursor: 'pointer',
-              flexShrink: 0,
               fontWeight: 600,
             }}
           >
-            경보 해제
+            조치 완료
           </button>
-        )}
-      </div>
+
+          {/* 조치 불필요 버튼 — 클릭 시 해소 처리 (reason: 'no_action') */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onDismiss(event.id, 'no_action'); }}
+            style={{
+              flex: 1,                        // 버튼 두 개가 공간을 반반 나눔
+              background: 'transparent',
+              border: '1px solid #475569',
+              color: '#475569',
+              padding: '2px 0',
+              borderRadius: '4px',
+              fontSize: '10px',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            조치 불필요
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
-export default function EventLog({ eventLogs, onSelectCamera, onDismissWrongway }) {
+// onDismiss(eventId, reason): 조치 완료('action') 또는 조치 불필요('no_action') 처리 콜백
+export default function EventLog({ eventLogs, onSelectCamera, onDismiss }) {
   const unresolvedCount = eventLogs.filter(e => !e.is_resolved).length;
 
   // 미해결 상단 정렬, 동일 상태끼리는 최신순 유지
@@ -187,7 +219,7 @@ export default function EventLog({ eventLogs, onSelectCamera, onDismissWrongway 
               key={ev.id}
               event={ev}
               onSelect={onSelectCamera}
-              onDismissWrongway={onDismissWrongway}
+              onDismiss={onDismiss}
             />
           ))
         )}

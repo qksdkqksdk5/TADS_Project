@@ -185,9 +185,10 @@ export default function MetricsPanel({ data }) {
         </div>
       )}
 
-      {/* 5분 후 예측 영역 — HistoricalPredictor 결과를 방향별로 표시한다 */}
+      {/* 정체 예측 영역 — 1h·2h·3h 3열 구조 (132차 개편) */}
       <div style={{ ...sectionStyle, flex: 1, borderBottom: 'none' }}>
-        <div style={labelStyle}>5분 후 예측</div>
+        <div style={labelStyle}>정체 예측 (1h·2h·3h)</div>
+        {/* 방향별 예측 뱃지: 각 뱃지 내부에 1h/2h/3h 3열 표시 */}
         <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
           {/* 왼쪽 방향(CCTV 기준) 예측 뱃지 */}
           <PredictionBadge
@@ -236,48 +237,64 @@ function DirectionBadge({ direction, level, jam, fade }) {
   );
 }
 
-// 5분 후 예측 뱃지
-// direction: 표시할 방향 레이블 (상행/하행 등)
+// 정체 예측 뱃지 — 1h·2h·3h 3열 구조 (132차 개편)
+// direction:  표시할 방향 레이블 (상행/하행 등)
 // prediction: HistoricalPredictor.predict() 결과 배열 또는 null
-//   배열 첫 번째 요소: { predicted_level, confidence, jam_score, interpolated }
+//   배열: [{ horizon_min: 60|120|180, predicted_level, confidence, jam_score, interpolated }, ...]
 //   null이면 학습 데이터 부족 → "학습 중" 표시
+//
+// 변경 사항 (132차):
+//   - 5분(1개) → 1h·2h·3h 3열 구조로 전면 개편
+//   - 헤더에 "1h", "2h", "3h" 시간대 레이블 표시
+//   - 데이터 없는 열은 "-" 표시
+//   - 신뢰도(%) 표시 제거
 function PredictionBadge({ direction, prediction }) {
-  // 예측 결과 첫 번째 항목만 사용 (horizon=5분)
-  const pred  = prediction?.[0] ?? null;
-  const color = pred ? (PRED_COLOR[pred.predicted_level] || '#6b7280') : '#6b7280';
-  const bg    = pred ? (PRED_BG[pred.predicted_level]    || '#37415114') : '#37415114';
-  const label = pred ? (PRED_LABEL[pred.predicted_level] || '-') : '-';
-  // 신뢰도를 0~100% 정수로 변환한다
-  const conf  = pred ? Math.round((pred.confidence ?? 0) * 100) : null;
+  // horizon_min → 예측 결과 딕셔너리 (60 → {...}, 120 → {...}, 180 → {...})
+  const predByMin = {};
+  if (Array.isArray(prediction)) {
+    for (const p of prediction) {
+      predByMin[p.horizon_min] = p;  // horizon_min 키로 인덱싱
+    }
+  }
+  const hasAny = Object.keys(predByMin).length > 0;  // 데이터가 하나라도 있는지 여부
+
+  // 헤더 시간대 레이블과 대응 horizon_min 목록
+  const HORIZONS = [
+    { label: '1h', min: 60  },
+    { label: '2h', min: 120 },
+    { label: '3h', min: 180 },
+  ];
 
   return (
     <div style={{
       flex: 1, padding: '8px', borderRadius: '8px',
-      background: bg, border: `1px solid ${color}44`,
-      textAlign: 'center',
+      background: '#0f172a', border: '1px solid #1e293b',
     }}>
       {/* 방향 레이블 */}
-      <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '4px' }}>{direction}</div>
-      {pred ? (
-        <>
-          {/* 예측 레벨 텍스트 */}
-          <div style={{ fontSize: '14px', fontWeight: 700, color, lineHeight: 1 }}>{label}</div>
-          {/* 신뢰도 바 */}
-          <div style={{ marginTop: '5px', background: '#1e293b', borderRadius: '4px', height: '4px', overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', width: `${conf}%`,
-              background: color, borderRadius: '4px',
-              transition: 'width 0.6s ease',
-            }} />
-          </div>
-          {/* 신뢰도 수치 */}
-          <div style={{ fontSize: '10px', color: `${color}cc`, marginTop: '3px' }}>
-            {conf}%{pred.interpolated ? ' ≈' : ''}
-          </div>
-        </>
-      ) : (
+      <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '5px', textAlign: 'center' }}>
+        {direction}
+      </div>
+
+      {!hasAny ? (
         /* 데이터 부족 시 학습 중 안내 */
-        <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>학습 중</div>
+        <div style={{ fontSize: '11px', color: '#475569', textAlign: 'center' }}>학습 중</div>
+      ) : (
+        /* 1h / 2h / 3h 3열 구조 */
+        <div style={{ display: 'flex', gap: '2px' }}>
+          {HORIZONS.map(({ label, min }) => {
+            const p     = predByMin[min] ?? null;  // 해당 horizon 예측 결과 (없으면 null)
+            const color = p ? (PRED_COLOR[p.predicted_level] || '#6b7280') : '#475569';
+            const lv    = p ? (PRED_LABEL[p.predicted_level] || '-') : '-';
+            return (
+              <div key={min} style={{ flex: 1, textAlign: 'center' }}>
+                {/* 시간대 헤더 */}
+                <div style={{ fontSize: '9px', color: '#475569', marginBottom: '3px' }}>{label}</div>
+                {/* 예측 레벨 (없으면 "-") */}
+                <div style={{ fontSize: '11px', fontWeight: 700, color, lineHeight: 1 }}>{lv}</div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

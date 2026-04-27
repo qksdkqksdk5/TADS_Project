@@ -66,17 +66,39 @@ def _pause_all_monitoring():
     현재 활성화된 모든 MonitoringDetector 를 일시정지한다.
     YOLO 추론/emit 루프만 멈추고 학습 완료 상태(모델 가중치)는 메모리에 유지된다.
     monitoring_ 접두사 키만 대상으로 하여 타 팀 감지기에는 영향을 주지 않는다.
+    스트림 열기 실패로 스레드가 죽은 dead 감지기는 일시정지 대상에서 제외하고 정리한다.
     """
+    targets  = []   # pause() 호출 대상 감지기 목록
+    dead_keys = []  # 스레드가 죽어 정리해야 할 키 목록
+
     with detector_manager._lock:
-        # active_detectors 에서 MonitoringDetector 인스턴스만 추출
-        targets = [
-            det for key, det in detector_manager.active_detectors.items()
-            if key.startswith('monitoring_') and isinstance(det, MonitoringDetector)
-        ]
+        for key, det in list(detector_manager.active_detectors.items()):
+            # monitoring_ 접두사 + MonitoringDetector 타입 검사
+            if not key.startswith('monitoring_') or not isinstance(det, MonitoringDetector):
+                continue
+            t = detector_manager.threads.get(key)
+            if t and t.is_alive():
+                # 스레드가 살아있는 감지기만 일시정지 대상으로 수집
+                targets.append(det)
+            else:
+                # 스트림 실패 등으로 스레드가 죽은 감지기 → 정리 대상으로 분류
+                dead_keys.append(key)
+
+        # dead 감지기를 active_detectors 와 threads 에서 제거한다.
+        # 다음 번 _try_start_camera 호출 시 재생성되도록 자리를 비운다.
+        for key in dead_keys:
+            detector_manager.active_detectors.pop(key, None)
+            detector_manager.threads.pop(key, None)
+
     for det in targets:
         det.pause()  # 각 감지기에 일시정지 신호 전달
+
     if targets:
         print(f"⏸️  [monitoring] {len(targets)}개 감지기 일시정지 완료")
+    if dead_keys:
+        # 거짓 로그 방지: 실제로 동작 중이 아니었던 dead 감지기 수를 알린다
+        print(f"🗑️  [monitoring] {len(dead_keys)}개 dead 감지기 자동 정리: "
+              f"{[k.replace('monitoring_', '') for k in dead_keys]}")
 
 
 def _resume_all_monitoring():
@@ -84,16 +106,39 @@ def _resume_all_monitoring():
     일시정지된 모든 MonitoringDetector 를 재개한다.
     학습 완료 상태가 그대로 유지된 채로 추론이 이어진다.
     monitoring_ 접두사 키만 대상으로 하여 타 팀 감지기에는 영향을 주지 않는다.
+    스트림 열기 실패로 스레드가 죽은 dead 감지기는 재개 대상에서 제외하고 정리한다.
+    dead 감지기를 정리해야 다음 번 탭 진입 시 _try_start_camera 가 재시작할 수 있다.
     """
+    targets   = []   # resume() 호출 대상 감지기 목록
+    dead_keys = []   # 스레드가 죽어 정리해야 할 키 목록
+
     with detector_manager._lock:
-        targets = [
-            det for key, det in detector_manager.active_detectors.items()
-            if key.startswith('monitoring_') and isinstance(det, MonitoringDetector)
-        ]
+        for key, det in list(detector_manager.active_detectors.items()):
+            # monitoring_ 접두사 + MonitoringDetector 타입 검사
+            if not key.startswith('monitoring_') or not isinstance(det, MonitoringDetector):
+                continue
+            t = detector_manager.threads.get(key)
+            if t and t.is_alive():
+                # 스레드가 살아있는 감지기만 재개 대상으로 수집
+                targets.append(det)
+            else:
+                # 스트림 실패 등으로 run() 스레드가 죽은 감지기 → 정리 대상
+                dead_keys.append(key)
+
+        # dead 감지기 제거 — 제거해야 다음 start_segment 때 새로 시작할 수 있다
+        for key in dead_keys:
+            detector_manager.active_detectors.pop(key, None)
+            detector_manager.threads.pop(key, None)
+
     for det in targets:
         det.resume()  # 각 감지기에 재개 신호 전달
+
     if targets:
         print(f"▶️  [monitoring] {len(targets)}개 감지기 재개 완료")
+    if dead_keys:
+        # 거짓 "재개 완료" 로그 방지: 실제 dead 감지기 수와 카메라 ID를 표시한다
+        print(f"🗑️  [monitoring] {len(dead_keys)}개 dead 감지기 자동 정리 (스트림 실패 추정): "
+              f"{[k.replace('monitoring_', '') for k in dead_keys]}")
 
 
 # ── Socket.IO 이벤트 핸들러 등록 함수 ────────────────────────────────────────
@@ -1170,6 +1215,99 @@ def its_probe_batch():
     result['road'] = road   # 요청한 도로명도 응답에 포함
 
     return jsonify(result), 200
+
+
+# ── 카메라 강제 재시작 API ────────────────────────────────────────────────────
+
+@monitoring_bp.route('/restart_camera', methods=['POST'])
+def restart_camera():
+    """
+    실행 중인 MonitoringDetector를 강제로 재시작한다.
+    ITS API에서 최신 URL을 가져와 새 감지기를 생성한다.
+
+    이 엔드포인트가 필요한 상황:
+    - 5회 재연결 실패 후 지수 백오프 대기 중에 즉시 재시작하고 싶을 때
+    - 스트림 URL이 만료되어 수동으로 새 URL을 받아 재시작할 때
+    - 프론트엔드의 "다시 시도" 버튼 클릭 시 호출된다
+
+    Body (JSON):
+        camera_id  str  필수 — 재시작할 카메라 ID
+
+    Returns:
+        200  {"status": "ok",       "camera_id": ...}
+        400  {"status": "error",    "message": "camera_id 필요"}
+        404  {"status": "not_found","message": "실행 중인 감지기 없음"}
+        503  {"status": "error",    "message": "ITS API에서 카메라 정보 조회 실패"}
+    """
+    data      = request.get_json(silent=True) or {}    # 요청 바디 JSON 파싱
+    camera_id = data.get('camera_id', '').strip()      # 재시작할 카메라 ID 추출
+
+    # camera_id 누락 시 즉시 반환
+    if not camera_id:
+        return jsonify({"status": "error", "message": "camera_id 필요"}), 400
+
+    # Flask 앱 객체 / SocketIO / DB 참조 (start_camera 엔드포인트와 동일한 패턴)
+    from flask import current_app
+    app_obj  = current_app._get_current_object()            # 실제 앱 객체 (proxy 해제)
+    socketio = current_app.extensions.get('socketio')      # Socket.IO 인스턴스
+    from models import db as db_inst                        # SQLAlchemy DB 인스턴스
+
+    key = _monitoring_key(camera_id)   # 'monitoring_{camera_id}' 형태의 딕셔너리 키
+
+    # ── 기존 감지기 메타데이터 수집 ──────────────────────────────────────────────
+    # 재시작에 필요한 위치 정보(lat, lng, location)를 기존 감지기에서 가져온다.
+    # ITS API 재조회 실패 시 폴백으로 사용하기 위해 미리 저장해둔다.
+    with detector_manager._lock:
+        det = detector_manager.active_detectors.get(key)    # 기존 감지기 참조
+
+    if det is None:
+        # 감지기 자체가 없으면 재시작 불가
+        return jsonify({"status": "not_found", "message": "실행 중인 감지기 없음"}), 404
+
+    # 기존 감지기에서 필요한 메타데이터 추출 (감지기 중지 전에 저장)
+    road_key = getattr(det, '_road_key', '')   # 도로 키 (예: 'gyeongbu')
+    lat      = getattr(det, 'lat',      37.5)  # 위도 (기본값: 서울 근처)
+    lng      = getattr(det, 'lng',     127.0)  # 경도
+    location = getattr(det, 'location',   '')  # 위치 설명 문자열
+
+    # ── 기존 감지기 중지 ────────────────────────────────────────────────────────
+    # stop() 호출 → is_running=False 설정 → run() 루프가 다음 프레임에서 종료된다.
+    det.stop()
+    with detector_manager._lock:
+        detector_manager.active_detectors.pop(key, None)   # active_detectors 에서 제거
+        detector_manager.threads.pop(key, None)             # 스레드 참조도 제거
+
+    print(f"♻️  [{camera_id}] 강제 재시작 요청 — 기존 감지기 중지")
+
+    # ── ITS API에서 최신 카메라 정보(URL) 가져오기 ──────────────────────────────
+    # ITS URL은 토큰이 포함되어 있어 만료될 수 있다.
+    # 재시작 시점에 ITS API를 재조회해 최신 URL을 받아야 새 스트림이 열린다.
+    cam_info = None
+    if road_key and road_key in its_helper.ROAD_CONFIG:
+        try:
+            # ITS API로 해당 도로 전체 카메라 목록 조회 (캐시 활용)
+            cctv_list = its_helper.get_cctv_list(road_key)
+            # camera_id가 일치하는 카메라 정보만 추출
+            for cam in cctv_list:
+                if cam.get('camera_id') == camera_id:
+                    cam_info = cam
+                    break
+        except Exception as e:
+            print(f"⚠️ [{camera_id}] ITS API 재조회 실패: {e}")
+
+    # ITS API 조회 실패 시 503 반환 (URL 없이는 재시작 불가)
+    if cam_info is None:
+        return jsonify({
+            "status":  "error",
+            "message": "ITS API에서 카메라 정보 조회 실패 — 잠시 후 다시 시도하세요",
+        }), 503
+
+    # ── 새 MonitoringDetector 시작 ─────────────────────────────────────────────
+    # _try_start_camera는 dead 감지기 자동 정리 + get_or_create 를 처리한다.
+    _try_start_camera(cam_info, socketio, app_obj, db_inst)
+    print(f"🚦 [{camera_id}] 강제 재시작 완료 — 새 URL로 감지기 시작")
+
+    return jsonify({"status": "ok", "camera_id": camera_id}), 200
 
 
 # ── 큐 러너 실시간 진단 엔드포인트 ───────────────────────────────────────────

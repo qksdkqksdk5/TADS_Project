@@ -496,17 +496,23 @@ def probe_stream_url(url: str) -> dict:
     """
     result: dict = {'url': url}
 
-    # ITS 스트리밍 서버는 브라우저 UA(Mozilla/5.0)를 403으로 막는다.
-    # cv2.VideoCapture 가 내부적으로 쓰는 FFMPEG UA 를 그대로 사용해야
-    # 실제 cv2 동작과 같은 조건으로 탐침할 수 있다.
-    _FFMPEG_UA = 'Lavf/58.76.100'
+    # ITS 스트리밍 서버는 Lavf(FFMPEG) UA를 403으로 막고, 브라우저 UA는 허용한다.
+    # 따라서 브라우저 UA로 탐침해야 실제 접근 가능 여부를 정확히 알 수 있다.
+    # (과거 주석 "브라우저 UA를 막는다"는 오류 → 수정됨)
+    # cv2 폴백 전략: MSMF(기본) → FFMPEG+브라우저UA 순으로 시도하므로
+    # 브라우저 UA 탐침이 성공하면 FFMPEG 폴백으로 스트림을 열 수 있다.
+    _BROWSER_UA = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    )
 
     try:
         resp = requests.get(
             url,
             stream=True,     # 전체 다운로드 없이 헤더+첫 바이트만 읽음
             timeout=5,       # 5초 이내 응답 없으면 포기
-            headers={'User-Agent': _FFMPEG_UA},
+            headers={'User-Agent': _BROWSER_UA},
         )
 
         result['http_status']    = resp.status_code

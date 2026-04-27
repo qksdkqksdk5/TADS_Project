@@ -21,6 +21,11 @@ export function useMonitoringSocket(host, callbacks = {}) {
   // null → 아직 수신 전, 객체 → 수신 완료 (MonitoringMap이 이를 감지해 도로선 렌더)
   const [serverRoadGeo, setServerRoadGeo] = useState(null);
 
+  // camera_stream_failed 이벤트로 수신한 카메라별 실패 상태
+  // { [camera_id]: { fail_count, next_retry_in, next_retry_at } }
+  // camera_stream_recovered 수신 시 해당 카메라 항목이 제거된다.
+  const [streamFailures, setStreamFailures] = useState({});
+
   const socketRef   = useRef(null);
   // 중지된 카메라 ID 집합 — 이 ID의 traffic_update는 무시 (재추가 방지)
   const stoppedRef  = useRef(new Set());
@@ -28,10 +33,11 @@ export function useMonitoringSocket(host, callbacks = {}) {
   const callbackRef = useRef(callbacks);
   useEffect(() => { callbackRef.current = callbacks; });
 
-  // ── 이벤트 해소 처리 (경보 해제 버튼 or resolved 소켓 이벤트) ──
-  const resolveEvent = useCallback((eventId) => {
+  // ── 이벤트 해소 처리 (조치 완료 / 조치 불필요 버튼) ──
+  // reason: 'action'(조치 완료) | 'no_action'(조치 불필요)
+  const resolveEvent = useCallback((eventId, reason = 'action') => {
     setEventLogs(prev =>
-      prev.map(ev => ev.id === eventId ? { ...ev, is_resolved: true } : ev)
+      prev.map(ev => ev.id === eventId ? { ...ev, is_resolved: true, resolve_reason: reason } : ev)
     );
   }, []);
 
@@ -127,6 +133,29 @@ export function useMonitoringSocket(host, callbacks = {}) {
       }
     });
 
+    // 백엔드 MonitoringDetector가 5회 재연결 실패 후 지수 백오프 대기에 진입할 때 수신
+    // fail_count: 누적 실패 횟수, next_retry_in: 다음 재시도까지 남은 초
+    sock.on('camera_stream_failed', (data) => {
+      setStreamFailures(prev => ({
+        ...prev,
+        [data.camera_id]: {
+          fail_count:    data.fail_count,     // 몇 번째 실패인지
+          next_retry_in: data.next_retry_in,  // 다음 재시도까지 남은 초
+          next_retry_at: data.next_retry_at,  // 다음 재시도 예정 ISO 시각
+          failed_at:     Date.now(),          // 클라이언트 수신 시각 (표시용)
+        },
+      }));
+    });
+
+    // 백엔드가 정상 프레임을 다시 받으면 실패 상태를 제거한다.
+    sock.on('camera_stream_recovered', (data) => {
+      setStreamFailures(prev => {
+        const next = { ...prev };
+        delete next[data.camera_id];   // 해당 카메라의 실패 상태 제거
+        return next;
+      });
+    });
+
     // 이벤트 해소 (Step 9에서 emit — 지금은 수신만 준비)
     sock.on('resolved', (data) => {
       // camera_id 기준으로 가장 최근 미해결 이벤트 해소 처리
@@ -173,6 +202,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
     emitSelectCamera,
     resolveEvent,
     removeCameras,
-    serverRoadGeo,   // road_geo_ready 이벤트로 수신한 GeoJSON (null=미수신)
+    serverRoadGeo,    // road_geo_ready 이벤트로 수신한 GeoJSON (null=미수신)
+    streamFailures,   // { [camera_id]: { fail_count, next_retry_in, ... } } — 실패 중인 카메라 목록
   };
 }

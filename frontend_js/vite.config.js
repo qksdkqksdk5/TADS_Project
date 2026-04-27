@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const test = {
     environment: 'jsdom',        // 브라우저 DOM API 시뮬레이션
     globals: true,               // describe/it/expect 전역 사용 가능
-    setupFiles: [],              // 전역 setup 파일 (필요 시 추가)
+    setupFiles: ['./src/test-setup.js'],  // jest-dom 커스텀 매처 등록
   };
   const rootPath = path.resolve(__dirname, '../');
   const env = loadEnv(mode, rootPath, '');

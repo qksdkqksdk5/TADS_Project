@@ -30,7 +30,7 @@ except AttributeError:
     os.environ.setdefault('OPENCV_LOG_LEVEL', 'WARNING')
 import gevent
 from gevent.threadpool import ThreadPool as _GeventThreadPool
-from datetime import datetime
+from datetime import datetime, timedelta   # timedelta: 다음 재시도 예정 시각 계산에 필요
 from pathlib import Path
 
 # ── 모듈 경로 등록 ───────────────────────────────────────────────────────
@@ -48,9 +48,9 @@ for _p in (_BASE_DIR, _MODULES_DIR):
 # 학습 결과 재사용으로 서버 재시작 시 매번 학습하는 비효율을 제거한다.
 # (이전: C:\final_pj\src → 현재: detector_modules/ 로 이전)
 from detector_modules.flow_map_matcher import (       # 스냅샷 저장·검색 함수 임포트
-    FlowMapMatcher,                                   # 교차 카메라 매칭
-    save_flow_snapshot,                               # 타임스탬프 기반 스냅샷 저장
+    save_flow_snapshot,                               # 타임스탬프 기반 스냅샷 저장 (dir_label_a 포함)
     find_best_snapshot,                               # 현재 프레임과 가장 유사한 스냅샷 검색
+    load_snapshot_meta,                               # 저장된 A방향 레이블 메타 읽기 (133차)
 )
 
 # ── flow_map 캐시 저장 루트 ────────────────────────────────────────────────
@@ -211,7 +211,7 @@ def _open_rtsp_cap(url: str):
 
 def _open_http_cap(url: str):
     """
-    HTTP/HLS 스트림을 여는 헬퍼.
+    HTTP/HLS 스트림을 여는 헬퍼 — 1차 시도 (MSMF 백엔드).
 
     ※ cv2.CAP_FFMPEG 를 명시하지 않는다.
     ITS 서버는 FFMPEG 백엔드의 User-Agent("Lavf/xx.xx.xx")를 거부해 HTTP 403을
@@ -219,8 +219,9 @@ def _open_http_cap(url: str):
     돌려보내 스트림 열기에 실패한다.
 
     백엔드를 명시하지 않으면 Windows에서 OpenCV 가 MSMF(Windows Media Foundation)를
-    자동 선택한다. MSMF 는 Windows 표준 HTTP 스택을 사용하므로 ITS 서버가 허용한다.
-    (view_feed 엔드포인트가 cv2.VideoCapture(url) 로 정상 동작하는 것과 같은 원리)
+    자동 선택한다. MSMF 는 Windows 표준 HTTP 스택을 사용하므로 대부분의 ITS 카메라에서
+    허용된다. 일부 카메라가 MSMF UA 도 거부하는 경우 _open_http_cap_browser_ua 로
+    재시도한다.
 
     _CAP_OPEN_LOCK 은 여전히 유지한다.
     여러 스레드가 cv2.VideoCapture() 를 동시에 호출하면 백엔드 플러그인 초기화
@@ -231,6 +232,49 @@ def _open_http_cap(url: str):
         c = cv2.VideoCapture(url)
         # 버퍼를 최소화해 실시간 스트림 지연을 줄인다
         c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return c
+
+
+# ITS 서버가 허용하는 브라우저 User-Agent
+# MSMF UA 를 거부하는 일부 카메라의 폴백용으로 사용한다.
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/120.0.0.0 Safari/537.36'
+)
+
+
+def _open_http_cap_browser_ua(url: str):
+    """
+    HTTP/HLS 스트림을 여는 헬퍼 — 2차 시도 (FFMPEG + 브라우저 UA).
+
+    MSMF(_open_http_cap)가 실패한 카메라에 대한 폴백 함수다.
+    ITS 서버 중 일부는 MSMF UA 를 거부하지만 브라우저 UA(Chrome/Mozilla)는 허용한다.
+
+    FFMPEG 백엔드로 스트림을 열되, 환경변수 OPENCV_FFMPEG_CAPTURE_OPTIONS 를
+    일시적으로 설정해 Lavf 기본 UA 대신 브라우저 UA 를 사용하도록 한다.
+    환경변수는 프로세스 전역이므로 _CAP_OPEN_LOCK 안에서만 설정·복원해
+    다른 스레드의 VideoCapture 호출과 충돌하지 않도록 한다.
+    """
+    with _CAP_OPEN_LOCK:
+        # 기존 환경변수 백업 (복원용)
+        _prev_opts = os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS', '')
+
+        # FFMPEG 가 HTTP 요청 시 보낼 User-Agent 를 브라우저로 교체한다.
+        # 'user_agent;값' 형식이 OPENCV_FFMPEG_CAPTURE_OPTIONS 의 표준 포맷이다.
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = f'user_agent;{_BROWSER_UA}'
+
+        try:
+            # CAP_FFMPEG 명시 — 환경변수 설정이 FFMPEG 백엔드에만 적용되기 때문이다
+            c = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            c.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # 버퍼 최소화 → 실시간성 확보
+        finally:
+            # 환경변수를 원래 값으로 반드시 복원한다 (예외 발생해도 복원)
+            if _prev_opts:
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = _prev_opts
+            else:
+                os.environ.pop('OPENCV_FFMPEG_CAPTURE_OPTIONS', None)
+
     return c
 
 
@@ -293,9 +337,9 @@ class MonitoringDetector(BaseDetector):
         self.predictor_b        = None   # B방향 단기 추세 예측기
         self._hist_pred_a       = None   # A방향 시각별 이력 기반 5분 후 예측기
         self._hist_pred_b       = None   # B방향 시각별 이력 기반 5분 후 예측기
-        self._prev_ref_direction = None  # 재학습 직전 방향 벡터 (방향 반전 감지용)
-                                         # 재학습 완료 후 전후 방향 비교 → 180° 회전 감지 →
-                                         # HistoricalPredictor 슬롯 스왑에 사용
+        self._prev_ref_direction = None  # 재학습 직전 방향 벡터 (레거시, 미사용)
+        self._prev_dir_label_a   = None  # 재학습 직전 _dir_label_a 라벨 (131차: 라벨 변화 감지용)
+                                         # 재학습 완료 후 새 라벨과 비교 → 반전이면 슬롯 스왑
 
         # ── 방향 분류 상태 ────────────────────────────────────────────────
         self._ref_direction  = None
@@ -329,6 +373,12 @@ class MonitoringDetector(BaseDetector):
         # monitoring.py 의 _pause_all_monitoring() / _resume_all_monitoring() 에서 제어
         self._paused = False
 
+        # ── 연속 재연결 실패 횟수 (지수 백오프 계산용) ───────────────────
+        # reconnect() 가 False를 반환할 때마다 +1 증가,
+        # 정상 프레임을 수신하면 0으로 초기화된다.
+        # 공식: min(10 * 2^(fail_count-1), 300) 초 대기 → 1회:10s, 2회:20s … 6회+:300s
+        self._stream_fail_count: int = 0
+
         # ── 진단 정보 딕셔너리 ────────────────────────────────────────────
         # /api/monitoring/diagnostics 엔드포인트에서 실시간으로 조회 가능.
         # reconnect_count 급증 → 스트림 불안정
@@ -340,6 +390,8 @@ class MonitoringDetector(BaseDetector):
             'reconnect_count':  0,      # reconnect() 호출 누적 횟수
             'reconnect_last_at': None,  # 마지막 reconnect 시각 (ISO 문자열)
             'last_frame_ok_at': None,   # 마지막 정상 프레임 수신 시각 (ISO 문자열)
+            'stream_fail_count': 0,     # 연속 재연결 실패 횟수 (지수 백오프 단계 표시용)
+            'next_retry_at':    None,   # 다음 재시도 예정 시각 (ISO 문자열) — /diagnostics 에서 조회 가능
         }
 
         # ── ITS 도로 키 ────────────────────────────────────────────────────
@@ -781,19 +833,65 @@ class MonitoringDetector(BaseDetector):
         # 해결: _open_http_cap()을 통해 cv2.CAP_FFMPEG 명시 + _CAP_OPEN_LOCK 직렬화.
         is_rtsp = self.url.lower().startswith(('rtsp://', 'rtsps://'))
 
-        if is_rtsp:
-            # RTSP: FFMPEG 백엔드 강제 + 버퍼 최소화 → thread pool에서 열어도 무방
-            self.cap = _FRAME_POOL.apply(lambda: _open_rtsp_cap(self.url))
-        else:
-            # HTTP/HLS: VideoCapture 직전에 ITS URL 토큰을 갱신한다.
-            # YOLO 모델 로드 시간(수 초) 동안 ITS 시간제한 토큰이 만료되어
-            # cv2.VideoCapture() 가 HTTP 403을 받아 실패하는 것을 방지한다.
-            self.url  = self._get_fresh_url()
-            # FFMPEG 명시 + 직렬화 잠금으로 멀티스레드 백엔드 선택 문제도 함께 해결
-            self.cap = _open_http_cap(self.url)
+        # ── 스트림 열기 재시도 루프 ───────────────────────────────────────────
+        # ITS URL 내 시간제한 토큰은 15~30초 내 만료된다.
+        # YOLO 모델 로드 · _CAP_OPEN_LOCK 대기 시간 동안 토큰이 만료되면
+        # 첫 시도가 HTTP 403으로 실패한다.
+        # 각 시도마다 _get_fresh_url()로 새 토큰을 발급받아 재시도한다.
+        #
+        # 전략 (HTTP 카메라):
+        #   1~3회: MSMF 백엔드 (대부분의 ITS 카메라에 동작)
+        #   4회  : FFMPEG + 브라우저 UA (MSMF UA 를 거부하는 일부 카메라용 폴백)
+        _OPEN_MSMF_RETRIES  = 3   # MSMF 재시도 횟수
+        _OPEN_RETRY_DELAY   = 5   # 재시도 간 대기 시간(초) — ITS 서버 속도 제한 회피
 
-        if not self.cap.isOpened():
-            print(f"❌ [{self.camera_id}] 스트림 열기 실패: {self.url}")
+        _stream_opened = False   # 최종 열기 성공 여부
+
+        for _attempt in range(1, _OPEN_MSMF_RETRIES + 1):
+            # stop()이 호출됐으면 재시도 없이 즉시 종료
+            if not self.is_running:
+                return
+
+            if is_rtsp:
+                # RTSP: FFMPEG 백엔드 강제 + 버퍼 최소화 (토큰 만료 없음 → URL 재발급 불필요)
+                self.cap = _FRAME_POOL.apply(lambda: _open_rtsp_cap(self.url))
+            else:
+                # HTTP/HLS: 시도마다 새 토큰으로 URL 갱신 (이전 시도의 토큰이 만료됐을 수 있음)
+                self.url = self._get_fresh_url()
+                self.cap = _open_http_cap(self.url)
+
+            if self.cap.isOpened():
+                # 열기 성공
+                _stream_opened = True
+                if _attempt > 1:
+                    # 재시도 끝에 성공한 경우 로그 출력
+                    print(f"✅ [{self.camera_id}] 스트림 열기 성공 (MSMF {_attempt}회차)")
+                break
+
+            # 열기 실패 — 캡처 객체를 해제한 뒤 다음 시도를 준비한다
+            self.cap.release()
+            print(f"⚠️ [{self.camera_id}] MSMF 열기 실패 ({_attempt}/{_OPEN_MSMF_RETRIES}회)")
+
+            if _attempt < _OPEN_MSMF_RETRIES:
+                # 마지막 시도가 아니면 잠시 대기 후 재시도
+                time.sleep(_OPEN_RETRY_DELAY)
+
+        # ── MSMF 전부 실패 시 브라우저 UA 폴백 (HTTP 전용) ───────────────────
+        # ITS 카메라 중 일부는 MSMF UA 를 거부하지만 브라우저 UA 는 허용한다.
+        # FFMPEG 백엔드에 OPENCV_FFMPEG_CAPTURE_OPTIONS 로 브라우저 UA 를 주입해 시도한다.
+        if not _stream_opened and not is_rtsp and self.is_running:
+            print(f"🔄 [{self.camera_id}] MSMF 전부 실패 → FFMPEG+브라우저 UA 폴백 시도")
+            self.url = self._get_fresh_url()   # 폴백 직전에도 새 토큰을 받는다
+            self.cap = _open_http_cap_browser_ua(self.url)
+            if self.cap.isOpened():
+                _stream_opened = True
+                print(f"✅ [{self.camera_id}] 스트림 열기 성공 (FFMPEG+브라우저 UA 폴백)")
+            else:
+                self.cap.release()
+
+        if not _stream_opened:
+            # 모든 재시도 소진 — 최종 실패 진단 후 종료
+            print(f"❌ [{self.camera_id}] 스트림 열기 최종 실패 (MSMF 3회 + 브라우저UA 폴백 1회): {self.url}")
 
             # ── 진단: HTTP 탐침으로 실패 원인 추적 ──────────────────────────
             # cv2.VideoCapture 가 실패한 이유를 알기 위해 HTTP 수준에서 URL 을 탐침한다.
@@ -856,14 +954,18 @@ class MonitoringDetector(BaseDetector):
         )
         self.traffic_analyzer_b.set_state(st)
 
-        # ── HistoricalPredictor ×2 초기화 (시각별 5분 후 예측) ───────
-        # 현재는 메모리에만 슬롯 데이터를 보관한다 (재시작 시 초기화).
-        # 영속 저장은 추후 DB 연동으로 구현한다.
+        # ── HistoricalPredictor ×2 초기화 (시각별 1h/2h/3h 예측, 132차) ─
+        # CSV 경로: flow_maps/{camera_id}/hist_jam_a.csv (b.csv)
+        # 서버 재시작 후에도 누적 이력이 유지된다.
+        _hist_dir  = _FLOW_MAPS_ROOT / self.camera_id  # 카메라별 폴더
+        _hist_dir.mkdir(parents=True, exist_ok=True)   # 폴더 없으면 생성
         self._hist_pred_a = HistoricalPredictor(
+            csv_path=_hist_dir / "hist_jam_a.csv",      # A방향 CSV 경로
             smooth_threshold=cfg.smooth_jam_threshold,   # SMOOTH 경계값 (0.25)
             slow_threshold=cfg.slow_jam_threshold,       # JAM 경계값 (0.60)
         )
         self._hist_pred_b = HistoricalPredictor(
+            csv_path=_hist_dir / "hist_jam_b.csv",      # B방향 CSV 경로
             smooth_threshold=cfg.smooth_jam_threshold,
             slow_threshold=cfg.slow_jam_threshold,
         )
@@ -871,22 +973,30 @@ class MonitoringDetector(BaseDetector):
         self.predictor_a = CongestionPredictor(cfg, fps=fps)
         self.predictor_b = CongestionPredictor(cfg, fps=fps)
 
-        # ── 캐시 탐색: 첫 프레임으로 저장된 flow_map 재사용 여부 결정 ─────
+        # ── 캐시 탐색: 최대 10프레임 읽어 마지막 성공 프레임으로 매칭 (132차 강인화) ─
         # init_grid() 이후에 호출해야 cell_w/cell_h 가 올바르게 설정된다.
         # (init_grid() 전 호출 시 cell_w=1.0, cell_h=1.0 → 좌표 계산 전부 오류)
-        # OS 스레드 풀에서 첫 프레임을 읽어 매칭에 사용한다.
-        _cache_frame_ok, _cache_frame = _FRAME_POOL.apply(self.cap.read)
+        # 변경 이유: 스트림 시작 직후 버퍼링/I-frame 미수신으로 첫 프레임 품질이
+        #           낮을 수 있으므로 최대 10프레임을 읽어 마지막 성공 프레임을 사용한다.
+        _cache_frame      = None   # 최종 사용할 프레임 (마지막 성공 프레임)
+        _cache_frame_ok   = False  # 성공 여부
+        for _attempt in range(10):  # 최대 10회 시도
+            _ok, _fr = _FRAME_POOL.apply(self.cap.read)
+            if _ok and _fr is not None:
+                _cache_frame    = _fr    # 마지막 성공 프레임 갱신
+                _cache_frame_ok = True   # 하나라도 성공하면 True 유지
+
         if _cache_frame_ok:
-            # 첫 프레임을 스트림에 즉시 반영 (generate_frames 가 빈 화면 안 보이게)
+            # 마지막 성공 프레임을 스트림에 즉시 반영 (generate_frames 가 빈 화면 안 보이게)
             with self.frame_lock:
                 self.latest_frame      = _cache_frame
                 self._stream_frame_id += 1
-            # 첫 프레임으로 캐시 탐색 (예외는 _try_load_cache 내부에서 처리)
+            # 마지막 성공 프레임으로 캐시 탐색 (예외는 _try_load_cache 내부에서 처리)
             _cache_hit = self._try_load_cache(_cache_frame)
         else:
-            # 첫 프레임 읽기 실패 → 캐시 탐색 불가, 학습 모드로 진행
+            # 10회 시도 모두 실패 → 캐시 탐색 불가, 학습 모드로 진행
             _cache_hit = False
-            print(f"⚠️  [{self.camera_id}] 첫 프레임 읽기 실패 → 캐시 탐색 건너뜀")
+            print(f"⚠️  [{self.camera_id}] 첫 10프레임 읽기 모두 실패 → 캐시 탐색 건너뜀")
 
         # 캐시 히트 여부에 따라 시작 모드 결정
         if _cache_hit:
@@ -974,8 +1084,47 @@ class MonitoringDetector(BaseDetector):
                 self._diag['reconnect_last_at'] = datetime.utcnow().isoformat()
                 reconnected = self.reconnect(delay=3, max_retries=5)
                 if not reconnected:
-                    gevent.sleep(10)
+                    # ── 지수 백오프: 실패 횟수가 늘수록 대기 시간 증가 ─────────
+                    # 공식: min(10 * 2^(fail_count-1), 300)
+                    # 1회→10초, 2회→20초, 3회→40초, 4회→80초, 5회→160초, 6회+→300초 상한
+                    self._stream_fail_count += 1   # 연속 실패 횟수 누적
+                    wait_sec = min(10 * (2 ** (self._stream_fail_count - 1)), 300)
+
+                    # 다음 재시도 예정 시각 계산 (진단 및 프론트엔드 표시용)
+                    next_retry_at = datetime.utcnow() + timedelta(seconds=wait_sec)
+
+                    # 진단 딕셔너리 업데이트
+                    self._diag['stream_fail_count'] = self._stream_fail_count
+                    self._diag['next_retry_at']     = next_retry_at.isoformat()
+
+                    print(
+                        f"⏳ [{self.camera_id}] {wait_sec}초 후 재시도 "
+                        f"(연속 {self._stream_fail_count}회 실패)"
+                    )
+
+                    # 프론트엔드에 스트림 실패 알림 — 다음 재시도 예정 시각도 포함
+                    if self.socketio:
+                        self.socketio.emit('camera_stream_failed', {
+                            'camera_id':     self.camera_id,     # 실패한 카메라 ID
+                            'fail_count':    self._stream_fail_count,  # 누적 실패 횟수
+                            'next_retry_in': wait_sec,           # 다음 재시도까지 남은 초
+                            'next_retry_at': next_retry_at.isoformat(),  # 다음 재시도 예정 시각
+                        })
+
+                    gevent.sleep(wait_sec)   # 지수 백오프 대기 (이벤트 루프 양보)
                 continue
+
+            # ── [복구 감지] 이전에 실패했다가 정상 프레임이 돌아온 경우 ──────
+            # 이미 정상이었으면 이벤트를 보내지 않는다 (첫 정상 프레임에서 1회만)
+            if self._stream_fail_count > 0:
+                self._stream_fail_count = 0                    # 실패 카운터 초기화
+                self._diag['stream_fail_count'] = 0            # 진단 딕셔너리도 초기화
+                self._diag['next_retry_at']     = None         # 재시도 예정 시각 제거
+                print(f"✅ [{self.camera_id}] 스트림 복구 — 정상 프레임 수신")
+                if self.socketio:
+                    self.socketio.emit('camera_stream_recovered', {
+                        'camera_id': self.camera_id,   # 복구된 카메라 ID
+                    })
 
             # ── [진단] 정상 프레임 수신 시각 갱신 ──────────────────────────
             self._diag['last_frame_ok_at'] = datetime.utcnow().isoformat()
@@ -1085,16 +1234,48 @@ class MonitoringDetector(BaseDetector):
                     else:
                         stable_frames = st.frame_num - st.stable_since_frame
                         if stable_frames >= _stability_required_frames:
-                            print(f"✅ [{self.camera_id}] 화면 안정 확인 ({stable_frames}프레임) → 재학습 시작")
-                            st.waiting_stable = False
-                            self._prev_ref_direction = self._ref_direction   # 재학습 전 방향 저장 (반전 감지용)
-                            st.reset_for_relearn()
-                            self.flow.reset()
-                            self.traffic_analyzer_a.congestion_judge.reset()
-                            self.traffic_analyzer_b.congestion_judge.reset()
-                            self._ref_direction = None
-                            _relearn_smooth_80 = _relearn_smooth_95 = False
-                            _relearn_logged_pcts = set()   # 재학습 마일스톤 초기화
+                            print(f"✅ [{self.camera_id}] 화면 안정 확인 ({stable_frames}프레임) → 재매칭 시도")
+
+                            # ── 스냅샷 재매칭 먼저 시도 (133차) ─────────────────────────
+                            # 전환 후 화면이 같은 카메라의 다른 시간대 저장본과 일치하면
+                            # 전체 재학습을 생략하고 기존 flow_map을 재사용한다.
+                            _redir = self._flow_maps_root / self.camera_id  # 자체 저장 폴더
+                            _rm_npy, _rm_score = find_best_snapshot(frame, _redir)
+                            if _rm_npy is not None and self.flow.load(_rm_npy):
+                                # 재매칭 성공 → 방향 분류 재설정
+                                self._compute_ref_direction()
+                                self._compute_direction_cell_counts()
+                                _rd = self._ref_direction or (1.0, 0.0)
+                                self.flow.build_directional_channels(_rd[0], _rd[1])
+
+                                # ── 방향 반전 감지 (전환 시점, 133차) ───────────────────
+                                _meta = load_snapshot_meta(_rm_npy)
+                                _saved_label = _meta.get("dir_label_a", "")
+                                if (_saved_label
+                                        and _saved_label != self._dir_label_a
+                                        and self._hist_pred_a is not None):
+                                    print(f"🔄 [{self.camera_id}] 전환 후 재매칭 방향 반전 감지 "
+                                          f"({_saved_label} → {self._dir_label_a}) "
+                                          f"→ HistoricalPredictor 슬롯 스왑")
+                                    self._hist_pred_a.swap_slots_with(self._hist_pred_b)
+
+                                st.waiting_stable = False
+                                st.cooldown_until = st.frame_num + cfg.cooldown_frames
+                                self.switch.set_reference(frame)
+                                print(f"✅ [{self.camera_id}] 재매칭 성공 (score={_rm_score:.3f}) → 재학습 스킵")
+                            else:
+                                # 재매칭 실패 → 기존 재학습 흐름 진행
+                                print(f"  [{self.camera_id}] 재매칭 실패 (score={_rm_score:.3f}) → 재학습 시작")
+                                st.waiting_stable = False
+                                self._prev_ref_direction = self._ref_direction   # 레거시 보존
+                                self._prev_dir_label_a   = self._dir_label_a    # 재학습 전 방향 라벨 저장 (131차)
+                                st.reset_for_relearn()
+                                self.flow.reset()
+                                self.traffic_analyzer_a.congestion_judge.reset()
+                                self.traffic_analyzer_b.congestion_judge.reset()
+                                self._ref_direction = None
+                                _relearn_smooth_80 = _relearn_smooth_95 = False
+                                _relearn_logged_pcts = set()   # 재학습 마일스톤 초기화
 
                 # (C) 재학습 중: 또 흔들리면 중단 → 대기 복귀
                 elif st.relearning:
@@ -1164,16 +1345,20 @@ class MonitoringDetector(BaseDetector):
                     self.flow.build_directional_channels(_rd[0], _rd[1])
                     gevent.sleep(0)
                     # ── 방향 반전 감지 → HistoricalPredictor 슬롯 스왑 ──────────────────
-                    # 재학습 전후 기준 방향 벡터 dot product < -0.5 → 카메라 180° 회전
-                    # a/b 예측기의 누적 데이터를 교환해 방향 레이블을 올바르게 유지
-                    if (self._prev_ref_direction is not None
-                            and self._ref_direction is not None
-                            and self._hist_pred_a is not None):
-                        _dot = (self._prev_ref_direction[0] * self._ref_direction[0]
-                                + self._prev_ref_direction[1] * self._ref_direction[1])
-                        if _dot < -0.5:                     # dot < -0.5 → 방향 반전 감지
-                            self._hist_pred_a.swap_slots_with(self._hist_pred_b)
-                    self._prev_ref_direction = None          # 사용 후 초기화
+                    # 131차 변경: dot product 비교 → _dir_label_a 라벨 변화 감지 방식으로 교체
+                    # 이유: dot이 양수여도 라벨(UP/DOWN)이 바뀌는 케이스가 존재하기 때문
+                    # _prev_dir_label_a: 재학습 진입 시 저장한 이전 라벨
+                    # 재학습 완료 후 새 _dir_label_a와 비교 → 달라지면 180° 반전으로 판단
+                    if (self._prev_dir_label_a is not None
+                            and self._hist_pred_a is not None
+                            and self._prev_dir_label_a != self._dir_label_a):
+                        # 방향 라벨이 바뀌었으면 a/b 예측기 슬롯 데이터를 교환
+                        print(f"🔄 [{self.camera_id}] 방향 반전 감지 "
+                              f"({self._prev_dir_label_a} → {self._dir_label_a}) "
+                              f"→ HistoricalPredictor 슬롯 스왑")
+                        self._hist_pred_a.swap_slots_with(self._hist_pred_b)
+                    self._prev_dir_label_a   = None   # 사용 후 초기화
+                    self._prev_ref_direction = None   # 레거시 필드도 초기화
                     st.relearning                = False
                     st.waiting_stable_entered_frame = 0   # 재학습 완료 → 진입 프레임 리셋
                     st.cooldown_until            = st.frame_num + cfg.cooldown_frames
@@ -1598,42 +1783,30 @@ class MonitoringDetector(BaseDetector):
                     # (v4 파일은 load() 내부에서 채널이 복원되지만 재빌드해도 무해)
                     _rd = self._ref_direction or (1.0, 0.0)   # None 방어
                     self.flow.build_directional_channels(_rd[0], _rd[1])
+
+                    # ── 방향 반전 감지 (시작 시점, 133차) ───────────────────────────
+                    # 저장된 dir_label_a와 현재 계산값을 비교해 서버 재시작 사이에
+                    # 카메라 방향이 뒤집혔다면 HistoricalPredictor 슬롯을 교환한다.
+                    _meta = load_snapshot_meta(_best_npy)           # 메타 JSON 읽기
+                    _saved_label = _meta.get("dir_label_a", "")    # 저장 시점 A방향 레이블
+                    if (_saved_label                                # 레이블 존재 확인
+                            and _saved_label != self._dir_label_a  # 반전 감지
+                            and self._hist_pred_a is not None):    # 예측기 초기화 여부 확인
+                        print(f"🔄 [{self.camera_id}] 시작 시점 방향 반전 감지 "
+                              f"({_saved_label} → {self._dir_label_a}) "
+                              f"→ HistoricalPredictor 슬롯 스왑")
+                        self._hist_pred_a.swap_slots_with(self._hist_pred_b)
+
                     print(f"✅ [{self.camera_id}] 자체 캐시 히트! (score={_snap_score:.3f}) → 학습 생략, 탐지 모드 진입")
                     return True
                 else:
-                    # grid_size 불일치(해상도 변경) → 자체 캐시 로드 실패 → 2단계로 진행
-                    print(f"  [{self.camera_id}] 자체 flow_map grid 불일치 → 다른 카메라 탐색")
+                    # grid_size 불일치(해상도 변경) → 자체 캐시 로드 실패 → 학습 모드 진행
+                    print(f"  [{self.camera_id}] 자체 flow_map grid 불일치 → 학습 시작")
 
-            # ── 2단계: 다른 카메라 중 유사한 화면 탐색 (교차 재사용) ──────────
-            # 처음 등록하는 카메라라 자체 flow_map 이 없을 때,
-            # 같은 도로의 다른 카메라가 비슷한 앵글이면 그 flow_map 을 빌려 쓴다.
-            # 자기 자신 폴더는 제외 (1단계에서 이미 시도했으므로 중복 방지).
-            matcher = FlowMapMatcher(self._flow_maps_root)
-            best_dir, score = matcher.find_best(first_frame, exclude_dir=my_dir)
-
-            if best_dir is None:
-                # 유사한 다른 카메라 캐시도 없음 → 학습 모드 진행
-                print(f"  [{self.camera_id}] 캐시 미스 (score={score:.3f}) → 학습 시작")
-                return False
-
-            # 다른 카메라 flow_map 로드: init_grid() 이후이므로 cell_w/cell_h 가 올바르다.
-            flow_npy = best_dir / "flow_map.npy"
-            if not self.flow.load(flow_npy):
-                # grid_size 불일치 → 로드 실패 → 학습 모드 fallback
-                print(f"  [{self.camera_id}] 교차 flow_map 로드 실패 → 학습 모드 fallback")
-                return False
-
-            # 학습 완료 직후 자동 호출되는 두 함수를 캐시 히트 시에도 반드시 호출한다.
-            # 미호출 시 self._ref_direction=None → 방향 분류 불가 (모든 차량이 'a' 방향).
-            self._compute_ref_direction()
-            self._compute_direction_cell_counts()
-            # 교차 캐시 파일도 v3 이하일 수 있으므로 A/B 채널을 재빌드한다
-            _rd = self._ref_direction or (1.0, 0.0)   # None 방어
-            self.flow.build_directional_channels(_rd[0], _rd[1])
-
-            print(f"✅ [{self.camera_id}] 교차 캐시 히트! {best_dir.name} "
-                  f"(score={score:.3f}) → 학습 생략, 탐지 모드 진입")
-            return True
+            # ── 캐시 미스: 자체 스냅샷 없음 또는 로드 실패 → 학습 모드 진행 (133차)
+            # 교차 카메라 매칭 제거: 카메라마다 도로 구조가 달라 오매칭 위험이 큼
+            print(f"  [{self.camera_id}] 캐시 미스 → 학습 시작")
+            return False
 
         except Exception as e:
             # 예외를 run() 까지 전파하지 않고 학습 모드로 안전하게 fallback 한다.
@@ -1659,7 +1832,7 @@ class MonitoringDetector(BaseDetector):
             # 타임스탬프 기반 스냅샷으로 저장
             # → flow_map_YYYYMMDD_HHMMSS.npy + ref_frame_YYYYMMDD_HHMMSS.jpg 쌍 생성
             # → 다음 시작 시 find_best_snapshot()이 현재 프레임과 가장 유사한 쌍을 선택
-            save_flow_snapshot(frame, self.flow, road_dir)
+            save_flow_snapshot(frame, self.flow, road_dir, dir_label_a=self._dir_label_a)
         except Exception as e:
             # 저장 실패가 탐지 루프를 중단시켜서는 안 된다.
             print(f"⚠️  [{self.camera_id}] 캐시 저장 중 오류: {e}")
