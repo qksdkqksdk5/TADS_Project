@@ -540,21 +540,54 @@ class FlowMap:
                         new_map[r, c] = avg_v             # 셀 업데이트
                         reinforced_count += 1             # 강화 카운터 증가
 
-        self.flow = new_map                               # 맵 갱신
+        self.flow = new_map                               # 1차 pass 맵 갱신
 
-        # 간단 요약 출력 (매 호출 시)
-        active = int(np.sum(self.count > 0))              # 실 학습 데이터 있는 셀 수
-        total_with_flow = int(np.sum(                     # 유효 벡터 있는 셀 수
-            np.linalg.norm(self.flow, axis=2) > 0.1
-        ))
-        smoothed_total = int(np.sum(self.smoothed_mask))  # 보간 채움 셀 총 수
-        exterior_total = int(np.sum(exterior))            # 외부 셀 수 (flood-fill 결과)
-        print(f"   🔄 smoothing: {filled_count}셀 채움 (내부홀/{interior_holes}개), "
-              f"{reinforced_count}셀 강화, "
-              f"learned={active}/{self.grid_size**2}, "
-              f"total_flow={total_with_flow}, "
-              f"smoothed={smoothed_total}, "
-              f"exterior={exterior_total}(채움 제외)")
+        # ── 2차 pass: 1차에서 채운 셀을 이웃으로 삼아 추가 채움 ──────────
+        # 가장자리 마진 안쪽의 차선 공백 셀을 추가로 커버한다.
+        # 1차 pass 후 flow에 유효 벡터가 생긴 셀을 이웃으로 활용해 빈 셀을 채운다.
+        new_map2 = self.flow.copy()
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if self.count[r, c] > 0:                  # 실 데이터 있는 셀은 건너뜀
+                    continue
+                if np.linalg.norm(self.flow[r, c]) > 0.1: # 1차에서 이미 채워진 셀 건너뜀
+                    continue
+                if self.eroded_mask[r, c]:                 # erosion 셀 건너뜀
+                    continue
+                # 3×3 이웃 중 유효 벡터 수집
+                r_s2 = max(0, r - 1)
+                r_e2 = min(self.grid_size, r + 2)
+                c_s2 = max(0, c - 1)
+                c_e2 = min(self.grid_size, c + 2)
+                neighbor_vecs2 = []
+                for nr in range(r_s2, r_e2):
+                    for nc in range(c_s2, c_e2):
+                        if nr == r and nc == c:
+                            continue
+                        nv = self.flow[nr, nc]
+                        if np.linalg.norm(nv) > 0.1:
+                            neighbor_vecs2.append(nv)
+                if len(neighbor_vecs2) < 3:                # 이웃이 너무 적으면 건너뜀
+                    continue
+                # 이웃 방향 일관성 확인 (중앙선 경계 재오염 방지)
+                boundary2 = False
+                for i in range(len(neighbor_vecs2)):
+                    for j in range(i + 1, len(neighbor_vecs2)):
+                        ni2 = neighbor_vecs2[i] / (np.linalg.norm(neighbor_vecs2[i]) + 1e-6)
+                        nj2 = neighbor_vecs2[j] / (np.linalg.norm(neighbor_vecs2[j]) + 1e-6)
+                        if float(np.dot(ni2, nj2)) < -0.3:
+                            boundary2 = True
+                            break
+                    if boundary2:
+                        break
+                if boundary2:
+                    continue
+                avg_v2 = np.mean(neighbor_vecs2, axis=0)   # 이웃 평균 벡터
+                if np.linalg.norm(avg_v2) > 0.1:
+                    new_map2[r, c] = avg_v2                 # 셀 채움
+                    self.smoothed_mask[r, c] = True         # 보간 채움 표시
+
+        self.flow = new_map2                               # 2차 pass 맵 갱신
 
         if verbose:                                       # 상세 진단 시에만 후 상태 출력
             print(f"\n📊 [진단] smoothing 후 — 전체 셀 상태")
@@ -906,6 +939,8 @@ class FlowMap:
             for c in range(self.grid_size):
                 if self.count[r, c] < self.min_samples:
                     continue                               # 미확립 셀 건너뜀
+                if self.smoothed_mask[r, c]:
+                    continue                               # 보간 채움 셀 제외 — 오탐 유발 차단
                 v = self.flow[r, c]
                 cos = float(v[0] * ref_dx + v[1] * ref_dy)
                 if cos >= 0:                              # A방향 셀

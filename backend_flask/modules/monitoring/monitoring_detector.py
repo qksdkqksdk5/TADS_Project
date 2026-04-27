@@ -47,7 +47,11 @@ for _p in (_BASE_DIR, _MODULES_DIR):
 # 저장된 flow_map 중 현재 카메라 화면과 가장 유사한 것을 자동 선택한다.
 # 학습 결과 재사용으로 서버 재시작 시 매번 학습하는 비효율을 제거한다.
 # (이전: C:\final_pj\src → 현재: detector_modules/ 로 이전)
-from detector_modules.flow_map_matcher import FlowMapMatcher, save_ref_frame
+from detector_modules.flow_map_matcher import (       # 스냅샷 저장·검색 함수 임포트
+    FlowMapMatcher,                                   # 교차 카메라 매칭
+    save_flow_snapshot,                               # 타임스탬프 기반 스냅샷 저장
+    find_best_snapshot,                               # 현재 프레임과 가장 유사한 스냅샷 검색
+)
 
 # ── flow_map 캐시 저장 루트 ────────────────────────────────────────────────
 # {_FLOW_MAPS_ROOT}/{camera_id}/flow_map.npy  — 학습 결과 저장
@@ -289,6 +293,9 @@ class MonitoringDetector(BaseDetector):
         self.predictor_b        = None   # B방향 단기 추세 예측기
         self._hist_pred_a       = None   # A방향 시각별 이력 기반 5분 후 예측기
         self._hist_pred_b       = None   # B방향 시각별 이력 기반 5분 후 예측기
+        self._prev_ref_direction = None  # 재학습 직전 방향 벡터 (방향 반전 감지용)
+                                         # 재학습 완료 후 전후 방향 비교 → 180° 회전 감지 →
+                                         # HistoricalPredictor 슬롯 스왑에 사용
 
         # ── 방향 분류 상태 ────────────────────────────────────────────────
         self._ref_direction  = None
@@ -1080,6 +1087,7 @@ class MonitoringDetector(BaseDetector):
                         if stable_frames >= _stability_required_frames:
                             print(f"✅ [{self.camera_id}] 화면 안정 확인 ({stable_frames}프레임) → 재학습 시작")
                             st.waiting_stable = False
+                            self._prev_ref_direction = self._ref_direction   # 재학습 전 방향 저장 (반전 감지용)
                             st.reset_for_relearn()
                             self.flow.reset()
                             self.traffic_analyzer_a.congestion_judge.reset()
@@ -1155,6 +1163,17 @@ class MonitoringDetector(BaseDetector):
                     _rd = self._ref_direction or (1.0, 0.0)   # None 방어
                     self.flow.build_directional_channels(_rd[0], _rd[1])
                     gevent.sleep(0)
+                    # ── 방향 반전 감지 → HistoricalPredictor 슬롯 스왑 ──────────────────
+                    # 재학습 전후 기준 방향 벡터 dot product < -0.5 → 카메라 180° 회전
+                    # a/b 예측기의 누적 데이터를 교환해 방향 레이블을 올바르게 유지
+                    if (self._prev_ref_direction is not None
+                            and self._ref_direction is not None
+                            and self._hist_pred_a is not None):
+                        _dot = (self._prev_ref_direction[0] * self._ref_direction[0]
+                                + self._prev_ref_direction[1] * self._ref_direction[1])
+                        if _dot < -0.5:                     # dot < -0.5 → 방향 반전 감지
+                            self._hist_pred_a.swap_slots_with(self._hist_pred_b)
+                    self._prev_ref_direction = None          # 사용 후 초기화
                     st.relearning                = False
                     st.waiting_stable_entered_frame = 0   # 재학습 완료 → 진입 프레임 리셋
                     st.cooldown_until            = st.frame_num + cfg.cooldown_frames
@@ -1293,13 +1312,67 @@ class MonitoringDetector(BaseDetector):
                         elif not st.waiting_stable:
                             # 역주행 판정 (탐지 모드, 안정 대기 중이 아닐 때만)
                             bbox_h = max(y2 - y1, 1)
+                            # judge.check() 호출 전 확정 여부 기록
+                            # → 이웃 가드는 이번 프레임에 새로 확정된 차량에만 적용
+                            #   (이미 확정된 차량은 debug_info에 global_cos가 없어 매 프레임 취소되는 루프 방지)
+                            _was_confirmed_before = (tid in st.wrong_way_ids)
                             # track_dir: A/B 채널 구분값 ('a'/'b') → 반대 차선 벡터 오염 방지
-                            is_wrong, _, _ = self.judge.check(
+                            is_wrong, _, debug_info = self.judge.check(
                                 tid, traj, ndx, ndy, mag, cy, bbox_h,
-                                track_dir=self._track_direction.get(tid),  # v4: 채널 구분
+                                track_dir=self._track_direction.get(tid),
                             )
+
+                            # ── 이웃 차량 방향 일치 확인 (neighbor_agreement_guard) ────────
+                            # 진짜 역주행: 이 차량만 반대 방향, 같은 분류 이웃은 정방향
+                            # flow map 오탐: 같은 분류 이웃 차량들도 동일 방향으로 이동 중
+                            # → 이웃 N대 이상이 같은 방향이면 flow map 오류로 판단 → 확정 취소
+                            #
+                            # 적용 조건:
+                            # ① 이번 프레임에 새로 확정된 경우만 (_was_confirmed_before=False)
+                            # ② global_cos < -0.8이면 강한 flow 증거 → 가드 bypass
+                            _nbr_min   = getattr(cfg, "neighbor_guard_min_total", 3)   # 최소 이웃 수
+                            _nbr_agree = getattr(cfg, "neighbor_guard_agree",     2)   # 동방향 이웃 수 기준
+                            _sus_dir   = self._track_direction.get(tid)                # 의심 차량 방향 분류
+                            _gc        = debug_info.get("global_cos")                  # 전체 궤적 cos
+                            _has_strong_flow  = (_gc is not None and _gc < -0.8)       # 강한 flow 증거 여부
+                            _newly_confirmed  = is_wrong and not _was_confirmed_before  # 이번 프레임 신규 확정 여부
+                            if (_newly_confirmed
+                                    and (ndx != 0.0 or ndy != 0.0)        # 이동 방향 있을 때만
+                                    and _sus_dir is not None               # 방향 분류된 차량만
+                                    and not _has_strong_flow):             # 강한 flow 증거 없을 때만
+                                _same_dir  = 0    # 의심 차량과 같은 방향으로 달리는 이웃 수
+                                _total_nbr = 0    # 같은 방향 분류 이웃 총 수
+                                for _ov, _ovv in st.last_velocity.items():
+                                    if _ov == tid or _ov in st.wrong_way_ids:
+                                        continue   # 자기 자신 및 확정 역주행 차량 제외
+                                    if self._track_direction.get(_ov) != _sus_dir:
+                                        continue   # 같은 방향 분류 차량만 비교
+                                    _total_nbr += 1
+                                    if float(ndx * _ovv[0] + ndy * _ovv[1]) > 0.5:
+                                        _same_dir += 1   # 의심 차량과 같은 방향 → 카운트
+                                if _total_nbr >= _nbr_min and _same_dir >= _nbr_agree:
+                                    # 이웃 다수가 같은 방향 → flow map 오류로 판단 → 취소
+                                    st.wrong_way_ids.discard(tid)
+                                    st.wrong_way_count[tid]       = 0
+                                    st.first_suspect_frame.pop(tid, None)
+                                    # lcf 갱신: fast-track이 즉시 재확정하는 루프 방지
+                                    # (lcf > age_gate_end → _ft_lcf_ok=False → guard_frames 동안 차단)
+                                    st.last_correct_frame[tid] = st.frame_num
+                                    is_wrong = False
+                                    # ── cascade reset: 의심 누적 중인 같은 방향 이웃도 초기화 ──
+                                    # W1 취소 직후 W2·W3이 연속 확정되는 패턴 방지
+                                    for _ov2, _ovv2 in list(st.last_velocity.items()):
+                                        if _ov2 == tid or _ov2 in st.wrong_way_ids:
+                                            continue
+                                        if self._track_direction.get(_ov2) != _sus_dir:
+                                            continue
+                                        if float(ndx * _ovv2[0] + ndy * _ovv2[1]) > 0.5:
+                                            if st.wrong_way_count.get(_ov2, 0) > 0:
+                                                st.wrong_way_count[_ov2] = 0
+                                                st.first_suspect_frame.pop(_ov2, None)
+
                             if is_wrong and tid in st.wrong_way_ids:
-                                self.idm.assign_label(tid)
+                                self.idm.assign_label(tid)   # W1, W2... 라벨 배정
                 else:
                     # 궤적 짧아도 이미 확정된 역주행이면 플래그 유지
                     if tid in st.wrong_way_ids:
@@ -1511,13 +1584,13 @@ class MonitoringDetector(BaseDetector):
 
             my_dir = self._flow_maps_root / self.camera_id  # 자기 자신의 저장 폴더 경로
 
-            # ── 1단계: 자기 자신의 flow_map 직접 로드 ────────────────────────
-            # 같은 카메라가 재시작됐을 때 가장 빠른 경로.
-            # 이전에 학습 완료 후 저장한 flow_map.npy 가 있으면 바로 사용한다.
-            # (비교 없이 바로 로드 → 점수 계산 불필요, 불필요한 ORB 매칭 생략)
-            my_flow_npy = my_dir / "flow_map.npy"
-            if my_flow_npy.exists():
-                if self.flow.load(my_flow_npy):
+            # ── 1단계: 자기 자신의 저장 폴더에서 최적 스냅샷 검색 ──────────────
+            # 타임스탬프 스냅샷(flow_map_YYYYMMDD_HHMMSS.npy + ref_frame_*.jpg) 또는
+            # 레거시(flow_map.npy + ref_frame.jpg) 중 현재 프레임과 가장 유사한 것을 선택.
+            # find_best_snapshot: ORB + 히스토그램 유사도로 최적 쌍을 찾아 .npy 경로 반환.
+            _best_npy, _snap_score = find_best_snapshot(first_frame, my_dir)
+            if _best_npy is not None:
+                if self.flow.load(_best_npy):
                     # 학습 완료 직후와 동일하게 방향 분류 기준 설정
                     self._compute_ref_direction()
                     self._compute_direction_cell_counts()
@@ -1525,7 +1598,7 @@ class MonitoringDetector(BaseDetector):
                     # (v4 파일은 load() 내부에서 채널이 복원되지만 재빌드해도 무해)
                     _rd = self._ref_direction or (1.0, 0.0)   # None 방어
                     self.flow.build_directional_channels(_rd[0], _rd[1])
-                    print(f"✅ [{self.camera_id}] 자체 캐시 히트! → 학습 생략, 탐지 모드 진입")
+                    print(f"✅ [{self.camera_id}] 자체 캐시 히트! (score={_snap_score:.3f}) → 학습 생략, 탐지 모드 진입")
                     return True
                 else:
                     # grid_size 불일치(해상도 변경) → 자체 캐시 로드 실패 → 2단계로 진행
@@ -1583,10 +1656,10 @@ class MonitoringDetector(BaseDetector):
         try:
             # 저장 경로: {_flow_maps_root}/{camera_id}/
             road_dir = self._flow_maps_root / self.camera_id
-            # flow_map.npy 저장 (flow, count, speed_ref, smoothed_mask, eroded_mask 포함)
-            self.flow.save(road_dir / "flow_map.npy")
-            # ref_frame.jpg 저장 (다음 서버 시작 시 매칭 기준 이미지로 사용)
-            save_ref_frame(frame, road_dir)
+            # 타임스탬프 기반 스냅샷으로 저장
+            # → flow_map_YYYYMMDD_HHMMSS.npy + ref_frame_YYYYMMDD_HHMMSS.jpg 쌍 생성
+            # → 다음 시작 시 find_best_snapshot()이 현재 프레임과 가장 유사한 쌍을 선택
+            save_flow_snapshot(frame, self.flow, road_dir)
         except Exception as e:
             # 저장 실패가 탐지 루프를 중단시켜서는 안 된다.
             print(f"⚠️  [{self.camera_id}] 캐시 저장 중 오류: {e}")

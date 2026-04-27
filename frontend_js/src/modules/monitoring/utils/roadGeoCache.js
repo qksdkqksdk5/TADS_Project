@@ -3,7 +3,8 @@
 // 반복 방문 시 Overpass 쿼리를 기다리지 않고 즉시 지도에 도로선을 표시하기 위해 사용한다.
 
 // 스키마 변경 시 버전을 올리면 이전 캐시가 자동 무효화된다
-const CACHE_VERSION = 'v1';
+// v6: youngdong.json에 광주원주고속도로(Route 52, 227개 way) 병합 → 캐시 무효화
+const CACHE_VERSION = 'v6';
 
 // 캐시 유효 시간 — 24시간 (하루에 한 번 갱신으로 충분)
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;

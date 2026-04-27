@@ -28,37 +28,49 @@ ROAD_GEO_CACHE_DIR = Path(__file__).parent / 'road_geo_cache'
 ROAD_CONFIG = {
     'gyeongbu': {
         'label': '경부고속도로',
-        'osm_name': '경부고속도로',
-        'its_name_keywords': ['경부'],   # cctvname 필터
+        'osm_name':  '경부고속도로',   # 하위 호환용 단일 이름 (get_road_geometry 내부 사용)
+        'osm_names': ['경부고속도로'],  # Overpass 쿼리에 사용할 이름 목록 (지선 포함)
+        'its_name_keywords': ['경부'],  # cctvname 필터
         'bounds': {'minX': 126.8, 'maxX': 129.2, 'minY': 35.0, 'maxY': 37.6},
-        'type': 'ex',   # ex=고속도로, ex+국도 등
+        'type': 'ex',
     },
     'gyeongin': {
         'label': '경인고속도로',
-        'osm_name': '경인고속도로',
+        'osm_name':  '경인고속도로',
+        # 제2경인고속도로(Route 110, 시흥·광명 경유)는 OSM에 별도 이름으로 등록됨
+        # ITS 모니터링 카메라는 두 노선 모두 포함하므로 Overpass 쿼리도 두 이름 검색
+        'osm_names': ['경인고속도로', '제2경인고속도로'],
         'its_name_keywords': ['경인'],
         'bounds': {'minX': 126.6, 'maxX': 127.1, 'minY': 37.3, 'maxY': 37.6},
         'type': 'ex',
     },
     'seohae': {
         'label': '서해안고속도로',
-        'osm_name': '서해안고속도로',
+        'osm_name':  '서해안고속도로',
+        'osm_names': ['서해안고속도로'],
         'its_name_keywords': ['서해안', '서해'],
         'bounds': {'minX': 126.2, 'maxX': 127.0, 'minY': 34.8, 'maxY': 37.6},
         'type': 'ex',
     },
     'jungang': {
         'label': '중앙고속도로',
-        'osm_name': '중앙고속도로',
+        'osm_name':  '중앙고속도로',
+        'osm_names': ['중앙고속도로'],
         'its_name_keywords': ['중앙'],
         'bounds': {'minX': 127.8, 'maxX': 129.2, 'minY': 35.5, 'maxY': 37.7},
         'type': 'ex',
     },
     'youngdong': {
         'label': '영동고속도로',
-        'osm_name': '영동고속도로',
+        'osm_name':  '영동고속도로',
+        # ITS 영동 카메라: 영동고속도로(Route 50) 인천기점→판교→여주→원주→강릉
+        # 광주원주고속도로(Route 52, "[제2영동선]" 표기) 구간은
+        # patch_youngdong_route52.py 로 youngdong.json 에 별도 병합 (타임아웃 방지)
+        'osm_names': ['영동고속도로'],
         'its_name_keywords': ['영동'],
-        'bounds': {'minX': 126.8, 'maxX': 128.8, 'minY': 37.1, 'maxY': 37.7},
+        # minX=126.5: 인천기점(lng≈126.69) 포함
+        # 제2영동선은 127.2~128.0E, 37.2~37.5N 범위 → 동일 bbox 안에 포함됨
+        'bounds': {'minX': 126.5, 'maxX': 129.0, 'minY': 37.1, 'maxY': 37.9},
         'type': 'ex',
     },
 }
@@ -230,6 +242,38 @@ def get_cameras_in_range(road_key: str, start_ic: str, end_ic: str) -> list:
 
 # ── Overpass 도로 선형 조회 ───────────────────────────────────────────────────
 
+def get_road_geo_cached(road_key: str) -> dict | None:
+    """
+    메모리·파일 캐시만 확인하고 즉시 반환한다. Overpass 호출은 하지 않는다.
+
+    파일 캐시가 있으면 메모리에도 올려두고 GeoJSON을 반환한다.
+    캐시가 없으면 None을 반환한다 (호출자가 백그라운드 fetch를 별도로 처리해야 함).
+    """
+    now = time.time()
+
+    # 메모리 캐시 확인 (is_failure 캐시는 건너뜀)
+    cached = _geo_cache.get(road_key)
+    if cached and cached['expires'] > now and not cached.get('is_failure'):
+        return cached['data']                           # 메모리 히트 → 즉시 반환
+
+    # 파일 캐시 확인 (generate_road_geo_cache.py 로 생성된 파일)
+    cache_file = ROAD_GEO_CACHE_DIR / f'{road_key}.json'
+    if cache_file.exists():
+        try:
+            with cache_file.open('r', encoding='utf-8') as f:
+                geo = json.load(f)                      # 파일 읽기
+            if geo.get('features'):                     # 유효한 데이터인지 확인
+                _geo_cache[road_key] = {                # 메모리 캐시에도 올려둠
+                    'data': geo, 'expires': now + GEO_TTL
+                }
+                print(f"🗂️ 파일 캐시 로드 ({road_key}): {len(geo['features'])}개 way")
+                return geo                              # 파일 히트 → 반환
+        except Exception as e:
+            print(f"⚠️ 파일 캐시 읽기 실패 ({road_key}): {e}")
+
+    return None                                         # 캐시 없음 → None
+
+
 def get_road_geometry(road_key: str) -> dict:
     """
     도로 선형 GeoJSON을 반환한다. 3단계 캐시 전략을 사용한다.
@@ -276,14 +320,32 @@ def get_road_geometry(road_key: str) -> dict:
     if not cfg:
         return {'type': 'FeatureCollection', 'features': []}
 
-    osm_name = cfg['osm_name']
-    # Overpass QL 쿼리 — timeout:25 (서버 측), Python timeout=20 (미러당)
-    # 미러 3개 × 20초 = 최대 60초 대기 (기존 단일 서버 35초 타임아웃보다 관대하나
-    # 성공률이 대폭 높아짐)
+    # osm_names: 지선까지 포함한 OSM 이름 목록 (없으면 osm_name 단일 항목으로 폴백)
+    osm_names = cfg.get('osm_names') or [cfg['osm_name']]
+
+    # Overpass 쿼리: 전역 bounds 를 모든 이름에 공통 적용 (넓은 범위로 가져온 뒤
+    # 좌표 레벨 클리핑으로 원하는 구간만 남긴다 — way-level bbox 는 부정확함)
+    osm_name_bounds = cfg.get('osm_name_bounds', {})    # 이름별 좌표 클리핑 범위
+    global_bounds   = cfg.get('bounds')                  # Overpass 요청 범위 (넓게)
+
+    if global_bounds:
+        # Overpass way bbox 포맷: (minLat,minLon,maxLat,maxLon) = (minY,minX,maxY,maxX)
+        global_bbox_str = (
+            f'({global_bounds["minY"]},{global_bounds["minX"]}'
+            f',{global_bounds["maxY"]},{global_bounds["maxX"]})'
+        )
+    else:
+        global_bbox_str = ''
+
+    name_lines = '\n'.join(
+        f'  way["name"="{n}"]["highway"~"motorway|trunk|motorway_link"]{global_bbox_str};'
+        for n in osm_names
+    )
+
     query = f"""
-[out:json][timeout:25];
+[out:json][timeout:60];
 (
-  way["name"="{osm_name}"]["highway"~"motorway|trunk|motorway_link"];
+{name_lines}
 );
 out geom;
 """
@@ -309,7 +371,7 @@ out geom;
                 endpoint,
                 data={'data': query},
                 headers=_overpass_headers,
-                timeout=20,          # 미러당 20초 (기존 단일 35초 → 미러 3개 × 20초)
+                timeout=65,          # 미러당 65초 (쿼리 timeout:60 + 네트워크 여유 5초)
             )
             resp.raise_for_status()
             elements = resp.json().get('elements', [])
@@ -330,7 +392,10 @@ out geom;
         }
         return empty
 
-    # ── 성공: GeoJSON FeatureCollection 조립 ────────────────────────────────
+    # ── 성공: GeoJSON FeatureCollection 조립 (좌표 레벨 클리핑 포함) ───────────
+    # Way 레벨 bbox 는 "way 가 bbox 에 걸치기만 해도 포함"하므로 경계를 넘는 구간이
+    # 잘리지 않는다. 좌표 레벨 클리핑은 각 노드를 직접 필터해 정확히 잘라낸다.
+    # 예: 수도권제1순환고속도로 북쪽 호(서울 상단)는 위도 37.48N 이상 → 클리핑으로 제거
     features = []
     for el in elements:
         if el.get('type') != 'way':    # way 타입만 처리 (node, relation 제외)
@@ -338,10 +403,31 @@ out geom;
         geometry = el.get('geometry', [])
         if len(geometry) < 2:          # 좌표가 2개 미만이면 선분 불가 → 건너뜀
             continue
-        coords = [[pt['lon'], pt['lat']] for pt in geometry]
+
+        el_name = el.get('tags', {}).get('name', '')   # 이 way 의 실제 OSM 이름
+        clip_b  = osm_name_bounds.get(el_name)         # 이름별 좌표 클리핑 범위
+
+        coords = [[pt['lon'], pt['lat']] for pt in geometry]  # [경도, 위도] 변환
+
+        if clip_b:
+            # ── All-or-nothing 방식 ────────────────────────────────────────────
+            # 좌표를 부분적으로 잘라내면 bbox 경계에 걸친 way (북부 링 시작 구간)가
+            # 짧은 토막으로 남아 여전히 그려진다.
+            # 따라서 bbox 밖 노드가 하나라도 있는 way 는 통째로 버린다.
+            # (남쪽 호는 모든 노드가 bbox 안에 있으므로 정상 포함됨)
+            if any(
+                c[0] < clip_b['minX'] or c[0] > clip_b['maxX'] or
+                c[1] < clip_b['minY'] or c[1] > clip_b['maxY']
+                for c in coords
+            ):
+                continue               # 이 way 통째로 버림 → 북부 링 제거
+
+        if len(coords) < 2:            # 좌표가 2개 미만이면 선분 불가
+            continue
+
         features.append({
             'type': 'Feature',
-            'properties': {'osm_id': el.get('id'), 'name': osm_name},
+            'properties': {'osm_id': el.get('id'), 'name': el_name},
             'geometry': {'type': 'LineString', 'coordinates': coords},
         })
 
