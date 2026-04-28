@@ -10,6 +10,7 @@ const getOrigin = (host) => {
   if (host.startsWith('http')) return host;
   const outsideHost = 'itsras.illit.kr';
   return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+  
 };
 
 export default function TrafficModule({ socket, user, activeTab, isMobile, host,
