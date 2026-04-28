@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수도권제2순환선] [창원]양서2터널(창원 14)",
+  "memory_key": "수도권제2순환선_창원_양서2터널_창원_14",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.067944049835205,
+          820.4600830078125
+        ]
+      },
+      "x_mid": -35.6687536239624,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        34
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.8691006302833557,
+          561.4398803710938
+        ]
+      },
+      "x_mid": 201.63221943378448,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        22
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 17:41:54"
+}

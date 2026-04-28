@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수도권제2순환선] 달뫼터널(포천)24.37",
+  "memory_key": "수도권제2순환선_달뫼터널_포천_24.37",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.7511427402496338,
+          753.0299682617188
+        ]
+      },
+      "x_mid": 28.05687379837036,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        6
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.2241140604019165,
+          750.7410888671875
+        ]
+      },
+      "x_mid": 243.95786786079407,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        14
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 16:27:12"
+}

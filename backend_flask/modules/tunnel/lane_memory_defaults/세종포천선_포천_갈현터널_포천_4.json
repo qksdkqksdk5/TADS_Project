@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[세종포천선] [포천]갈현터널(포천 4)",
+  "memory_key": "세종포천선_포천_갈현터널_포천_4",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.331273317337036,
+          992.8234252929688
+        ]
+      },
+      "x_mid": 27.67627191543579,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        4
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.7095826268196106,
+          753.525146484375
+        ]
+      },
+      "x_mid": 459.7579389810562,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        22
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-24 12:17:50"
+}

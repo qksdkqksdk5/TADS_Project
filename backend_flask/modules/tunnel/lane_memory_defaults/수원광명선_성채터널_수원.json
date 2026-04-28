@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수원광명선] 성채터널(수원)",
+  "memory_key": "수원광명선_성채터널_수원",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.4777946472167969,
+          669.5870971679688
+        ]
+      },
+      "x_mid": 57.780113220214844,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        7
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.7462639212608337,
+          623.7037963867188
+        ]
+      },
+      "x_mid": 314.7505329847336,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        11
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 15:53:56"
+}

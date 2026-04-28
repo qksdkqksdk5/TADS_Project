@@ -1,0 +1,69 @@
+{
+  "cctv_name": "[수원광명선] 수원 수리산3터널",
+  "memory_key": "수원광명선_수원_수리산3터널",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.5535497665405273,
+          919.4795532226562
+        ]
+      },
+      "x_mid": -137.69005012512207,
+      "count": 2,
+      "ratio": 0.5,
+      "member_ids": [
+        11,
+        19
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.4939727783203125,
+          801.8093872070312
+        ]
+      },
+      "x_mid": 183.30465698242188,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        17
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.6910076141357422,
+          699.83447265625
+        ]
+      },
+      "x_mid": 413.75732040405273,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        18
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 10:43:37"
+}

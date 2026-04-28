@@ -1,0 +1,68 @@
+{
+  "cctv_name": "[세종포천선] [포천]오포1터널(포천 2)",
+  "memory_key": "세종포천선_포천_오포1터널_포천_2",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.1623289585113525,
+          1009.5520629882812
+        ]
+      },
+      "x_mid": 114.3478741645813,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        2
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.868828296661377,
+          1002.6541137695312
+        ]
+      },
+      "x_mid": 228.9591989517212,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        4
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.6100932359695435,
+          721.785888671875
+        ]
+      },
+      "x_mid": 469.207288980484,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 14:45:36"
+}
