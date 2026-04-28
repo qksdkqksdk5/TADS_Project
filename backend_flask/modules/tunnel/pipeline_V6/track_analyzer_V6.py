@@ -1,5 +1,5 @@
 # ==========================================
-# 파일명: track_analyzer_V5_5.py
+# 파일명: track_analyzer_V6.py
 # 설명:
 # 공통 추적 분석기 (Adaptive ROI 연동 버전)
 # - track history 관리

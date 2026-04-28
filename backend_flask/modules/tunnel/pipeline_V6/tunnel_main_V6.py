@@ -1,7 +1,7 @@
 # ==========================================
-# 파일명: tunnel_main_V5_5.py
+# 파일명: tunnel_main_V6.py
 # 설명:
-# SMART TUNNEL V5_5 실행 파일
+# SMART TUNNEL V6 실행 파일
 #
 # 역할
 # 1) 테스트 영상을 읽는다
@@ -30,43 +30,56 @@ import traceback
 from datetime import datetime
 from ultralytics import YOLO
 
-from pipeline_core_V5_5 import PipelineCore
+from pipeline_core_V6 import PipelineCore
 
 
-print("🚀 SMART TUNNEL V5_4 시작")
+print("🚀 SMART TUNNEL V6_1_0428 시작")
 
-# =========================================================
-# 1) 기본 경로 설정
-# =========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
+TUNNEL_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
 # ---------------------------------------------------------
 # 테스트 영상 선택
-# 필요한 영상만 주석 해제해서 사용
+# raw_video 폴더 안 파일명만 바꿔서 사용
 # ---------------------------------------------------------
-VIDEO_PATH = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_data/raw_video/test_video/test_congestion_2-1.mp4"
-# VIDEO_PATH = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_data/raw_video/test_video/test_congestion_2-2.mp4"
+VIDEO_NAME = "congestion_jam_5min.mp4"
+# VIDEO_NAME = "accident_tunnel_gubong.mp4"
+# VIDEO_NAME = "accident_tunnel_sangju.mp4"
+# VIDEO_NAME = "accident_tunnel_samae.mp4"
 
-# VIDEO_PATH = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_data/raw_video/test_video/test_normal_2.mp4"
+VIDEO_PATH = os.path.join(TUNNEL_DIR, "raw_video", VIDEO_NAME)
 
-# VIDEO_PATH = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_data/raw_video/test_video/test_accident_1-1.mp4"
-# VIDEO_PATH = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_data/raw_video/test_video/test_accident_3.mp4"
-
-MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "best.pt")
+# ---------------------------------------------------------
+# 모델 경로
+# ---------------------------------------------------------
+MODEL_PATH = os.path.join(TUNNEL_DIR, "models", "best.pt")
 
 # ---------------------------------------------------------
 # 출력 경로
 # ---------------------------------------------------------
-OUTPUT_DIR = r"d:/Finalpj_tunnel_V3/smart_tunnel_V3_outputs/pipeline_v5_5_2"
+OUTPUT_DIR = os.path.join(
+    TUNNEL_DIR,
+    "runtime_data",
+    "eval_outputs",
+    "pipeline_v6_1_0428"
+)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-VIDEO_OUT_PATH = os.path.join(OUTPUT_DIR, f"v5_5_2{timestamp}.mp4")
-LOG_PATH = os.path.join(OUTPUT_DIR, f"log_v5_5_2{timestamp}.csv")
+safe_video_name = os.path.splitext(VIDEO_NAME)[0]
+
+VIDEO_OUT_PATH = os.path.join(
+    OUTPUT_DIR,
+    f"{safe_video_name}_result_{timestamp}.mp4"
+)
+
+LOG_PATH = os.path.join(
+    OUTPUT_DIR,
+    f"{safe_video_name}_log_{timestamp}.csv"
+)
 
 print("BASE_DIR:", BASE_DIR)
-print("PROJECT_ROOT:", PROJECT_ROOT)
+print("TUNNEL_DIR:", TUNNEL_DIR)
 print("VIDEO_PATH:", VIDEO_PATH)
 print("👉 EXISTS:", os.path.exists(VIDEO_PATH))
 print("영상 존재 여부:", os.path.exists(VIDEO_PATH))
@@ -457,7 +470,11 @@ def main():
             # -------------------------------------------------
             # 파이프라인 처리
             # -------------------------------------------------
-            result = pipeline.process(frame_id, tracks)
+            result = pipeline.process(
+                frame_id=frame_id,
+                tracks=tracks,
+                frame_width=width
+            )
             merged = result["analysis"]
 
             # -------------------------------------------------
