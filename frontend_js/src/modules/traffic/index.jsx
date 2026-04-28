@@ -122,7 +122,7 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
 
       <div style={{ flex: 3.2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ ...panelWrapper, flex: 1, marginBottom: (isEmergency && showMap) ? (isMobile ? '10px' : '20px') : '0px', transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} host={host} user={user} loadCctvUrl={loadCctvUrl}/>
+          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} setCctvData={setCctvData} host={host} user={user} loadCctvUrl={loadCctvUrl}/>
         </div>
 
         {isEmergency && !showMap && (

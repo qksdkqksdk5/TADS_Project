@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import Swal from 'sweetalert2';
-import { captureNow, updateCaptureMemo, stopDetection, getDetectionStatus } from '../api';
+import { captureNow, updateCaptureMemo, stopDetection, getDetectionStatus, fetchCctvUrl } from '../api';
 
 const getOrigin = (host) => {
   if (host.startsWith('http')) return host;
@@ -37,10 +37,13 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
                 // ✅ 403 Forbidden(토큰 만료)인지 확인
-                if (data.response && data.response.code === 403) {
-                  console.warn(`🔒 [${name}] 토큰 만료됨 (403). URL 갱신을 요청합니다.`);
-                  if (onRefreshUrl) onRefreshUrl(); // 부모의 갱신 함수 실행
-                } else {
+                if (
+                  data.response?.code === 403 ||
+                  data.response?.code === 401 ||
+                  data.details === 'manifestLoadError'
+                ) {
+                  onRefreshUrl && onRefreshUrl();
+                }else {
                   // 일반적인 네트워크 끊김은 다시 시도
                   console.log("🌐 네트워크 오류 - 재시도 중...");
                   hls.startLoad();
@@ -89,12 +92,27 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
   );
 };
 
-const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
+const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, user }) => {
   const isCctvMode = activeTab === "cctv";
   const [isFlashing,    setIsFlashing]    = useState(false);
   const [expandedMedia, setExpandedMedia] = useState(null);
   const [reverseOn,     setReverseOn]     = useState(false);
   const [fireOn,        setFireOn]        = useState(false);
+
+  useEffect(() => {
+    if (!isCctvMode) return;
+
+    console.log("🟢 CCTV 모드 → 자동 URL 갱신 시작");
+
+    const interval = setInterval(() => {
+      handleUrlRefresh();
+    }, 4500); // 60초
+
+    return () => {
+      console.log("🔴 CCTV 모드 종료 → 갱신 중지");
+      clearInterval(interval);
+    };
+  }, [activeTab]);
 
   // ✅ 새로고침 후 백엔드 detector 상태와 UI 동기화
   useEffect(() => {
