@@ -30,11 +30,11 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
   const { isEmergency, pendingAlerts, logs, mapRef,
           resolveEmergency, resolveAllAlertsAction, moveToAlert, createMarker, clearMarkersRef } =
     useAnomalyDetection(
-      socket,
+      outsideSocket,
       activeTab,
       (newTab) => navigate(`/dashboard/${newTab}`),
       setVideoUrl,
-      host,
+      outsideHost,
       user?.name
     );
 
@@ -93,7 +93,7 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
         }}>
 
           {activeTab === "stats" && (
-            <div style={moduleWrapper}><StatsModule isMobile={isMobile} host={host} /></div>
+            <div style={moduleWrapper}><StatsModule isMobile={isMobile} host={outsideHost} /></div>
           )}
           {activeTab === "plate" && (
             <div style={moduleWrapper}><PlateModule isMobile={isMobile} host={host} user={user} /></div>
@@ -114,7 +114,7 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
           )}
           {!isModuleTab && (
             <TrafficModule
-              socket={socket}
+              socket={outsideSocket}
               user={user}
               activeTab={activeTab}
               isMobile={isMobile}

@@ -104,7 +104,6 @@ def set_cctv_list():
     return jsonify({"success": True})
 
 
-# ✅ 감지 시작 — 스트리밍 없이 백그라운드 감지만
 @its_bp.route('/start_detection', methods=['POST'])
 def start_detection():
     data     = request.get_json()
@@ -112,11 +111,11 @@ def start_detection():
     name     = data.get('name', 'default')
     lat      = float(data.get('lat', 37.5))
     lng      = float(data.get('lng', 127.0))
-    det_type = data.get('type', 'fire')  # 'fire' only
+    det_type = data.get('type', 'fire')
 
     socketio = current_app.extensions['socketio']
     app_obj  = current_app._get_current_object()
-    from models import db as db_inst, DetectionResult
+    from models import db as db_inst, DetectionResult, ReverseResult
 
     if det_type == 'fire':
         unique_name = f"{name}_fire"
@@ -128,8 +127,23 @@ def start_detection():
             app=app_obj
         )
         print(f"🔥 [{unique_name}] 화재 감지 시작")
+
+    elif det_type == 'reverse':
+        unique_name = f"{name}_reverse"
+        detector_manager.get_or_create(
+            unique_name, ReverseDetector,
+            url=url, lat=lat, lng=lng,
+            video_origin="realtime_its",
+            socketio=socketio, db=db_inst,
+            ResultModel=DetectionResult,
+            ReverseModel=ReverseResult,
+            conf=0.66,
+            app=app_obj
+        )
+        print(f"🚗 [{unique_name}] 역주행 감지 시작")
+
     else:
-        return jsonify({"status": "error", "message": "reverse detection disabled"}), 400
+        return jsonify({"status": "error", "message": "unknown detection type"}), 400
 
     return jsonify({"status": "ok"}), 200
 
@@ -198,19 +212,20 @@ def video_feed():
     conf_val = float(request.args.get('conf', 0.66))
 
     unique_name = f"{name}_reverse"
-    socketio    = current_app.extensions['socketio']
-    app_obj     = current_app._get_current_object()
-    from models import db as db_inst, DetectionResult, ReverseResult
 
-    detector = detector_manager.get_or_create(
-        unique_name, ReverseDetector,
-        url=url, lat=lat, lng=lng,
-        video_origin="realtime_its",
-        socketio=socketio, db=db_inst,
-        ResultModel=DetectionResult,
-        ReverseModel=ReverseResult,
-        conf=conf_val, app=app_obj
-    )
+    with detector_manager._lock:
+        # 🔥 핵심: 이미 active인 경우만 프레임 제공, 없으면 404
+        detector = detector_manager.active_detectors.get(unique_name)
+
+    if detector is None:
+        return Response("감지기 없음", status=404)
+
+    # URL 갱신만 해줌 (재생성 X)
+    if hasattr(detector, 'url') and detector.url != url:
+        detector.url = url
+        if hasattr(detector, 'cap') and detector.cap is not None:
+            detector.cap.release()
+
     return Response(detector.generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -218,17 +233,18 @@ def video_feed():
 def fire_feed():
     url         = request.args.get('url')
     name        = request.args.get('name', 'fire_cctv')
-    lat         = float(request.args.get('lat', 37.5))
-    lng         = float(request.args.get('lng', 127.0))
     unique_name = f"{name}_fire"
-    socketio    = current_app.extensions['socketio']
-    app_obj     = current_app._get_current_object()
-    from models import db as db_inst, DetectionResult
 
-    detector = detector_manager.get_or_create(
-        unique_name, FireDetector,
-        url=url, lat=lat, lng=lng,
-        socketio=socketio, db=db_inst,
-        ResultModel=DetectionResult, app=app_obj
-    )
+    with detector_manager._lock:
+        detector = detector_manager.active_detectors.get(unique_name)
+
+    if detector is None:
+        return Response("감지기 없음", status=404)
+
+    # URL 토큰 갱신만 처리 (재생성 X)
+    if hasattr(detector, 'url') and detector.url != url:
+        detector.url = url
+        if hasattr(detector, 'cap') and detector.cap is not None:
+            detector.cap.release()
+
     return Response(detector.generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
