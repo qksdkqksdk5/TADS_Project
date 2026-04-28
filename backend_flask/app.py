@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distri
 app = Flask(__name__)
 CORS(app, resources={r"/*": {
     "origins": "*", 
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "PATCH","OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization", "ngrok-skip-browser-warning"]
 }})
 

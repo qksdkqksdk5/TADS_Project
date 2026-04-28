@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from openai import OpenAI
@@ -119,6 +120,7 @@ def is_safe_query(query: str) -> bool:
 @chat_bp.route('/ask', methods=['POST'])
 def ask_tads():
     data = request.json
+    start_time = time.time()
     user_question = data.get('question')
     user_name = data.get('userName', '익명 사용자')
 
@@ -278,6 +280,7 @@ def ask_tads():
         # [Step 5] MongoDB 대화 기록 저장
         # --------------------------------------------------------
         # 🔴 수정: history_col None 체크 후 저장
+        latency_ms = int((time.time() - start_time) * 1000)
         if history_col is not None:
             try:
                 # 🟢 수정: query 없으면 키 자체를 제외 (None 저장 대신)
@@ -286,9 +289,11 @@ def ask_tads():
                     "user_name": user_name,
                     "user_question": user_question,
                     "ai_answer": final_answer,
-                    "intent": intent,
+                    "intent": intent,           # actual
+                    "expected": None,           # 🔥 추가
                     "row_count": row_count,
-                    "success": True
+                    "latency_ms": latency_ms,
+                    "success": True,
                 }
                 if query:
                     doc["sql_query"] = query
@@ -308,3 +313,99 @@ def ask_tads():
     except Exception as e:
         print(f"에러 발생: {e}")
         return jsonify({"answer": f"분석 중 오류 발생: {str(e)}"}), 500
+    
+@chat_bp.route('/llm/logs', methods=['GET'])
+def get_llm_logs():
+    col = get_mongo_collection()
+    if col is None:
+        return jsonify({"logs": []})
+
+    logs = list(col.find().sort("timestamp", -1).limit(100))
+
+    result = []
+    for log in logs:
+        result.append({
+            "id": str(log.get("_id")),  # 🔥 추가
+            "q": log.get("user_question"),
+            "expected": log.get("expected"),
+            "actual": log.get("intent"),
+            "latency": log.get("latency_ms"),
+            "sqlResult": "ok" if log.get("row_count", 0) > 0 else "empty",
+            "summary": (log.get("ai_answer") or "")[:50]
+        })
+
+    return jsonify({"logs": result})
+
+@chat_bp.route('/llm/logs/<log_id>', methods=['PATCH'])
+def update_expected(log_id):
+    col = get_mongo_collection()
+    if col is None:
+        return jsonify({"success": False}), 500
+
+    data = request.json
+    expected = data.get("expected")
+
+    if expected not in ["SQL", "RAG", "BOTH", "UNKNOWN"]:
+        return jsonify({"success": False, "msg": "invalid expected"}), 400
+
+    try:
+        from bson import ObjectId
+
+        result = col.update_one(
+            {"_id": ObjectId(log_id)},
+            {"$set": {"expected": expected}}
+        )
+
+        return jsonify({"success": result.modified_count > 0})
+    except Exception as e:
+        print("expected 업데이트 실패:", e)
+        return jsonify({"success": False}), 500
+    
+@chat_bp.route('/llm/kpi', methods=['GET'])
+def get_llm_kpi():
+    col = get_mongo_collection()
+    if col is None:
+        return jsonify({"accuracy": 0, "total": 0, "correct": 0})
+
+    logs = list(col.find({
+        "expected": {"$in": ["SQL", "RAG", "BOTH"]}
+    }))
+
+    total = len(logs)
+    correct = sum(1 for log in logs if log.get("expected") == log.get("intent"))
+
+    accuracy = round((correct / total) * 100, 1) if total > 0 else 0
+
+    return jsonify({
+        "accuracy": accuracy,
+        "total": total,
+        "correct": correct
+    })
+
+@chat_bp.route('/llm/kpi/detail', methods=['GET'])
+def get_llm_kpi_detail():
+    col = get_mongo_collection()
+    if col is None:
+        return jsonify({})
+
+    logs = list(col.find({
+        "expected": {"$in": ["SQL", "RAG", "BOTH"]}
+    }))
+
+    from collections import defaultdict
+    stats = defaultdict(lambda: {"total": 0, "correct": 0})
+
+    for log in logs:
+        exp = log.get("expected")
+        act = log.get("intent")
+
+        stats[exp]["total"] += 1
+        if exp == act:
+            stats[exp]["correct"] += 1
+
+    result = {}
+    for k, v in stats.items():
+        acc = (v["correct"] / v["total"] * 100) if v["total"] else 0
+        result[k] = round(acc, 1)
+
+    return jsonify(result)
