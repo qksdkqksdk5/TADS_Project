@@ -152,6 +152,7 @@ class LaneTemplateEstimator:
         # lane memory 저장 경로
         # -----------------------------
         self.memory_dir = os.path.join(self.output_dir, "lane_memory")
+        self.default_memory_dir = None
         os.makedirs(self.memory_dir, exist_ok=True)
 
         # -----------------------------
@@ -313,6 +314,30 @@ class LaneTemplateEstimator:
         path = os.path.join(self.memory_dir, f"{memory_key}.json")
         return memory_key, path
 
+    def _get_default_memory_path(self, memory_key):
+        if not memory_key or not self.default_memory_dir:
+            return None
+
+        return os.path.join(self.default_memory_dir, f"{memory_key}.json")
+
+    def _log_lane_memory_paths(
+        self,
+        action,
+        current_cctv_name,
+        normalized_cctv_key,
+        runtime_lane_memory_path,
+        default_lane_memory_path,
+        loaded_from,
+    ):
+        print(
+            f"[LANE MEMORY {action}] "
+            f"current_cctv_name={current_cctv_name}, "
+            f"normalized_cctv_key={normalized_cctv_key}, "
+            f"runtime_lane_memory_path={runtime_lane_memory_path}, "
+            f"default_lane_memory_path={default_lane_memory_path}, "
+            f"loaded_from={loaded_from}"
+        )
+
     # =========================================================
     # 0-5) lane memory 저장
     # =========================================================
@@ -333,6 +358,16 @@ class LaneTemplateEstimator:
         if not save_path:
             print("⚠️ lane memory 저장 실패: memory path 생성 실패")
             return None
+
+        default_path = self._get_default_memory_path(memory_key)
+        self._log_lane_memory_paths(
+            action="SAVE",
+            current_cctv_name=target_name,
+            normalized_cctv_key=memory_key,
+            runtime_lane_memory_path=save_path,
+            default_lane_memory_path=default_path,
+            loaded_from="runtime",
+        )
 
         payload = {
             "cctv_name": target_name,
@@ -363,8 +398,28 @@ class LaneTemplateEstimator:
         if not target_name:
             return False
 
-        memory_key, load_path = self._get_memory_path(target_name)
-        if not load_path or not os.path.exists(load_path):
+        memory_key, runtime_path = self._get_memory_path(target_name)
+        default_path = self._get_default_memory_path(memory_key)
+        load_path = None
+        loaded_from = "none"
+
+        if runtime_path and os.path.exists(runtime_path):
+            load_path = runtime_path
+            loaded_from = "runtime"
+        elif default_path and os.path.exists(default_path):
+            load_path = default_path
+            loaded_from = "default"
+
+        self._log_lane_memory_paths(
+            action="LOAD",
+            current_cctv_name=target_name,
+            normalized_cctv_key=memory_key,
+            runtime_lane_memory_path=runtime_path,
+            default_lane_memory_path=default_path,
+            loaded_from=loaded_from,
+        )
+
+        if not load_path:
             return False
 
         try:

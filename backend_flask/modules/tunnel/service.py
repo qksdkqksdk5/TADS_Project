@@ -42,6 +42,7 @@ class TunnelLiveService:
         self.runtime_log_dir = self.runtime_root / "logs"
         self.runtime_capture_dir = self.runtime_root / "captures"
         self.runtime_lane_memory_dir = self.runtime_root / "lane_memory"
+        self.default_lane_memory_dir = self.tunnel_dir / "lane_memory_defaults"
         self.good_cctv_cache_path = self.runtime_root / "good_cctv_cache.json"
 
         for path in (
@@ -49,6 +50,7 @@ class TunnelLiveService:
             self.runtime_log_dir,
             self.runtime_capture_dir,
             self.runtime_lane_memory_dir,
+            self.default_lane_memory_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -1213,6 +1215,8 @@ class TunnelLiveService:
             lane_template.output_dir = str(runtime_lane_debug)
         if hasattr(lane_template, "memory_dir"):
             lane_template.memory_dir = str(self.runtime_lane_memory_dir)
+        if hasattr(lane_template, "default_memory_dir"):
+            lane_template.default_memory_dir = str(self.default_lane_memory_dir)
 
     # =========================================================
     # 4) CCTV 선택

@@ -1,0 +1,68 @@
+{
+  "cctv_name": "[세종포천선] [세종]운학터널(세종)-11/13",
+  "memory_key": "세종포천선_세종_운학터널_세종_-11_13",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.9948973655700684,
+          1077.9051513671875
+        ]
+      },
+      "x_mid": -161.9823579788208,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        5
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.150141954421997,
+          924.5811767578125
+        ]
+      },
+      "x_mid": 34.42240762710571,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        7
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.3314729928970337,
+          828.4003295898438
+        ]
+      },
+      "x_mid": 277.1705105304718,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        8
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 12:55:43"
+}

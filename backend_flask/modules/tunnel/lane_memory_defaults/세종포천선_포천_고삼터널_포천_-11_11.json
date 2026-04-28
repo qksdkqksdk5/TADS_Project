@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[세종포천선] [포천]고삼터널(포천)-11/11",
+  "memory_key": "세종포천선_포천_고삼터널_포천_-11_11",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.549354910850525,
+          741.72998046875
+        ]
+      },
+      "x_mid": 100.29704737663269,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        9
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.6385008692741394,
+          666.7735595703125
+        ]
+      },
+      "x_mid": 402.4341996908188,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 13:11:44"
+}
