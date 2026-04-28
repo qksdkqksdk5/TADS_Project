@@ -5,7 +5,7 @@ import ControlBox     from './components/ControlBox';
 import VideoStream    from './components/VideoStream';
 import PlateList      from './components/PlateList';
 import AnalyticsModal from './components/AnalyticsModal';
-import ModelInfoModal from './components/ModelInfoModal';
+import ModelInfoModal from './components/ModelinfoModal';
 
 // ✅ isMobile은 Dashboard에서 prop으로 받아서 사용 (내부 훅 제거)
 export default function PlateModule({ host, user, isMobile }) {
