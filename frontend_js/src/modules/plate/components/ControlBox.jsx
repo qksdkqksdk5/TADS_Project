@@ -2,7 +2,7 @@
 // src/modules/plate/components/ControlBox.jsx
 import { useState } from 'react';
 
-export default function ControlBox({ connected, videos, onStart, onAnalytics }) {
+export default function ControlBox({ connected, videos, onStart, onAnalytics, onModelInfo }) {
   const [selectedVideo, setSelectedVideo] = useState(videos[0] || '');
   const [started, setStarted] = useState(false);
 
@@ -43,11 +43,11 @@ export default function ControlBox({ connected, videos, onStart, onAnalytics }) 
         >
           {started ? '▶ 재시작' : '▶ 시작'}
         </button>
-        <button
-          onClick={onAnalytics}
-          style={s.analyticsBtn}
-        >
+        <button onClick={onAnalytics} style={s.subBtn}>
           분석
+        </button>
+        <button onClick={onModelInfo} style={s.subBtn}>
+          모델 정보
         </button>
       </div>
     </div>
@@ -74,7 +74,7 @@ const s = {
     borderRadius: '8px', fontSize: '13px',
     fontWeight: 'bold', flexShrink: 0, transition: 'all 0.2s',
   },
-  analyticsBtn: {
+  subBtn: {
     padding: '8px 14px',
     border: '1px solid #2a3a4a',
     borderRadius: '8px',

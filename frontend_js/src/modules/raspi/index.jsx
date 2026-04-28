@@ -31,7 +31,15 @@ export default function RaspiModule({ host }) {
   const [maxTemp, setMaxTemp] = useState(0);
 
   const BACKEND_HOST = host || window.location.hostname;
-  const BASE_URL = `${window.location.protocol}//${BACKEND_HOST}/api/raspi`;
+
+  const getBaseUrl = (h) => {
+    if (h.startsWith('http')) return h;
+    const outsideHost = 'itsras.illit.kr';
+    if (h === outsideHost) return `https://${h}/api`;
+    return `http://${h}:5000/api`;
+  };
+
+  const BASE_URL = `${getBaseUrl(BACKEND_HOST)}/raspi`;
 
   useEffect(() => {
     console.log("🌐 [TADS] Backend Target URL:", BASE_URL);
