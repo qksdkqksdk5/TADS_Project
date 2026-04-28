@@ -1049,7 +1049,12 @@ class MonitoringDetector(BaseDetector):
             print(f"🔍 [{self.camera_id}] 탐지 모드로 시작 (캐시 히트 — 학습 생략)")
 
         # ── 메인 루프 ────────────────────────────────────────────────
-        while self.is_running and self.cap.isOpened():
+        # ※ 조건에 self.cap.isOpened()를 포함하지 않는다.
+        #   reconnect() 5회 실패 시 self.cap이 닫힌 상태가 되는데,
+        #   그 상태에서 isOpened()=False → while 탈출 → run() 리턴 → 스레드 사망.
+        #   이 문제를 막기 위해 is_running 하나만 조건으로 쓰고,
+        #   cap 상태는 루프 안에서 cap.read() 실패 → reconnect() 경로로 처리한다.
+        while self.is_running:
             # 일시정지 상태이면 프레임 읽기/YOLO 추론/emit 을 전부 건너뛴다.
             # gevent.sleep 으로 이벤트 루프를 양보해 소켓 하트비트 등은 계속 처리된다.
             # 학습 완료 상태(flow_map, TrafficAnalyzer 등)는 메모리에 그대로 유지됨.
@@ -1057,26 +1062,36 @@ class MonitoringDetector(BaseDetector):
                 gevent.sleep(0.3)  # 0.3초 대기 후 루프 재확인 (CPU 점유 없음)
                 continue
 
-            # ── [진단] cap.read() 소요 시간 측정 ────────────────────────────
-            # FFMPEG HLS 타임아웃(30초)이 발생하면 이 값이 급등한다.
-            # → _diag['read_max_ms'] 가 29000ms 이상이면 타임아웃 발생 확인
-            _read_t0 = time.time()
+            # ── cap이 닫혀 있으면 read를 시도하지 않고 바로 reconnect로 넘긴다 ──
+            # reconnect() 5회 실패 후에는 self.cap이 닫힌 상태로 남는다.
+            # isOpened()=False인 cap에 read()를 호출하면 즉시 (False, None)을 반환하므로
+            # 아래의 if not success 분기로 자연스럽게 이어지지만,
+            # 명시적으로 처리해 의도를 명확히 한다.
+            if not self.cap.isOpened():
+                success = False   # read 없이 실패로 처리 → 아래 reconnect 분기로 진행
+                frame   = None
+            else:
+                # ── [진단] cap.read() 소요 시간 측정 ────────────────────────────
+                # FFMPEG HLS 타임아웃(30초)이 발생하면 이 값이 급등한다.
+                # → _diag['read_max_ms'] 가 29000ms 이상이면 타임아웃 발생 확인
+                _read_t0 = time.time()
 
-            # cap.read(): FFMPEG C 코드가 HLS 세그먼트 다운로드 시 수십 초 블로킹.
-            # OS 스레드에서 실행해 gevent 이벤트 루프(소켓 하트비트·MJPEG 스트림)를 보호.
-            success, frame = _FRAME_POOL.apply(self.cap.read)
+                # cap.read(): FFMPEG C 코드가 HLS 세그먼트 다운로드 시 수십 초 블로킹.
+                # OS 스레드에서 실행해 gevent 이벤트 루프(소켓 하트비트·MJPEG 스트림)를 보호.
+                success, frame = _FRAME_POOL.apply(self.cap.read)
 
-            # cap.read() 소요 시간 갱신 (진단 목적)
-            _read_ms = (time.time() - _read_t0) * 1000
-            self._diag['read_last_ms']  = round(_read_ms, 1)
-            self._diag['read_max_ms']   = round(max(self._diag.get('read_max_ms', 0), _read_ms), 1)
+                # cap.read() 소요 시간 갱신 (진단 목적)
+                _read_ms = (time.time() - _read_t0) * 1000
+                self._diag['read_last_ms']  = round(_read_ms, 1)
+                self._diag['read_max_ms']   = round(max(self._diag.get('read_max_ms', 0), _read_ms), 1)
 
-            # 5초 이상 걸린 read → 경고 로그 (타임아웃 임박 징후)
-            if _read_ms > 5000:
-                print(
-                    f"⚠️ [DIAG][{self.camera_id}] cap.read 지연 {_read_ms:.0f}ms "
-                    f"(타임아웃 임박 가능성)"
-                )
+                # 5초 이상 걸린 read → 경고 로그 (타임아웃 임박 징후)
+                if _read_ms > 5000:
+                    print(
+                        f"⚠️ [DIAG][{self.camera_id}] cap.read 지연 {_read_ms:.0f}ms "
+                        f"(타임아웃 임박 가능성)"
+                    )
+            # ── (이하 원래 코드 유지: success 변수로 분기) ──
 
             if not success:
                 # ── [진단] reconnect 호출 기록 ───────────────────────────────
