@@ -186,10 +186,11 @@ export default function MetricsPanel({ data }) {
       )}
 
       {/* 정체 예측 영역 — 1h·2h·3h 3열 구조 (132차 개편) */}
-      <div style={{ ...sectionStyle, flex: 1, borderBottom: 'none' }}>
+      {/* flex: 1 + minHeight: 0 → 남은 공간을 채우되, 부족하면 줄어들어 overflow 방지 */}
+      <div style={{ ...sectionStyle, flex: 1, minHeight: 0, borderBottom: 'none', display: 'flex', flexDirection: 'column' }}>
         <div style={labelStyle}>정체 예측 (1h·2h·3h)</div>
-        {/* 방향별 예측 뱃지: 각 뱃지 내부에 1h/2h/3h 3열 표시 */}
-        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+        {/* flexDirection: column + minHeight: 0 → 상행/하행 두 행이 가용 공간을 나눠 차지하고 공간 부족 시 함께 축소 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px', flex: 1, minHeight: 0 }}>
           {/* 왼쪽 방향(CCTV 기준) 예측 뱃지 */}
           <PredictionBadge
             direction={leftBadge.label}
@@ -266,31 +267,55 @@ function PredictionBadge({ direction, prediction }) {
   ];
 
   return (
+    // flex: 1 + minHeight: 0 → 두 행이 공간을 나눠 차지하되 공간 부족 시 축소 허용
+    // 가로 배치: 방향 레이블(왼쪽 고정) + 구분선 + 1h·2h·3h 셀(오른쪽 확장)
     <div style={{
-      flex: 1, padding: '8px', borderRadius: '8px',
-      background: '#0f172a', border: '1px solid #1e293b',
+      flex: 1,
+      minHeight: 0,
+      padding: '8px 10px',
+      borderRadius: '8px',
+      background: '#0f172a',
+      border: '1px solid #1e293b',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
     }}>
-      {/* 방향 레이블 */}
-      <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '5px', textAlign: 'center' }}>
+      {/* 방향 레이블 — 왼쪽 고정 너비로 정렬 */}
+      <div style={{ fontSize: '10px', color: '#64748b', width: '26px', flexShrink: 0, textAlign: 'center', lineHeight: 1.3 }}>
         {direction}
       </div>
 
+      {/* 세로 구분선 */}
+      <div style={{ width: '1px', alignSelf: 'stretch', background: '#1e293b', flexShrink: 0 }} />
+
       {!hasAny ? (
         /* 데이터 부족 시 학습 중 안내 */
-        <div style={{ fontSize: '11px', color: '#475569', textAlign: 'center' }}>학습 중</div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#475569' }}>
+          학습 중
+        </div>
       ) : (
-        /* 1h / 2h / 3h 3열 구조 */
-        <div style={{ display: 'flex', gap: '2px' }}>
+        /* 1h / 2h / 3h 셀 — 가로로 나란히, 세로는 행 높이 가득 채운다 */
+        <div style={{ flex: 1, display: 'flex', gap: '4px', alignSelf: 'stretch' }}>
           {HORIZONS.map(({ label, min }) => {
             const p     = predByMin[min] ?? null;  // 해당 horizon 예측 결과 (없으면 null)
             const color = p ? (PRED_COLOR[p.predicted_level] || '#6b7280') : '#475569';
+            const bg    = p ? (PRED_BG[p.predicted_level]    || '#37415118') : 'transparent';
             const lv    = p ? (PRED_LABEL[p.predicted_level] || '-') : '-';
             return (
-              <div key={min} style={{ flex: 1, textAlign: 'center' }}>
-                {/* 시간대 헤더 */}
-                <div style={{ fontSize: '9px', color: '#475569', marginBottom: '3px' }}>{label}</div>
-                {/* 예측 레벨 (없으면 "-") */}
-                <div style={{ fontSize: '11px', fontWeight: 700, color, lineHeight: 1 }}>{lv}</div>
+              // 각 셀: 세로 가득 채우고 내용은 중앙 정렬 / overflow:hidden + minHeight:0으로 경계 밖 삐짐 방지
+              <div key={min} style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                background: bg, border: `1px solid ${color}33`,
+                borderRadius: '6px', gap: '2px', padding: '3px 2px',
+              }}>
+                {/* 시간대 레이블 */}
+                <div style={{ fontSize: '9px', color: '#64748b', flexShrink: 0 }}>{label}</div>
+                {/* 예측 레벨 — jam_score는 위 뱃지에서 이미 표시하므로 생략 */}
+                <div style={{ fontSize: '12px', fontWeight: 700, color, lineHeight: 1, flexShrink: 0 }}>{lv}</div>
               </div>
             );
           })}
@@ -302,8 +327,9 @@ function PredictionBadge({ direction, prediction }) {
 
 // ── 스타일 상수 ───────────────────────────────────────────────
 
-// overflow: visible — 뱃지 호버 시 아래로 펼쳐지는 방향 기준 툴팁이 패널 경계에서 잘리지 않도록 한다
-const panelStyle  = { height: '100%', display: 'flex', flexDirection: 'column', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', overflow: 'visible' };
+// overflow: hidden — 예측 영역 내용이 ActionPanel 영역을 침범하지 않도록 한다
+// 방향 기준 툴팁은 position:absolute로 MetricsPanel 내부(예측 섹션 위)에 렌더링되므로 클리핑 무관
+const panelStyle  = { height: '100%', display: 'flex', flexDirection: 'column', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', overflow: 'hidden' };
 const headerStyle = { padding: '10px 14px', borderBottom: '1px solid #1e293b', fontSize: '11px', fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', flexShrink: 0 };
 const sectionStyle= { padding: '12px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0 };
 const labelStyle  = { fontSize: '11px', color: '#64748b', marginBottom: '6px', display: 'block' };

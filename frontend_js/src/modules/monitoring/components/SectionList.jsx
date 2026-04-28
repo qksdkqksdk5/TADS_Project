@@ -1,6 +1,6 @@
 /* eslint-disable */
 // src/modules/monitoring/components/SectionList.jsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { fetchItsCctv, startSegment, stopSegment } from '../api';
 
 const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
@@ -61,6 +61,18 @@ export default function SectionList({ host, cameras, selectedId, onSelect, onVie
       setEndIC(prev   => prev || icList[icList.length - 1]);
     }
   }, [icList]);
+
+  // 종료 IC 드롭다운 옵션: icList 원래 순서를 유지하면서 startIC 위치부터 시작하도록 회전한다.
+  // 예) icList=['서초','양재','원지동','상적교'], startIC='양재'
+  //   → ['양재','원지동','상적교','서초']
+  // → 시작 IC를 선택하면 종료 드롭다운이 그 IC부터 고속도로 진행 방향 순서로 나열된다.
+  const endOptions = useMemo(() => {
+    if (!startIC) return [...icList];          // 시작 IC 미선택 시 원본 순서 그대로 반환
+    const idx = icList.indexOf(startIC);       // icList에서 startIC 위치 탐색
+    if (idx <= 0) return [...icList];          // 이미 첫 번째이거나 못 찾으면 그대로 반환
+    // startIC 위치부터 잘라 맨 앞에 붙이고 나머지를 뒤에 이어 붙인다
+    return [...icList.slice(idx), ...icList.slice(0, idx)];
+  }, [icList, startIC]);
 
   const handleStartSegment = useCallback(async () => {
     if (!startIC || !endIC) { setSegError('시작/종료 IC를 선택하세요'); return; }
@@ -141,12 +153,15 @@ export default function SectionList({ host, cameras, selectedId, onSelect, onVie
                   label="시작"
                   value={startIC}
                   options={icList}
-                  onChange={setStartIC}
+                  onChange={(val) => {
+                    setStartIC(val); // 시작 IC 변경
+                    setEndIC(val);   // 종료 IC도 같은 값으로 리셋 → 드롭다운이 맨 위에서 열림
+                  }}
                 />
                 <IcSelect
                   label="종료"
                   value={endIC}
-                  options={[...icList].reverse()}
+                  options={endOptions}  // startIC 기준으로 회전된 역순 목록
                   onChange={setEndIC}
                 />
               </div>

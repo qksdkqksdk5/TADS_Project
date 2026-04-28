@@ -445,3 +445,131 @@ describe('SectionList — 시작 후 중지 통합 흐름', () => {
   });
 
 });
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Section D: 종료 IC 드롭다운 정렬 — 시작 IC 기준 회전
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('SectionList — 종료 IC 드롭다운 시작 IC 기준 정렬', () => {
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // icList = ['노포IC', '금정IC', '달래내IC', '부산IC'] 순서로 서버가 반환한다고 가정
+    fetchItsCctv.mockResolvedValue(makeItsCctvResponse(['노포IC', '금정IC', '달래내IC', '부산IC']));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ── D-1. 기본값: 시작 IC 첫 항목이 종료 드롭다운 맨 위에 온다 ─────────────
+  // 초기 startIC = icList[0] = '노포IC'
+  // 종료 드롭다운의 첫 번째 옵션도 '노포IC'여야 한다.
+  it('기본 startIC(첫 번째 IC)가 종료 드롭다운의 첫 번째 옵션으로 표시된다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    // IC 목록 로드 및 상태 업데이트 대기
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    // 두 번째 select = 종료 드롭다운
+    const selects = screen.getAllByRole('combobox');
+    const endSelect = selects[1];
+
+    // 종료 드롭다운의 첫 번째 옵션이 startIC(='노포IC')와 같아야 한다
+    expect(endSelect.options[0].value).toBe('노포IC');
+  });
+
+  // ── D-2. 시작 IC 변경 시 종료 드롭다운의 첫 번째 옵션이 갱신된다 ─────────
+  // startIC를 '달래내IC'로 바꾸면 종료 드롭다운의 첫 번째 옵션도 '달래내IC'가 된다.
+  it('startIC를 변경하면 종료 드롭다운의 첫 번째 옵션이 선택된 startIC로 갱신된다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    const selects = screen.getAllByRole('combobox');
+    const startSelect = selects[0]; // 시작 드롭다운
+    const endSelect   = selects[1]; // 종료 드롭다운
+
+    // 시작 IC를 '달래내IC'로 변경
+    await act(async () => {
+      fireEvent.change(startSelect, { target: { value: '달래내IC' } });
+    });
+
+    // 종료 드롭다운의 첫 번째 옵션이 '달래내IC'여야 한다
+    expect(endSelect.options[0].value).toBe('달래내IC');
+  });
+
+  // ── D-3. 종료 드롭다운의 전체 항목 수는 변하지 않는다 ──────────────────────
+  // 회전만 할 뿐 항목이 사라지거나 추가되어서는 안 된다.
+  it('startIC 변경 후에도 종료 드롭다운의 총 옵션 수는 icList 길이와 동일하다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    const selects = screen.getAllByRole('combobox');
+    const startSelect = selects[0];
+    const endSelect   = selects[1];
+
+    await act(async () => {
+      fireEvent.change(startSelect, { target: { value: '금정IC' } });
+    });
+
+    // icList 길이 = 4, 종료 옵션도 4개여야 한다
+    expect(endSelect.options.length).toBe(4);
+  });
+
+  // ── D-5. startIC 변경 시 endIC가 startIC로 리셋되어 드롭다운이 맨 위에서 열린다 ──
+  // 드롭다운은 현재 선택된 값(endIC) 위치로 자동 스크롤되므로,
+  // endIC가 startIC와 같아야 회전된 리스트의 맨 위에서 열린다.
+  it('startIC 변경 시 endIC가 새 startIC 값으로 리셋된다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    const selects = screen.getAllByRole('combobox');
+    const startSelect = selects[0];
+    const endSelect   = selects[1];
+
+    // 시작 IC를 '달래내IC'로 변경
+    await act(async () => {
+      fireEvent.change(startSelect, { target: { value: '달래내IC' } });
+    });
+
+    // endIC(= endSelect.value)도 '달래내IC'로 리셋되어야 한다
+    expect(endSelect.value).toBe('달래내IC');
+  });
+
+  // ── D-4. startIC 선택 후 종료 드롭다운이 icList 진행 방향 순서를 따른다 ─────
+  // icList = ['노포IC', '금정IC', '달래내IC', '부산IC']
+  // startIC = '금정IC' → 종료 드롭다운: ['금정IC', '달래내IC', '부산IC', '노포IC']
+  // → 역순이 아닌 icList 원본 순서로 이어져야 한다.
+  it('startIC 이후 종료 드롭다운이 icList 진행 방향(역순 아님) 순서로 이어진다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    const selects = screen.getAllByRole('combobox');
+    const startSelect = selects[0];
+    const endSelect   = selects[1];
+
+    // 시작 IC를 '금정IC'로 변경
+    await act(async () => {
+      fireEvent.change(startSelect, { target: { value: '금정IC' } });
+    });
+
+    // 종료 드롭다운 순서: ['금정IC', '달래내IC', '부산IC', '노포IC']
+    // (icList 진행 방향으로 금정IC부터 순서대로, 앞부분 노포IC가 마지막으로 이동)
+    const opts = Array.from(endSelect.options).map(o => o.value);
+    expect(opts[0]).toBe('금정IC');   // 시작 IC가 맨 위
+    expect(opts[1]).toBe('달래내IC'); // icList 다음 항목
+    expect(opts[2]).toBe('부산IC');   // icList 그 다음
+    expect(opts[3]).toBe('노포IC');   // 앞쪽 항목이 맨 마지막
+  });
+
+});
