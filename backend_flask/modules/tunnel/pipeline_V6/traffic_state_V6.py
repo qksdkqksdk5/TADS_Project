@@ -1,5 +1,5 @@
 # ==========================================
-# 파일명: traffic_state_V5_5.py
+# 파일명: traffic_state_V6.py
 # 설명:
 # V5_5 상태로직
 # - ROI 안 차량만 속도 계산
@@ -44,8 +44,9 @@ class TrafficState:
         self.EMA_ALPHA = 0.3
 
         # 상태 임계값
-        self.JAM_SPEED_THR = 1.3
-        self.CONGESTION_SPEED_THR = 2.6
+        self.JAM_SPEED_THR = 1.8
+        self.CONGESTION_SPEED_THR = 3.0
+        
 
         # hold
         self.prev_state = "NORMAL"

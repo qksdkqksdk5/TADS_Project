@@ -1,5 +1,5 @@
 # ==========================================
-# 파일명: lane_template_V5_5.py
+# 파일명: lane_template_V6.py
 # 설명:
 # V5_5 차선(군집) 추정 모듈
 #
@@ -46,6 +46,7 @@ class LaneTemplateEstimator:
         self.current_template = []          # 최종 대표 집단 목록
         self.template_confirmed = False
         self.phase = "WAITING"              # WAITING / BOOTSTRAP / CLUSTER_VIEW / MEMORY_LOAD / MEMORY_WAIT / REESTIMATING
+        self.manual_lane_count = None       # 관제사가 지정한 목표 차선 수. 실제 lane_count와 분리한다.
 
         # -----------------------------
         # 수집 메모리
@@ -101,6 +102,7 @@ class LaneTemplateEstimator:
             "lane_reestimate_status": "idle",
             "lane_reestimate_frame_count": 0,
             "lane_reestimate_window": 50,
+            "target_lane_count": None,
         }
 
         # -----------------------------
@@ -170,6 +172,38 @@ class LaneTemplateEstimator:
         self.memory_pending_display = False
 
     # =========================================================
+    # 0) 관제사 목표 차선 수 설정
+    # =========================================================
+    def set_target_lane_count(self, lane_count):
+        """
+        관제사가 입력한 목표 차선 수를 저장한다.
+
+        target_lane_count는 목표값이고, lane_count는 실제 추정/확정된 값이다.
+        따라서 여기서 current_template를 4개로 억지 생성하지 않는다.
+        기존 template가 목표값과 다르면 확정만 해제하고 bootstrap 대기 상태로 돌린다.
+        """
+        lane_count = int(lane_count)
+        if lane_count not in (2, 3, 4):
+            return False
+
+        self.manual_lane_count = lane_count
+        self._reset_bootstrap_memory()
+        self.bootstrap_ready_count = 0
+        self.bootstrap_cooldown = 0
+        self.memory_checked = True
+
+        if len(self.current_template) != self.manual_lane_count:
+            self.template_confirmed = False
+            self.phase = "WAITING"
+            self.memory_loaded = False
+            self.memory_pending_display = False
+            self.memory_loaded_frame = None
+            self.reestimate_status = "idle"
+
+        print(f"🎯 목표 차선 수 설정: {self.manual_lane_count}")
+        return True
+
+    # =========================================================
     # 0) bootstrap 관련 상태 초기화
     # =========================================================
     def _reset_bootstrap_memory(self):
@@ -212,6 +246,7 @@ class LaneTemplateEstimator:
 
         self.memory_loaded_frame = None
         self.memory_pending_display = False
+        self.manual_lane_count = None
 
         # 수동 재추정 상태도 함께 초기화
         self.reestimate_requested = False
@@ -338,6 +373,13 @@ class LaneTemplateEstimator:
 
             centerlines = payload.get("centerlines", [])
             if not isinstance(centerlines, list) or len(centerlines) == 0:
+                return False
+
+            if self.manual_lane_count is not None and len(centerlines) != self.manual_lane_count:
+                print(
+                    f"⚠️ lane memory 무시: 목표 {self.manual_lane_count}차선, "
+                    f"memory {len(centerlines)}차선"
+                )
                 return False
 
             self.current_template = centerlines
@@ -881,7 +923,13 @@ class LaneTemplateEstimator:
         if len(final_cluster_info) < 1:
             return False
 
-        if len(self.collected_track_ids) < self.MIN_BOOTSTRAP_TRACKS:
+        required_tracks = self.MIN_BOOTSTRAP_TRACKS
+        if self.manual_lane_count is not None:
+            if len(final_cluster_info) != self.manual_lane_count:
+                return False
+            required_tracks = max(required_tracks, self.manual_lane_count)
+
+        if len(self.collected_track_ids) < required_tracks:
             return False
 
         return True
@@ -1373,6 +1421,10 @@ class LaneTemplateEstimator:
             visible_centerlines = []
             visible_lane_count = 0
 
+        visible_template_confirmed = (self.template_confirmed and not hide_memory_display)
+        if self.manual_lane_count is not None and visible_lane_count != self.manual_lane_count:
+            visible_template_confirmed = False
+
         result = {
             "lane_map": lane_map,
             "raw_lane_map": raw_lane_map,
@@ -1385,7 +1437,8 @@ class LaneTemplateEstimator:
                 } for tid in lane_map
             },
             "template_phase": self.phase,
-            "template_confirmed": (self.template_confirmed and not hide_memory_display),
+            "template_confirmed": visible_template_confirmed,
+            "target_lane_count": self.manual_lane_count,
             "clusters_stage1": clusters_stage1_debug,
             "clusters_stage2": clusters_stage2_debug,
             "clusters": clusters_stage2_debug,
@@ -1400,8 +1453,9 @@ class LaneTemplateEstimator:
 
         self.last_debug = {
             "phase": self.phase,
-            "template_confirmed": (self.template_confirmed and not hide_memory_display),
+            "template_confirmed": visible_template_confirmed,
             "lane_count": visible_lane_count,
+            "target_lane_count": self.manual_lane_count,
             "template": visible_centerlines,
             "clusters_stage1": clusters_stage1_debug,
             "clusters_stage2": clusters_stage2_debug,

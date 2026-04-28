@@ -1,5 +1,5 @@
 # ==========================================
-# 파일명: pipeline_core_V5_5.py
+# 파일명: pipeline_core_V6.py
 # 설명:
 # V5_5 통합 파이프라인
 # - AdaptiveROI
@@ -13,11 +13,11 @@
 # 2) 중앙영역 차량 수 기준 ROI 자동설정을 지원
 # ==========================================
 
-from adaptive_roi_V5_5 import AdaptiveROI
-from track_analyzer_V5_5 import TrackAnalyzer
-from lane_template_V5_5 import LaneTemplateEstimator
-from traffic_state_V5_5 import TrafficState
-from traffic_accident_V5_5 import AccidentDetector
+from adaptive_roi_V6 import AdaptiveROI
+from track_analyzer_V6 import TrackAnalyzer
+from lane_template_V6 import LaneTemplateEstimator
+from traffic_state_V6 import TrafficState
+from traffic_accident_V6 import AccidentDetector
 
 
 class PipelineCore:
@@ -116,6 +116,10 @@ class PipelineCore:
             "lane_debug": lane_result["lane_debug"],
             "template_phase": lane_result["template_phase"],
             "template_confirmed": lane_result["template_confirmed"],
+            "target_lane_count": lane_result.get(
+                "target_lane_count",
+                getattr(self.lane_estimator, "manual_lane_count", None)
+            ),
             "clusters_stage1": lane_result.get("clusters_stage1", []),
             "clusters_stage2": lane_result.get("clusters_stage2", []),
             "clusters": lane_result.get("clusters", []),
@@ -130,7 +134,20 @@ class PipelineCore:
         # --------------------------------------------------
         # 7) 사고 판단
         # --------------------------------------------------
-        accident_result = self.accident_model.update(frame_id, tracks, merged_analysis)
+        # 사고 탐지는 혼잡/정체 상태를 알아야 정체성 고정 셀과
+        # 대형차 가림을 방어할 수 있다. 기존 merged_analysis를 복사해
+        # state 결과만 보강해서 전달하면 전체 pipeline 구조는 유지된다.
+        accident_analysis = dict(merged_analysis)
+
+        if isinstance(state_result, dict):
+            state_debug = state_result.get("debug", {})
+            accident_analysis["traffic_state"] = state_result.get("state", "NORMAL")
+            accident_analysis["state_avg_speed"] = state_debug.get("state_speed", 0.0)
+            accident_analysis["traffic_buffer_avg_speed"] = state_debug.get("buffer_avg_speed", 0.0)
+        else:
+            accident_analysis["traffic_state"] = str(state_result)
+
+        accident_result = self.accident_model.update(frame_id, tracks, accident_analysis)
 
         return {
             "analysis": merged_analysis,
