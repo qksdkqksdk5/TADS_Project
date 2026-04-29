@@ -43,7 +43,7 @@ TADS는 이를 해결하기 위해:
 
 ### 📡 CCTV Monitoring
 
-![dashboard](./assets/dashboard_main.png)
+![dashboard](./assets/dashboard_main_v1.png)
 
 ### 🚦 Traffic Flow Monitoring
 
@@ -53,7 +53,7 @@ TADS는 이를 해결하기 위해:
 
 ### 🚇 Smart Tunnel
 
-![tunnel](./assets/smart_tunnel.png)
+![tunnel](./assets/smart_tunnel_v1.png)
 
 ### 🔍 License Plate Recognition
 
@@ -61,7 +61,7 @@ TADS는 이를 해결하기 위해:
 
 ### 📷 Raspberry Pi CCTV
 
-![raspi](./assets/raspberry_cctv.png)
+![raspi](./assets/raspberry_cctv_v1.png)
 
 ### 📊 Statistics
 
@@ -69,7 +69,7 @@ TADS는 이를 해결하기 위해:
 
 ### 👤 AI-AGENT
 
-![llm](./assets/AI_AGENT.png)
+![llm](./assets/AI_AGENT_v1.png)
 
 ---
 
