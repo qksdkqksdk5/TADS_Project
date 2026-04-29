@@ -22,7 +22,7 @@ else:
 
 plate_bp = Blueprint('plate', __name__)
 
-# 서버 시작 시 DB에서 전체기록 복원
+# review01 - 서버 시작 시 DB에서 전체기록 복원
 def _restore_from_db():
     """서버 재시작 시 DB 데이터를 all_results에 복원"""
     rows = get_all_results()
@@ -154,6 +154,7 @@ def init():
         ))
     return jsonify({"status": "ok", "restored": len(state['all_results']), "videos": videos}), 200
 
+#review02 - 시작 요청 시 DB 복원 + 태스크 시작
 @plate_bp.route('/start', methods=['POST'])
 def start():
     from flask import current_app
@@ -161,7 +162,7 @@ def start():
     
     data           = request.get_json() or {}
     video_filename = data.get('video')
-    operator_name  = data.get('operator_name')  # ✅ 추가: 관리자 이름
+    operator_name  = data.get('operator_name')
  
     # 1. 기존 루프 정지
     with state_lock:
@@ -180,7 +181,7 @@ def start():
         state['plate_history_texts'] = {}
         state['plate_votes'] = {}
         state['latest_frame'] = None
-        state['operator_name'] = operator_name  # ✅ 추가: 관리자 이름 저장
+        state['operator_name'] = operator_name 
  
         if video_filename:
             vid = os.path.basename(video_filename)
@@ -262,9 +263,10 @@ def plate_image(filename):
     """저장된 번호판 캡처 이미지 제공 (서브폴더 경로 지원)"""
     return send_from_directory(SAVE_DIR, filename)
 
+# review03 - 정답 입력 후 글자별 비교 (분석 리포트에서 정오 표시가 되는 것이 이 함수의 결과)
 @plate_bp.route('/verify', methods=['POST'])
 def verify():
-    """정답 입력 → 글자별 비교 후 상태 + CSV 업데이트"""
+    """정답 입력 → 글자별 비교 후 상태 + DB 업데이트"""
     data = request.get_json() or {}
     track_id = data.get('id')
     ground_truth = data.get('ground_truth', '').strip().replace(' ', '')
@@ -304,6 +306,7 @@ def verify():
         "ground_truth": ground_truth
     }), 200
 
+# review04 - 인식이 틀렸을 때 전처리 옵션 바꿔서 재인식 요청하는 엔드포인트
 @plate_bp.route('/reprocess', methods=['POST'])
 def reprocess():
     """전처리 옵션 적용 후 재인식 — 누적 방식 (방법별 결과 모두 저장)"""

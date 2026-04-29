@@ -96,9 +96,9 @@ const s = {
     border: '1px solid #2a2a4a',
     transition: 'border-color 0.2s',
   },
-  img: { width: '100%', height: '65px', objectFit: 'cover', borderRadius: '4px', marginBottom: '6px' },
+  img: { width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', marginBottom: '6px' },
   imgEmpty: {
-    width: '100%', height: '65px', background: '#2a2a4a',
+    width: '100%', height: '80px', background: '#2a2a4a',
     borderRadius: '4px', marginBottom: '6px',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     color: '#606080', fontSize: '12px',

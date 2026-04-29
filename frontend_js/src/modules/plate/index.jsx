@@ -50,6 +50,7 @@ export default function PlateModule({ host, user, isMobile }) {
       .catch(() => setConnected(false));
   }, []);
 
+  // review01 - 시작 후 1초마다 영상/결과 폴링 (영상 필터링도 포함)
   useEffect(() => {
     if (!started) return;
     pollRef.current = setInterval(async () => {
@@ -94,6 +95,7 @@ export default function PlateModule({ host, user, isMobile }) {
     ));
   };
 
+  // review02 - 컴포넌트 언마운트 시 연결 상태면 서버에 stop 요청 + 상태 초기화
   useEffect(() => {
     return () => {
       if (connected) {

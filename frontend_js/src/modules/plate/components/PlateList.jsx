@@ -108,7 +108,7 @@ export default function PlateList({
 
 const s = {
   panel: {
-    width: '320px',
+    width: '300px',
     flexShrink: 0,
     minHeight: 0,
     background: '#1a1a2e',

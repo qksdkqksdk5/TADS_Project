@@ -43,7 +43,7 @@ io_queue             = queue.Queue(maxsize=200)
 _current_video_token = None
 _video_token_lock    = threading.Lock()
 
-
+# review01
 def _io_worker():
     print("👷 [IO Worker] 시작")
     while True:
@@ -98,6 +98,7 @@ def _yolo_track(model, frame, conf, img_size):
 def process_video():
     global _current_video_token
 
+    # review02
     # ✅ 새 토큰 발급 → 이전 영상의 큐 작업 자동 무효화
     my_token = str(uuid.uuid4())
     with _video_token_lock:
@@ -158,6 +159,7 @@ def process_video():
             frame_count += 1
             t0          = time.time()
 
+            #review03 - YOLO 모델 추론 → 트래킹 결과에서 ROI 내에 있는 ID만 OCR 입력 큐에 등록
             results   = model.track(frame, conf=CONF, imgsz=YOLO_IMG_SIZE, persist=True, verbose=False, device='cpu')
             annotated = frame.copy()
 
@@ -171,8 +173,8 @@ def process_video():
                     is_fixed = best_samples.get(tid, {}).get('is_fixed', False)
                     color    = (0, 255, 0) if is_fixed else (255, 165, 0)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-
                     center_y = (y1 + y2) / 2
+                    #review04 - ROI 내에 있고, 아직 큐에 등록 안 된 ID만 → OCR 입력 큐에 등록
                     if int(h_f * ROI_TOP) < center_y < int(h_f * ROI_BOTTOM) and not is_fixed:
                         if tid not in queued_ids and not ocr_input_queue.full():
                             crop = frame[max(0,y1-PAD):min(h_f,y2+PAD), max(0,x1-PAD):min(w_f,x2+PAD)]
@@ -193,8 +195,8 @@ def process_video():
                     continue
                 if plate_pattern.match(p_text):
                     if tid not in plate_votes: plate_votes[tid] = []
+                    #review05 - 같은 ID에 대한 텍스트가 여러 번 나온 결과가 임계값을 넘으면 → 확정으로 간주
                     plate_votes[tid].append(p_text)
-
                     vote_counter      = Counter(plate_votes[tid])
                     voted_text, count = vote_counter.most_common(1)[0]
                     is_now_fixed      = count >= VOTE_THRESHOLD
