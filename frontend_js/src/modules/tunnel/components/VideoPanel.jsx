@@ -1,37 +1,48 @@
-import { useMemo } from "react";
-
-export default function VideoPanel({ host, active }) {
-  const baseUrl = `http://${host || window.location.hostname}:5000/api/tunnel/video_feed`;
-
-  const videoUrl = useMemo(() => {
-    return `${baseUrl}?t=${Date.now()}`;
-  }, [baseUrl, active]);
+export default function VideoPanel({
+  videoLoading,
+  videoFeedUrl,
+  status,
+  lastSelectedCctv,
+  cctvSourceText,
+  onVideoLoad,
+  onVideoError,
+}) {
+  const cctvName = status?.cctv_name || lastSelectedCctv?.name || "-";
 
   return (
-    <div style={{ background: "#111", padding: 12, borderRadius: 12 }}>
-      {!active ? (
-        <div
-          style={{
-            width: "100%",
-            height: 360,
-            borderRadius: 8,
-            background: "#000",
-            color: "#aaa",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 18
-          }}
-        >
-          터널 탭 비활성화 또는 서비스 정지 상태
-        </div>
-      ) : (
-        <img
-          src={videoUrl}
-          alt="Tunnel Video"
-          style={{ width: "100%", borderRadius: 8 }}
-        />
-      )}
+    <div className="panel panel-video">
+      <div className="section-title">📹 CCTV</div>
+
+      <div className="video-wrap">
+        {videoLoading && (
+          <div className="video-overlay-message">
+            <div>영상 연결 중입니다</div>
+            <div className="video-overlay-sub">
+              화면이 계속 나오지 않으면 영상새로고침을 눌러주세요
+            </div>
+          </div>
+        )}
+
+        {!videoLoading && !videoFeedUrl && (
+          <div className="video-inactive-box">
+            터널 탭 비활성화 또는 서비스 정지 상태
+          </div>
+        )}
+
+        {videoFeedUrl && (
+          <img
+            key={videoFeedUrl}
+            src={videoFeedUrl}
+            alt="cctv"
+            className="video-image"
+            onLoad={onVideoLoad}
+            onError={onVideoError}
+          />
+        )}
+      </div>
+
+      <div className="video-caption">{cctvName}</div>
+      {cctvSourceText && <div className="video-debug-source">{cctvSourceText}</div>}
     </div>
   );
 }

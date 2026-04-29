@@ -3,10 +3,12 @@
 # 설명:
 # SMART TUNNEL V6 실행 파일
 #
-# 역할
+# 역할 : 웹에서 직접 쓰는 파일 아니고 테스트 CCTV 영상을 넣어서 
+#       pipeline_V6이 정상 동작하는지 확인할 때 사용
+
 # 1) 테스트 영상을 읽는다
 # 2) YOLO + ByteTrack으로 차량을 추적한다
-# 3) PipelineCore(V5_3)에 tracks를 넘겨서
+# 3) PipelineCore(V6)에 tracks를 넘겨서
 #    - Adaptive ROI
 #    - Track Analyzer
 #    - Lane Template

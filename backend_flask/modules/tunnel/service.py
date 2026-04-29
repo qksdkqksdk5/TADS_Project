@@ -60,6 +60,8 @@ class TunnelLiveService:
         self.current_cctv = None
         self.pipeline = TunnelPipelineAdapter()
         self.pipeline.current_dir = str(self.runtime_root)
+        self.pipeline.runtime_lane_memory_dir = str(self.runtime_lane_memory_dir)
+        self.pipeline.default_lane_memory_dir = str(self.default_lane_memory_dir)
         self.active_cctv_name = None
 
         # CCTV 변경 시 이전 스트림 종료용 토큰
@@ -1210,6 +1212,12 @@ class TunnelLiveService:
         runtime_lane_debug = self.runtime_root / "lane_debug"
         runtime_lane_debug.mkdir(parents=True, exist_ok=True)
         self.runtime_lane_memory_dir.mkdir(parents=True, exist_ok=True)
+        self.default_lane_memory_dir.mkdir(parents=True, exist_ok=True)
+
+        if hasattr(self.pipeline, "runtime_lane_memory_dir"):
+            self.pipeline.runtime_lane_memory_dir = str(self.runtime_lane_memory_dir)
+        if hasattr(self.pipeline, "default_lane_memory_dir"):
+            self.pipeline.default_lane_memory_dir = str(self.default_lane_memory_dir)
 
         if hasattr(lane_template, "output_dir"):
             lane_template.output_dir = str(runtime_lane_debug)

@@ -203,6 +203,19 @@
   color: #90a8de;
 }
 
+.video-inactive-box {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aab6cf;
+  background: #000000;
+  font-size: 18px;
+  font-weight: 800;
+  text-align: center;
+}
+
 .state-badge {
   display: inline-flex;
   align-items: center;
@@ -284,6 +297,28 @@
   font-weight: 900;
 }
 
+.status-standard-box {
+  margin-top: 10px;
+  padding: 10px;
+  background: #111827;
+  border-radius: 10px;
+  color: #cbd7ef;
+  font-size: 12px;
+}
+
+.chart-panel {
+  background: #1a1a2e;
+  border: 1px solid rgba(146, 169, 214, 0.14);
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.chart-empty-text {
+  padding: 28px 0;
+  color: #9eb1d8;
+  font-size: 13px;
+}
+
 .traffic-legend {
   display: flex;
   flex-wrap: wrap;
@@ -357,6 +392,36 @@
 .summary-card-value.small {
   font-size: 14px;
   font-weight: 800;
+}
+
+.lane-management-status-text {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lane-count-normal {
+  color: #ffffff;
+}
+
+.lane-count-warning,
+.lane-warning-text {
+  color: #facc15;
+}
+
+.lane-target-input {
+  width: 64px;
+  margin-top: 6px;
+  padding: 4px 6px;
+  color: #ffffff;
+  background: #111827;
+  border: 1px solid #4b5563;
+  border-radius: 6px;
+}
+
+.lane-action-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .summary-mini-btn {
@@ -776,13 +841,29 @@
 .air-gauge-thumb {
   position: absolute;
   top: 50%;
-  transform: translate(-50%, -50%);
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: #f8fbff;
   border: 2px solid #0d1630;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+  transform: translate(-50%, -50%);
+}
+
+.air-gauge-thumb.thumb-normal {
+  left: 12.5%;
+}
+
+.air-gauge-thumb.thumb-caution {
+  left: 47.5%;
+}
+
+.air-gauge-thumb.thumb-warning {
+  left: 72.5%;
+}
+
+.air-gauge-thumb.thumb-danger {
+  left: 92.5%;
 }
 
 .air-metrics-grid.modern {

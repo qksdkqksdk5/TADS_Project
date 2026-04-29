@@ -1,7 +1,9 @@
 # ==========================================
 # 파일명: ventilation_bridge.py
 # 위치: backend_flask/modules/tunnel/ventilation_bridge.py
-# 역할:
+# 역할: 교통 분석 결과를 환기 대응 시스템에서 사용할 수 있는 위험도 입력값으로 변환
+#      AI 파이프라인(pipeline_V6)에서 나오는 값을 환기 위험도 판단용 입력으로 변환
+
 # - pipeline result -> ventilation input 변환
 # - VentilationRiskManager 호출
 # - service.py를 가볍게 유지하기 위한 브릿지 함수

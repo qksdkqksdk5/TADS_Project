@@ -1,29 +1,25 @@
 # ==========================================
 # 파일명: lane_template_V6.py
-# 설명:
-# V5_5 차선(군집) 추정 모듈
-#
-# [개선 목적]
-# 1) 기존 "초기 100프레임 1회 bootstrap" 방식 제거
-# 2) 중앙영역 차량 2대 이상 + 연속 N프레임 유지 시 bootstrap 시작
-# 3) bootstrap 실패 시 cooldown 후 재시도 가능
-# 4) bootstrap 성공 시 최종 대표 집단(current_template) 확정
-# 5) 현재 프레임 차량은 최종 대표 집단 중 가장 가까운 차선에 임시 할당
-# 6) 동일 CCTV(터널)면 과거 저장된 lane memory를 먼저 불러오기
-# 7) lane memory는 즉시 로드하되, 화면 표시만 50프레임 뒤에 시작
-# 8) [추가] 관제사 요청 시점부터 50프레임을 따로 수집해 수동 재추정 가능
-#
-# [핵심 아이디어]
-# - 실시간 CCTV에서는 초반에 차량이 적으면 차선 추정이 실패할 수 있음
-# - 그래서 "시작 후 100프레임"이 아니라
-#   "중앙영역 차량 수 조건이 만족된 뒤" bootstrap을 시작해야 안정적임
-# - 또한 같은 터널은 구조가 거의 같으므로, 한 번 저장한 차선 template를
-#   다음 진입 때 재사용하면 더 안정적으로 동작함
-# - 다만 memory 차선을 영상 시작 직후 바로 그리면 어색할 수 있으므로
-#   내부적으로는 즉시 로드하되, 화면 표시만 일정 프레임 뒤에 시작한다
-# - 실험 단계에서는 관제사가 "지금 차량이 충분하다"고 판단한 시점에
-#   버튼을 눌러 50프레임만 따로 모아 다시 차선을 추정할 수 있게 한다
-# ==========================================
+# 설명: 차선(군집) 추정 모듈 → 차량의 이동 궤적을 기반으로 차선을 추정하는 모듈
+#      터널 CCTV는 차선수와 카메라의 위치에 따라 각도가 달라 차선 추정 필요 (단순 직선 아님)
+
+# 
+# 기능
+# 1) CCTV 이름 확인
+# 2) 저장된 lane memory 확인 → memory 있으면 로드/memory 없으면 차량 궤적 수집
+# 핵심 : 고정 CCTV로 기존 저장된 차선을 불러오면 조건없이 빠른 차선 추정 가능
+# 3) 안정적으로 움직이는 track만 선별
+# 4) 차량 궤적 선형 피팅
+# 5) 1차 군집화 → 2차 군집화 
+# 핵심 : 단순 X좌표 기준 아니라 차량 이동 궤적을 비슷한 궤적끼리 군집화해서 추정
+# 6) 최종 차선 template 확정 → 현재 차량을 가장 가까운 차선에 임시 할당
+
+# 추가 개선 (차선 오추정 경우)
+# 1) 관제사 수동 재추정 
+# 2) 목표 차선수 입력으로 해당 차선의 조건이 될때까지 대기중
+# 3) 차선수와 일치하는 조건이 되었을때 차량궤적에 따라 차선 추정 시작
+# 핵심 : 차선은 사고로직에서 차량의 진행방향을 보는 기준으로 매우 중요
+
 
 import os
 import re
@@ -338,6 +334,39 @@ class LaneTemplateEstimator:
             f"loaded_from={loaded_from}"
         )
 
+    def _log_lane_memory_check(
+        self,
+        current_cctv_name,
+        normalized_cctv_key,
+        runtime_lane_memory_path,
+        default_lane_memory_path,
+        loaded_from,
+    ):
+        runtime_exists = bool(runtime_lane_memory_path and os.path.exists(runtime_lane_memory_path))
+        default_exists = bool(default_lane_memory_path and os.path.exists(default_lane_memory_path))
+        print(
+            "[LANE MEMORY CHECK]\n"
+            f"current_cctv_name={current_cctv_name}\n"
+            f"normalized_cctv_key={normalized_cctv_key}\n"
+            f"runtime_lane_memory_path={runtime_lane_memory_path}\n"
+            f"runtime_exists={runtime_exists}\n"
+            f"default_lane_memory_path={default_lane_memory_path}\n"
+            f"default_exists={default_exists}\n"
+            f"loaded_from={loaded_from}"
+        )
+
+    def _log_lane_memory_load_result(self, loaded, lane_count=0, reason=""):
+        will_bootstrap = not loaded
+        print(
+            "[LANE MEMORY LOAD RESULT]\n"
+            f"loaded={loaded}\n"
+            f"lane_count={lane_count}\n"
+            f"template_confirmed={self.template_confirmed}\n"
+            f"template_phase={self.phase}\n"
+            f"will_bootstrap={will_bootstrap}\n"
+            f"reason={reason}"
+        )
+
     # =========================================================
     # 0-5) lane memory 저장
     # =========================================================
@@ -396,6 +425,19 @@ class LaneTemplateEstimator:
         """
         target_name = cctv_name or self.current_cctv_name
         if not target_name:
+            self.memory_checked = True
+            self._log_lane_memory_check(
+                current_cctv_name=target_name,
+                normalized_cctv_key=None,
+                runtime_lane_memory_path=None,
+                default_lane_memory_path=None,
+                loaded_from="none",
+            )
+            self._log_lane_memory_load_result(
+                loaded=False,
+                lane_count=0,
+                reason="missing current_cctv_name",
+            )
             return False
 
         memory_key, runtime_path = self._get_memory_path(target_name)
@@ -410,8 +452,7 @@ class LaneTemplateEstimator:
             load_path = default_path
             loaded_from = "default"
 
-        self._log_lane_memory_paths(
-            action="LOAD",
+        self._log_lane_memory_check(
             current_cctv_name=target_name,
             normalized_cctv_key=memory_key,
             runtime_lane_memory_path=runtime_path,
@@ -420,6 +461,12 @@ class LaneTemplateEstimator:
         )
 
         if not load_path:
+            self.memory_checked = True
+            self._log_lane_memory_load_result(
+                loaded=False,
+                lane_count=0,
+                reason="no runtime/default lane memory file matched normalized_cctv_key",
+            )
             return False
 
         try:
@@ -428,12 +475,27 @@ class LaneTemplateEstimator:
 
             centerlines = payload.get("centerlines", [])
             if not isinstance(centerlines, list) or len(centerlines) == 0:
+                self.memory_checked = True
+                self._log_lane_memory_load_result(
+                    loaded=False,
+                    lane_count=0,
+                    reason=f"invalid centerlines in {loaded_from} lane memory",
+                )
                 return False
 
             if self.manual_lane_count is not None and len(centerlines) != self.manual_lane_count:
                 print(
                     f"⚠️ lane memory 무시: 목표 {self.manual_lane_count}차선, "
                     f"memory {len(centerlines)}차선"
+                )
+                self.memory_checked = True
+                self._log_lane_memory_load_result(
+                    loaded=False,
+                    lane_count=len(centerlines),
+                    reason=(
+                        f"manual lane count mismatch: target={self.manual_lane_count}, "
+                        f"memory={len(centerlines)}"
+                    ),
                 )
                 return False
 
@@ -447,10 +509,21 @@ class LaneTemplateEstimator:
             self.memory_pending_display = True
 
             print(f"📂 저장된 lane memory 로드: {load_path}")
+            self._log_lane_memory_load_result(
+                loaded=True,
+                lane_count=len(centerlines),
+                reason=f"loaded from {loaded_from}",
+            )
             return True
 
         except Exception as e:
             print(f"❌ lane memory 로드 실패: {e}")
+            self.memory_checked = True
+            self._log_lane_memory_load_result(
+                loaded=False,
+                lane_count=0,
+                reason=f"exception while loading {loaded_from} lane memory: {e}",
+            )
             return False
 
     # =========================================================
@@ -1298,7 +1371,6 @@ class LaneTemplateEstimator:
         # 재추정 중에는 memory 자동 로드 로직을 건드리지 않는다.
         # -----------------------------------------------------
         if (not self.reestimate_collecting) and (not self.memory_checked) and (not self.template_confirmed) and self.current_cctv_name:
-            self.memory_checked = True
             loaded = self.load_lane_memory(self.current_cctv_name, frame_id=frame_id)
             if loaded:
                 self.phase = "MEMORY_WAIT"
