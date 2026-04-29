@@ -1,3 +1,25 @@
+// ==========================================
+// # 파일명: index.jsx
+// # 역할: 터널 화면의 메인 컨테이너
+// 
+// # - BACKEND_URL 생성
+// # - status 상태 관리
+// # - 1초 단위 상태 polling
+// # - CCTV 영상 URL restart 처리
+// # - 랜덤 CCTV 선택
+// # - 차선 재추정/저장/목표 차선 수 설정
+// # - 사고 이벤트 모달 처리
+// # - 공기질 current/future 데이터 계산
+
+// #
+// # 참고:
+// # - 실시간 CCTV는 외부 스트림이라 끊길 수 있기 때문에, 
+//     index.jsx에서 videoFeedUrl에 timestamp를 붙여 재연결하고, 
+//     영상 새로고침이나 탭 이탈 상황도 처리
+// # ==========================================
+
+
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./index.css";
 import {
@@ -28,8 +50,8 @@ const clamp01 = (value) => clamp(Number(value || 0), 0, 1);
 function getSpeedHintText(avgSpeed) {
   const speed = Number(avgSpeed || 0);
 
-  if (speed <= 1.3) return "실제속도 30km/h 이하 추정";
-  if (speed <= 2.6) return "실제속도 30~50km/h 추정";
+  if (speed <= 1.8) return "실제속도 30km/h 이하 추정";
+  if (speed <= 3.0) return "실제속도 30~50km/h 추정";
   return "실제속도 50km/h 이상 추정";
 }
 

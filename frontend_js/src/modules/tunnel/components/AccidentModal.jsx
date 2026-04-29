@@ -1,3 +1,11 @@
+// ==========================================
+// # 파일명: AccidentModal.jsx
+// # 역할: AI가 사고 이벤트를 감지했을 때 운영자가 사고 확정/이상 없음으로 판단할 수 있는 확인 모달
+
+//   
+// # ==========================================
+
+
 export default function AccidentModal({ accidentModal, loading, onResolveAccident }) {
   if (!accidentModal) return null;
 

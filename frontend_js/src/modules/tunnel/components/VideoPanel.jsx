@@ -1,3 +1,13 @@
+// ==========================================
+// # 파일명: VideoPanel.jsx
+// # 역할: CCTV 영상 출력만 담당
+
+// 영상 URL, 로딩 상태, CCTV 이름, 연결 실패 처리 함수를 props로 받아 화면을 렌더링
+// video-feed 경로는 index.jsx에서 만든 videoFeedUrl을 그대로 사용(백엔드 경로와 충돌방지)
+//  
+// # ==========================================
+
+
 export default function VideoPanel({
   videoLoading,
   videoFeedUrl,
