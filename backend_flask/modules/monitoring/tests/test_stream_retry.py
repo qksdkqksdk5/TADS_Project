@@ -569,3 +569,243 @@ class TestStreamEventEmit:
         fail_count, wait_sec = self._simulate_fail_cycle(0, None)
         assert fail_count == 1    # 로직은 정상 동작
         assert wait_sec == 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 테스트 5: reconnect() 내부 browser UA 폴백 로직 (Step 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReconnectBrowserUaFallback:
+    """
+    reconnect() 가 각 재시도마다 MSMF 실패 시 browser UA 폴백을 시도하는지 검증한다.
+    이전 코드는 MSMF 만 5회 시도했으므로 browser UA 만 허용하는 카메라는 복구 불가했다.
+    수정 후에는 매 재시도마다 MSMF → browser UA 폴백을 순서대로 시도해야 한다.
+    """
+
+    def _run_reconnect(self, msmf_results, ua_results, max_retries=5):
+        """
+        reconnect() 내부의 새 폴백 로직을 인라인으로 시뮬레이션한다.
+
+        msmf_results : [True/False, ...] 각 재시도의 MSMF 결과 (순서대로)
+        ua_results   : [True/False, ...] 각 재시도의 browser UA 결과 (순서대로)
+        max_retries  : reconnect() 의 max_retries 파라미터
+
+        Returns:
+            tuple: (success: bool, msmf_call_count: int, ua_call_count: int)
+        """
+        msmf_iter  = iter(msmf_results)   # MSMF 결과 순차 반환
+        ua_iter    = iter(ua_results)      # browser UA 결과 순차 반환
+        msmf_calls = []                    # MSMF 호출 기록
+        ua_calls   = []                    # browser UA 호출 기록
+
+        for _ in range(max_retries):
+            # 1차: MSMF 백엔드 시도
+            msmf_ok = next(msmf_iter, False)
+            msmf_calls.append(msmf_ok)
+            if msmf_ok:
+                # MSMF 성공 → browser UA 없이 즉시 반환
+                return True, len(msmf_calls), len(ua_calls)
+
+            # MSMF 실패 → 2차: browser UA 폴백 시도
+            ua_ok = next(ua_iter, False)
+            ua_calls.append(ua_ok)
+            if ua_ok:
+                # browser UA 성공
+                return True, len(msmf_calls), len(ua_calls)
+
+        # 모든 재시도 소진 → 실패
+        return False, len(msmf_calls), len(ua_calls)
+
+    # ── 테스트 케이스 ──────────────────────────────────────────────────────
+
+    def test_MSMF_실패_브라우저UA_첫번째_재시도에서_성공(self):
+        """1회차 MSMF 실패 → browser UA 폴백 성공 → reconnect True, MSMF 1회·UA 1회."""
+        success, msmf_cnt, ua_cnt = self._run_reconnect(
+            msmf_results=[False],   # 1회차 MSMF 실패
+            ua_results=[True],      # 1회차 browser UA 성공
+        )
+        assert success   is True
+        assert msmf_cnt == 1    # MSMF 1회 시도
+        assert ua_cnt   == 1    # browser UA 1회 시도
+
+    def test_MSMF_성공_시_브라우저UA_미호출(self):
+        """MSMF 첫 시도 성공 시 browser UA 폴백은 호출되지 않는다."""
+        success, msmf_cnt, ua_cnt = self._run_reconnect(
+            msmf_results=[True],    # 1회차 MSMF 성공
+            ua_results=[True],      # 호출 안 되므로 결과 무관
+        )
+        assert success   is True
+        assert msmf_cnt == 1
+        assert ua_cnt   == 0    # browser UA 미호출 확인
+
+    def test_MSMF_2회_실패_후_브라우저UA_성공(self):
+        """2회 연속 MSMF+UA 모두 실패 후 3회차 MSMF 실패 → UA 성공."""
+        success, msmf_cnt, ua_cnt = self._run_reconnect(
+            msmf_results=[False, False, False],  # 세 번 다 MSMF 실패
+            ua_results=[False, False, True],     # 3회차에서 UA 성공
+        )
+        assert success   is True
+        assert msmf_cnt == 3    # MSMF 3회 시도
+        assert ua_cnt   == 3    # browser UA 3회 시도
+
+    def test_모든_재시도_실패_False_반환(self):
+        """max_retries 횟수 동안 MSMF + browser UA 모두 실패하면 False."""
+        success, msmf_cnt, ua_cnt = self._run_reconnect(
+            msmf_results=[False, False, False, False, False],
+            ua_results=[False, False, False, False, False],
+            max_retries=5,
+        )
+        assert success   is False
+        assert msmf_cnt == 5    # MSMF 5회 전부 시도
+        assert ua_cnt   == 5    # browser UA 5회 전부 시도
+
+    def test_MSMF_2회차_성공_시_UA_1회만_호출(self):
+        """1회차 MSMF 실패 → UA 실패, 2회차 MSMF 성공 → UA 미호출."""
+        success, msmf_cnt, ua_cnt = self._run_reconnect(
+            msmf_results=[False, True],   # 1회차 실패, 2회차 성공
+            ua_results=[False],           # 1회차 UA만 시도됨
+        )
+        assert success   is True
+        assert msmf_cnt == 2    # MSMF 2회 (1회차 실패 + 2회차 성공)
+        assert ua_cnt   == 1    # UA는 1회차 폴백에서만 호출됨
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 테스트 6: 탭 복귀 시 끊긴 카메라 재시작 로직 (dead camera restart)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDeadCameraRestart:
+    """
+    탭 복귀(monitoring_join) 시 _restart_dead_segment_cameras() 가
+    _segment_cameras 에 있는 카메라 중 스레드가 죽은 것을 재시작 대상으로
+    올바르게 분류하는지 검증한다.
+
+    실제 스레드·ITS API 없이 분류 로직만 인라인으로 시뮬레이션한다.
+    """
+
+    def _find_dead_ids(self, segment_cameras, active_detectors, threads):
+        """
+        _restart_dead_segment_cameras() 의 dead 카메라 탐지 로직을 인라인 시뮬레이션.
+
+        segment_cameras : { (road, start_ic, end_ic): [camera_id, ...] }
+        active_detectors: { 'monitoring_{cam_id}': det_mock }
+        threads         : { 'monitoring_{cam_id}': thread_mock }
+
+        Returns:
+            { seg_key: [dead_camera_id, ...] }  — 재시작 대상이 있는 구간만 포함
+        """
+        result = {}
+        for seg_key, cam_ids in segment_cameras.items():
+            dead = []
+            for cam_id in cam_ids:
+                key      = f"monitoring_{cam_id}"   # detector_manager 키 규칙
+                existing = active_detectors.get(key)
+                t        = threads.get(key)
+                # active_detectors에 없거나 스레드가 죽은 경우 재시작 대상
+                if existing is None or not (t and t.is_alive()):
+                    dead.append(cam_id)
+            if dead:
+                result[seg_key] = dead
+        return result
+
+    # ── 테스트 케이스 ──────────────────────────────────────────────────────
+
+    def test_스레드_죽은_카메라는_재시작_대상(self):
+        """active_detectors에는 있으나 스레드가 죽은 카메라 → 재시작 대상."""
+        dead_t = MagicMock()
+        dead_t.is_alive.return_value = False   # 스레드 죽음
+
+        seg_key = ('gyeongbu', '판교JC', '수원신갈IC')
+        result  = self._find_dead_ids(
+            {seg_key: ['cam_A']},
+            {'monitoring_cam_A': MagicMock()},  # 감지기 객체는 있음
+            {'monitoring_cam_A': dead_t},        # 하지만 스레드 죽음
+        )
+        assert seg_key in result
+        assert 'cam_A' in result[seg_key]
+
+    def test_active에_없는_카메라는_재시작_대상(self):
+        """active_detectors에 아예 없는 카메라(초기 열기 실패 후 정리됨) → 재시작 대상."""
+        seg_key = ('gyeongbu', '판교JC', '수원신갈IC')
+        result  = self._find_dead_ids(
+            {seg_key: ['cam_B']},
+            {},   # active_detectors 비어있음 (정리됨)
+            {},   # threads도 없음
+        )
+        assert seg_key in result
+        assert 'cam_B' in result[seg_key]
+
+    def test_살아있는_카메라는_재시작_대상_아님(self):
+        """스레드가 살아있는 카메라는 재시작하지 않는다."""
+        alive_t = MagicMock()
+        alive_t.is_alive.return_value = True   # 스레드 살아있음
+
+        seg_key = ('gyeongbu', '판교JC', '수원신갈IC')
+        result  = self._find_dead_ids(
+            {seg_key: ['cam_alive']},
+            {'monitoring_cam_alive': MagicMock()},
+            {'monitoring_cam_alive': alive_t},
+        )
+        assert result == {}   # 재시작 대상 없음
+
+    def test_stop된_구간은_재시작_없음(self):
+        """
+        its_stop_segment 호출 후 _segment_cameras에서 제거된 구간은
+        재시작하지 않는다.
+        """
+        result = self._find_dead_ids({}, {}, {})   # _segment_cameras 비어있음
+        assert result == {}
+
+    def test_같은_구간_일부만_죽으면_죽은것만_재시작(self):
+        """같은 구간에서 alive·dead가 섞인 경우 dead 카메라만 재시작 대상."""
+        alive_t = MagicMock(); alive_t.is_alive.return_value = True
+        dead_t  = MagicMock(); dead_t.is_alive.return_value  = False
+
+        seg_key = ('gyeongbu', '판교JC', '수원신갈IC')
+        result  = self._find_dead_ids(
+            {seg_key: ['cam_alive', 'cam_dead']},
+            {
+                'monitoring_cam_alive': MagicMock(),
+                'monitoring_cam_dead':  MagicMock(),
+            },
+            {
+                'monitoring_cam_alive': alive_t,
+                'monitoring_cam_dead':  dead_t,
+            },
+        )
+        assert result[seg_key] == ['cam_dead']   # 죽은 것만
+
+    def test_여러_구간_중_dead_있는_구간만_반환(self):
+        """여러 구간 중 dead camera가 있는 구간만 결과에 포함된다."""
+        alive_t = MagicMock(); alive_t.is_alive.return_value = True
+
+        seg_ok   = ('gyeongbu', '판교JC',  '수원신갈IC')   # 모두 살아있음
+        seg_dead = ('gyeongin', '부평IC',  '서인천IC')      # cam_fail 죽음
+
+        result = self._find_dead_ids(
+            {
+                seg_ok:   ['cam_ok'],
+                seg_dead: ['cam_fail'],
+            },
+            {'monitoring_cam_ok': MagicMock()},   # cam_ok alive
+            {'monitoring_cam_ok': alive_t},        # cam_fail → 없음 → dead
+        )
+        assert seg_ok   not in result   # 정상 구간은 제외
+        assert seg_dead in result        # dead 구간만 포함
+        assert result[seg_dead] == ['cam_fail']
+
+    def test_지수백오프_대기중인_카메라는_재시작_안함(self):
+        """
+        reconnect() 실패 후 gevent.sleep(wait_sec) 중인 카메라는 스레드가
+        살아있으므로 재시작 대상이 아니다. (지수 백오프로 자체 재시도 중)
+        """
+        sleeping_t = MagicMock()
+        sleeping_t.is_alive.return_value = True   # 스레드 살아있음 (sleep 중)
+
+        seg_key = ('gyeongbu', '판교JC', '수원신갈IC')
+        result  = self._find_dead_ids(
+            {seg_key: ['cam_backoff']},
+            {'monitoring_cam_backoff': MagicMock()},
+            {'monitoring_cam_backoff': sleeping_t},
+        )
+        assert result == {}   # 자체 재시도 중 → 재시작 안 함

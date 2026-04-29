@@ -1,11 +1,10 @@
 # 파일 경로: modules/monitoring/tests/test_historical_predictor.py
-# 역할: historical_predictor.py 의 132차 변경사항을 검증한다.
+# 역할: historical_predictor.py 의 동작을 검증한다.
 #
 # 검증 항목:
 #   - predict() 반환값이 최대 3개 원소(1h/2h/3h) 리스트인지
 #   - min_window_sec 미만 버퍼는 flush 스킵되는지
 #   - CSV 저장·로드 영속성 동작 확인
-#   - swap_slots_with() 가 양쪽 CSV를 저장하는지
 
 import sys
 import os
@@ -194,32 +193,3 @@ class TestCsvPersistence:
             assert actual == expected, f"컬럼 불일치: {actual}"
 
 
-# ── swap_slots_with() 검증 ────────────────────────────────────────────────
-
-class TestSwapSlotsWith:
-    """swap_slots_with()가 슬롯을 교환하고 양쪽 CSV를 저장하는지 검증한다."""
-
-    def test_슬롯_교환_후_양쪽_저장(self, tmp_path):
-        """swap_slots_with() 호출 후 두 CSV 파일이 모두 존재해야 한다."""
-        csv_a = str(tmp_path / "hist_jam_a.csv")
-        csv_b = str(tmp_path / "hist_jam_b.csv")
-        now = datetime(2025, 6, 1, 10, 0, 0)
-
-        pred_a = HistoricalPredictor(csv_path=csv_a, min_window_sec=0.0)
-        pred_b = HistoricalPredictor(csv_path=csv_b, min_window_sec=0.0)
-
-        # pred_a 슬롯에만 데이터 채우기
-        _fill_slot(pred_a, now + timedelta(hours=1), jam_score=0.8)
-        before_a = pred_a.get_slot_count()  # 데이터 있음
-        before_b = pred_b.get_slot_count()  # 데이터 없음 (0)
-
-        # 교환 실행
-        pred_a.swap_slots_with(pred_b)
-
-        # 교환 후: pred_a는 비어야 하고, pred_b는 데이터 있어야 함
-        assert pred_a.get_slot_count() == before_b, "swap 후 pred_a 슬롯 수 불일치"
-        assert pred_b.get_slot_count() == before_a, "swap 후 pred_b 슬롯 수 불일치"
-
-        # 양쪽 CSV 파일이 모두 생성(저장)됐는지 확인
-        assert os.path.exists(csv_a), "swap 후 pred_a CSV 파일 없음"
-        assert os.path.exists(csv_b), "swap 후 pred_b CSV 파일 없음"

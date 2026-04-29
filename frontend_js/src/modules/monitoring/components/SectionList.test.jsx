@@ -481,6 +481,25 @@ describe('SectionList — 종료 IC 드롭다운 시작 IC 기준 정렬', () =>
     expect(endSelect.options[0].value).toBe('노포IC');
   });
 
+  // ── D-1b. 초기 상태에서 종료 드롭다운의 선택값이 맨 첫 번째 IC여야 한다 ─────
+  // 버그 방지: 기존에 endIC 기본값을 마지막 IC로 설정했을 때,
+  // endOptions가 첫 번째 IC부터 시작하는데 선택값이 마지막이라 드롭다운이 맨 밑을 보이는 문제
+  // → endIC 기본값이 startIC(첫 번째 IC)와 같아야 드롭다운이 맨 위를 보인다.
+  it('초기 상태에서 종료 드롭다운의 선택된 값은 startIC(첫 번째 IC)와 같아야 한다', async () => {
+    render(<SectionList {...makeProps()} />);
+
+    // IC 목록 로드 및 상태 업데이트 대기
+    await waitFor(() => expect(screen.getByText('▶ 시작')).toBeInTheDocument());
+    await act(async () => {});
+
+    // 두 번째 select = 종료 드롭다운
+    const selects = screen.getAllByRole('combobox');
+    const endSelect = selects[1];
+
+    // 종료 드롭다운의 선택된 값이 첫 번째 IC(='노포IC')여야 한다 → 드롭다운이 맨 위를 가리킴
+    expect(endSelect.value).toBe('노포IC');
+  });
+
   // ── D-2. 시작 IC 변경 시 종료 드롭다운의 첫 번째 옵션이 갱신된다 ─────────
   // startIC를 '달래내IC'로 바꾸면 종료 드롭다운의 첫 번째 옵션도 '달래내IC'가 된다.
   it('startIC를 변경하면 종료 드롭다운의 첫 번째 옵션이 선택된 startIC로 갱신된다', async () => {

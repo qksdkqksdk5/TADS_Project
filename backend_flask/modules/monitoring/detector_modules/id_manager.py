@@ -36,7 +36,6 @@ class IDManager:
         if matched_from and matched_from in st.display_id_map:
             old_label = st.display_id_map[matched_from]   # 기존 라벨
             st.display_id_map[track_id] = old_label       # 새 ID에 같은 라벨 부여
-            print(f"🔄 라벨 이어받기: ID:{matched_from}({old_label}) → ID:{track_id}({old_label})")
         else:
             # 새로 발견된 역주행 차량이면 W1, W2 ... 순서대로 부여
             label = f"W{st.next_wrong_way_label}"

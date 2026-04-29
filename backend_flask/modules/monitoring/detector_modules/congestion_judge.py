@@ -255,23 +255,23 @@ class CongestionJudge:
 
         return self._current_level                     # 현재(또는 유지 중) 레벨
 
-    # ── Phase 2 지원: jam 계산만 수행 ────────────────────────────────
+    # ── jam 계산 수행 ────────────────────────────────────────────────
     def compute_jam(self, x_t: dict) -> float:
         """x_t로부터 rule_jam_score를 계산하고 x_t에 역주입한다.
 
-        update()를 분리한 것. Phase 2에서 GRU 블렌딩 전 rule_jam을 얻을 때 사용.
+        update()를 두 단계로 분리한 것. jam 계산 후 레벨 판정을 별도로 호출할 때 사용.
 
         Args:
-            x_t: 7차원 feature 벡터 dict (rule_jam_score 키가 채워짐).
+            x_t: feature 벡터 dict (rule_jam_score 키가 채워짐).
 
         Returns:
             rule_jam_score (0.0~1.0).
         """
-        jam = compute_jam_score_fallback(x_t)          # fallback 모드 (항상)
-        x_t["rule_jam_score"] = jam                    # feature 벡터에 역주입 (GRU 입력용)
+        jam = compute_jam_score_fallback(x_t)          # rule 기반 jam_score 계산
+        x_t["rule_jam_score"] = jam                    # feature 벡터에 역주입 (congestion_judge 출력용)
         return jam                                     # rule_jam_score 반환
 
-    # ── Phase 2 지원: 레벨 판정 + 히스테리시스만 수행 ──────────────────
+    # ── 레벨 판정 + 히스테리시스 수행 ──────────────────────────────────
     def apply_level(self, jam: float, frame_num: int) -> tuple:
         """jam_score에 비대칭 EMA를 적용한 뒤 레벨을 판정하고 히스테리시스를 적용한다.
 
@@ -326,7 +326,7 @@ class CongestionJudge:
         """feature 벡터를 받아 jam_score를 계산하고 레벨을 판정한다.
 
         Args:
-            x_t: 7차원 feature 벡터 dict.
+            x_t: feature 벡터 dict.
             frame_num: 현재 프레임 번호.
 
         Returns:
