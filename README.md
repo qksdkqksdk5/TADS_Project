@@ -53,9 +53,7 @@ TADS는 이를 해결하기 위해:
 
 ### 🚇 Smart Tunnel
 
-![tunnel](./assets/smart_tunnel_1.png)
-
-![tunnel](./assets/smart_tunnel_2.png)
+![tunnel](./assets/smart_tunnel.png)
 
 ### 🔍 License Plate Recognition
 
