@@ -1,10 +1,13 @@
 # ==========================================
 # 파일명: pipeline_adapter.py
 # 위치: backend_flask/modules/tunnel/pipeline_adapter.py
-# 역할:
+# 역할: AI 파이프라인(pipeline_V6)을 웹 서비스에서 사용할 수 있도록 
+#      영상 프레임을 읽어서 pipeline_V6에 전달하고, 
+#      분석 결과를 프론트엔드가 바로 사용할 수 있도록 변환합니다.
+
 # - YOLO + ByteTrack 수행
-# - tunnel_main_V5_5 시각화 흐름을 웹용으로 반영
-# - pipeline_V5_5/PipelineCore 연결
+# - tunnel_main_V6 시각화 흐름을 웹용으로 반영
+# - pipeline_V6/PipelineCore 연결
 # - 프론트(status API)용 결과 정리
 # - CCTV 변경 시 full reset 지원
 # - [추가] service.py가 lane_template에 더 쉽게 접근할 수 있도록 getter 제공
@@ -50,6 +53,8 @@ class TunnelPipelineAdapter:
         self.pipeline = None
         self.frame_height = 720
         self.current_cctv_name = None
+        self.runtime_lane_memory_dir = None
+        self.default_lane_memory_dir = None
 
         self.vehicle_seen_log = deque()
 
@@ -266,6 +271,18 @@ class TunnelPipelineAdapter:
                 frame_height=self.frame_height,
                 lane_output_dir=lane_output_dir
             )
+            self._configure_lane_memory_paths()
+
+    def _configure_lane_memory_paths(self):
+        lane_template = self.get_lane_template()
+        if lane_template is None:
+            return
+
+        if self.runtime_lane_memory_dir and hasattr(lane_template, "memory_dir"):
+            lane_template.memory_dir = str(self.runtime_lane_memory_dir)
+
+        if self.default_lane_memory_dir and hasattr(lane_template, "default_memory_dir"):
+            lane_template.default_memory_dir = str(self.default_lane_memory_dir)
 
     # =========================================================
     # 2-1) [추가] service.py에서 lane_template 쉽게 접근하도록 getter 제공

@@ -41,6 +41,8 @@ export const getTunnelCctvList = async (BACKEND_URL) => {
   return res.data;
 };
 
+export const fetchTunnelCctvList = getTunnelCctvList;
+
 /* =========================================================
  * 랜덤 CCTV 선택
  * ========================================================= */
@@ -72,6 +74,29 @@ export const stopTunnelStream = async (BACKEND_URL) => {
 export const setTunnelTargetLaneCount = async (BACKEND_URL, laneCount) => {
   const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/target-count`, {
     lane_count: laneCount,
+  });
+  return res.data;
+};
+
+export const requestLaneReestimate = async (BACKEND_URL) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/reestimate`);
+  return res.data;
+};
+
+export const saveTunnelLaneMemory = async (BACKEND_URL) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/save`);
+  return res.data;
+};
+
+export const fetchTunnelEventStats = async (BACKEND_URL) => {
+  const res = await axios.get(`${BACKEND_URL}/api/tunnel/event/stats`);
+  return res.data;
+};
+
+export const resolveTunnelAccidentEvent = async (BACKEND_URL, eventId, action) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/event/resolve`, {
+    event_id: eventId,
+    action,
   });
   return res.data;
 };

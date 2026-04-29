@@ -1,16 +1,16 @@
 # ==========================================
 # 파일명: pipeline_core_V6.py
-# 설명:
-# V5_5 통합 파이프라인
-# - AdaptiveROI
-# - TrackAnalyzer
-# - LaneTemplateEstimator
-# - TrafficState
-# - AccidentDetector
-#
-# 수정 내용
-# 1) AdaptiveROI.update()에 frame_width 전달
-# 2) 중앙영역 차량 수 기준 ROI 자동설정을 지원
+# 역할: AI파이프라인의 중앙 제어 파일
+#      한 프레임이 들어오면 객체탐지, 차량추적, ROI 설정, 차선 추정, 
+#      교통상태 판단, 사고 판단 모듈을 순서대로 호출하고, 최종 분석 결과를 반환
+
+# - YOLO 객체탐지
+# - ByteTrack 차량 추적
+# - ROI 분석
+# - 차선 추정
+# - 교통상태 판단
+# - 사고 판단
+# - 최종 결과 반환
 # ==========================================
 
 from adaptive_roi_V6 import AdaptiveROI
