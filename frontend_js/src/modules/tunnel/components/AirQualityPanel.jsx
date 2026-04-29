@@ -1,3 +1,12 @@
+// ==========================================
+// # 파일명: AirQualityPanel.jsx
+// # 역할: 현재 터널 공기질과 5분 후 공기질 추정 패널을 담당
+
+// 위험 점수, 차량 수, 평균속도, 교통밀도, 평균체류시간을 카드 형태로 표시
+//   
+// # ==========================================
+
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const clamp01 = (value) => clamp(Number(value || 0), 0, 1);
 

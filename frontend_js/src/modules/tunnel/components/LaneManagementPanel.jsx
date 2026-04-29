@@ -1,3 +1,12 @@
+// ==========================================
+// # 파일명: LaneManagementPanel.jsx
+// # 역할: 차선 수, 목표 차선 수 수정, 차선 재추정, 차선 저장 UI를 담당
+
+// 실제 API 호출 함수는 index.jsx에 두고, 버튼 클릭 이벤트만 props로 전달 
+//   
+// # ==========================================
+
+
 export default function LaneManagementPanel({
   laneEditMode,
   laneTargetInput,

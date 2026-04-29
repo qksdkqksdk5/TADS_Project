@@ -1,3 +1,12 @@
+// ==========================================
+// # 파일명: StatusPanel.jsx
+// # 역할: 교통흐름+사고상태 담당
+
+// NORMAL, CONGESTION, JAM, ACCIDENT 상태를 badge 형태로 보여주고, 
+// 평균속도와 속도 해석 문구를 함께 표시합니다.
+//   
+// # ==========================================
+
 export default function StatusPanel({
   displayState,
   stateClass,
