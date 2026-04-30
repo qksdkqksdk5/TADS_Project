@@ -1,6 +1,6 @@
 # 파일 경로: detector_modules/historical_predictor.py
 # 역할: 시각별(hour × 5분 슬롯) 과거 jam_score를 CSV에 누적하고,
-#        1시간·2시간·3시간 후 정체 수준을 동시에 예측한다. (132차 개편)
+#        1시간·2시간·3시간 후 정체 수준을 동시에 예측한다.
 #
 # 슬롯 구조:
 #   하루 = 24h × 12슬롯/h = 288 슬롯 (slot_id = hour*12 + minute//5)
@@ -14,7 +14,7 @@
 #   record(jam_score) 호출 → 내부 버퍼 누적
 #   슬롯 경계(매 5분) 도달 → 버퍼 최소 시간 커버리지 검사 → 중앙값 계산 → CSV 갱신 → 버퍼 초기화
 #
-# 예측 (132차 변경):
+# 예측:
 #   predict(dt) → 1h / 2h / 3h 슬롯 최대 3개 동시 예측
 #   데이터 없으면 None → 패널에 "Training..." 표시
 
@@ -159,7 +159,7 @@ class HistoricalPredictor:
         if not self._buf_values:
             return  # 버퍼 비어있으면 생략
 
-        # ── 최소 시간 커버리지 검사 (132차 신규) ──────────────────────
+        # ── 최소 시간 커버리지 검사 ──────────────────────────────────
         # _buf_start_dt와 _buf_last_dt 사이의 실제 경과 시간이 기준 미달이면 스킵
         if (self._buf_start_dt is not None
                 and self._buf_last_dt is not None
@@ -263,7 +263,7 @@ class HistoricalPredictor:
         return float(avg_jam), float(conf)
 
     def predict(self, dt: datetime | None = None) -> list | None:
-        """현재 시각 기준 1시간·2시간·3시간 후 슬롯의 정체 수준을 예측한다. (132차 변경)
+        """현재 시각 기준 1시간·2시간·3시간 후 슬롯의 정체 수준을 예측한다.
 
         각 horizon에 대해 해당 슬롯 데이터가 없으면 양측 이웃 슬롯으로 선형 보간한다.
         모든 horizon에서 보간 범위(±60분) 내에 데이터가 없으면 None ("Training..." 표시).
@@ -318,23 +318,6 @@ class HistoricalPredictor:
         if jam_score < self._slow_thr:
             return "SLOW"     # 서행
         return "JAM"          # 정체
-
-    # ==================== 방향 반전 스왑 ====================
-
-    def swap_slots_with(self, other: "HistoricalPredictor") -> None:
-        """두 HistoricalPredictor의 슬롯 데이터를 교환하고 양쪽 CSV를 저장한다.
-
-        카메라가 180° 회전해 a/b 방향이 바뀌었을 때 호출한다.
-        메모리 내 _slots dict를 교환한 뒤 양쪽 모두 즉시 저장(강제 flush).
-        버퍼는 교환하지 않는다 — 진행 중인 창은 곧 초기화되므로 교환 불필요.
-        """
-        # 슬롯 딕셔너리를 서로 교환
-        self._slots, other._slots = other._slots, self._slots
-        # 양쪽 모두 강제 저장 (_dirty 직접 설정으로 save() 가드 우회)
-        self._dirty = True
-        other._dirty = True
-        self.save()       # self CSV 저장
-        other.save()      # other CSV 저장
 
     # ==================== 진단 ====================
 

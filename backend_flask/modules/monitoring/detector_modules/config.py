@@ -41,17 +41,6 @@ class DetectorConfig:
                                       # 보이는 오탐 방지. 45f = 6fps 기준 약 7.5초 관찰 후 확정.
     post_slow_guard_frames: int = 30  # 서행→가속 직후 fast-track 오탐 방지 최소 의심 유지 프레임
 
-    # ── 이웃 차량 방향 일치 가드 (neighbor_agreement_guard) ──────────────
-    # 역주행 확정 직전, 같은 방향 분류(A/B)의 이웃 차량들이 같은 방향으로
-    # 이동 중이면 flow map 오탐으로 판단해 확정 취소.
-    neighbor_guard_min_total: int = 2   # 이웃 가드 발동 최소 같은분류 차량 수 (미만이면 비적용) — 3→2
-    neighbor_guard_agree: int = 1        # 이 수 이상의 이웃이 같은 방향이면 오탐으로 취소 — 2→1
-
-    # ── 구역 확정 쿨다운 (120차) ──────────────────────────────────────────
-    # 같은 grid cell에서 역주행이 확정된 후 이 프레임 수 이내에
-    # 동일 구역에서 새 확정이 발생하면 flow map 에코 오탐으로 간주해 취소.
-    wrong_zone_cooldown_frames: int = 900  # 30fps 기준 30초 — 동일 구역 연속 에코 차단 기간
-
     # ── bbox 겹침 기반 경계 침식 ───────────────────────────────────────
     # 학습 중 반대 차선 차량의 bbox가 이 셀을 N회 이상 밟았으면 중앙선 경계로 판정 → 제거
     bbox_contra_threshold: int = 8      # 반대방향 bbox 방문 횟수 임계값 — 3→8: bbox 풋프린트 확대 후 과잉 침식 방지
@@ -143,7 +132,7 @@ class DetectorConfig:
     grace_period_sec:        float = 60.0   # 카메라 전환 후 판정 유예 시간 (초)
 
     # ==================== jam_score 임계값 ====================
-    smooth_jam_threshold:    float = 0.30   # jam_score 이 값 미만 → SMOOTH — 0.25→0.30: dwell 주 신호 승격 후 score 분포 상향 반영
+    smooth_jam_threshold:    float = 0.25   # jam_score 이 값 미만 → SMOOTH — 134차: 0.30→0.25 복원 (dwell 가중치 하향 조정으로 score 분포 재하향)
     slow_jam_threshold:      float = 0.60   # jam_score 이 값 미만 → SLOW, 이상 → CONGESTED
     density_max_vehicles:   float = 40.0   # density 정규화 기준 차량 수 — 이 값 이상이면 density=1.0 (포화)
 

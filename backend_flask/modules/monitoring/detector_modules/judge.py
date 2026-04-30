@@ -363,7 +363,7 @@ class WrongWayJudge:
         long_suspect = True                            # 기본값: 패스 (궤적 부족 시 생략)
 
         if len(traj) >= long_window:                   # 장기 궤적이 쌓인 경우만 검사
-            # 장기 윈도우도 중앙값 벡터 사용 (117차 — 끊김 내성)
+            # 장기 윈도우도 중앙값 벡터 사용 — 끊김 내성 확보
             _lw  = long_window
             _lsi = len(traj) - _lw
             _lpfx = [traj[_lsi+i+1][0] - traj[_lsi+i][0] for i in range(_lw-1)]

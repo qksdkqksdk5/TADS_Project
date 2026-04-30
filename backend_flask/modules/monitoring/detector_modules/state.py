@@ -61,10 +61,6 @@ class DetectorState:
         # 차량 displacement 기반이 아닌 프레임 내용 기반 → 미탐지 끊김도 포착 가능
         self.post_reconnect_frame = 0    # 재연결 감지된 프레임 번호 (0=재연결 없음)
 
-        # ==================== 구역 확정 쿨다운 (120차) ====================
-        # 같은 grid cell에서 최근 역주행이 확정된 시점 기록.
-        # 동일 구역에서 짧은 시간 내 연속 확정 → flow map 오류 에코 가능성 높음 → 차단.
-        self.wrong_zone_confirmed = {}   # {(r, c): frame_num} 최근 확정 프레임 번호
 
     def reset_for_relearn(self):
         """카메라 전환 감지 후 추적/역주행 관련 상태 초기화, 재학습 모드 진입"""
@@ -87,7 +83,5 @@ class DetectorState:
         self.stable_velocity.clear()       # 안정 방향 기준점 초기화
         self.direction_change_frame.clear()  # 급변 감지 시점 초기화
         self.direction_was_stable.clear()  # 안정 상태 플래그 초기화
-        self.wrong_zone_confirmed.clear()  # 구역 확정 쿨다운 초기화 (재학습 시 에코 이력 리셋)
-
         self.relearning = True              # 재학습 모드 진입
         self.relearn_start_frame = self.frame_num  # 재학습 시작 프레임 기록

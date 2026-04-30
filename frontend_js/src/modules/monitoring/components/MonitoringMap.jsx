@@ -16,7 +16,17 @@ const ROAD_LINE_GRAY = '#334155';
 // nameBounds: 이름별 개별 bbox — 링 도로 일부만 잘라낼 때 사용
 const OVERPASS_ROAD_CONFIG = {
   gyeongbu:  { names: ['경부고속도로'],                    bounds: null, nameBounds: null },
-  gyeongin:  { names: ['경인고속도로', '제2경인고속도로'], bounds: null, nameBounds: null },
+  gyeongin: {
+    // 경인고속도로(Route 1) + 제2경인고속도로(Route 110) 두 노선 모두 쿼리
+    names: ['경인고속도로', '제2경인고속도로'],
+    bounds: null,
+    // 이름별 클리핑 — 서울외곽순환고속도로로 이어지는 동쪽 연결로(motorway_link)를 제거
+    // 백엔드 its_helper.py 의 osm_name_bounds 와 동일한 값으로 유지해야 한다
+    nameBounds: {
+      '경인고속도로':    { minX: 126.55, maxX: 126.88, minY: 37.48, maxY: 37.56 },
+      '제2경인고속도로': { minX: 126.55, maxX: 126.94, minY: 37.35, maxY: 37.47 },
+    },
+  },
   seohae:    { names: ['서해안고속도로'],                  bounds: null, nameBounds: null },
   jungang:   { names: ['중앙고속도로'],                    bounds: null, nameBounds: null },
   youngdong: {
@@ -559,13 +569,13 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
     <div style={{ height: '100%', position: 'relative', borderRadius: '12px', overflow: 'hidden' }}>
       <div id="monitoring-map" style={{ width: '100%', height: '100%', minHeight: '180px' }} />
 
-      {/* 범례 */}
+      {/* 범례 — zIndex:100 으로 카카오맵 내부 레이어(타일·저작권 표시 등)보다 위에 고정 */}
       <div style={{
         position: 'absolute', bottom: '10px', right: '10px',
         background: 'rgba(15,23,42,0.85)', border: '1px solid #1e293b',
         borderRadius: '8px', padding: '6px 10px',
         fontSize: '10px', color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: '3px',
-        pointerEvents: 'none',
+        pointerEvents: 'none', zIndex: 100,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
           <span style={{ width: '18px', height: '3px', background: '#22c55e', borderRadius: '2px', display: 'inline-block' }} />

@@ -141,6 +141,69 @@ def _resume_all_monitoring():
               f"{[k.replace('monitoring_', '') for k in dead_keys]}")
 
 
+def _restart_dead_segment_cameras(socketio, app_obj, db_inst):
+    """
+    _segment_cameras 에 등록된 카메라 중 active_detectors 에 없거나
+    스레드가 죽은(dead) 카메라를 큐 러너로 재시작한다.
+
+    호출 시점: monitoring_join 이벤트(탭 복귀) — _resume_all_monitoring() 직후.
+    its_stop_segment 가 호출된 구간은 _segment_cameras 에서 이미 제거됐으므로
+    자동으로 제외된다.
+
+    지수 백오프로 스스로 재시도 중인 카메라(스레드 alive)는 건드리지 않는다.
+    """
+    requeue_total = 0   # 재시작 대상 총 카메라 수 (로그용)
+
+    for seg_key in list(_segment_cameras.keys()):
+        road, start_ic, end_ic = seg_key
+        cam_ids = _segment_cameras.get(seg_key, [])
+
+        # ── 이 구간에서 스레드가 죽은 카메라 목록 수집 ──────────────────────
+        dead_ids = []
+        for cam_id in cam_ids:
+            key = _monitoring_key(cam_id)
+            with detector_manager._lock:
+                existing = detector_manager.active_detectors.get(key)   # 감지기 객체
+                t        = detector_manager.threads.get(key)             # OS 스레드
+            # active_detectors 에 없거나 스레드가 이미 종료됐으면 재시작 대상
+            if existing is None or not (t and t.is_alive()):
+                dead_ids.append(cam_id)
+
+        if not dead_ids:
+            continue   # 이 구간의 모든 카메라 정상 동작 중 → 건너뜀
+
+        # ── 이미 살아있는 큐 러너가 있으면 간섭하지 않음 ────────────────────
+        # (이전 start_segment 에서 생성된 큐 러너가 아직 pending_ids 를 처리 중일 수 있음)
+        existing_runner = _queue_greenlets.get(seg_key)
+        if existing_runner and existing_runner.is_alive():
+            continue
+
+        print(
+            f"♻️  [탭복귀] 끊긴 카메라 {len(dead_ids)}개 재시작 큐 등록 "
+            f"[{road} {start_ic}→{end_ic}]: {dead_ids}"
+        )
+        requeue_total += len(dead_ids)
+
+        # ── 새 큐 러너로 dead_ids 재처리 ────────────────────────────────────
+        # 큐 러너 내부에서 ITS API 를 재호출해 새 URL(신선한 토큰)을 받아 시작한다.
+        # its_stop_segment 에서 이 키로 stop_event 를 꺼내 중지 신호를 보낸다.
+        new_stop_event = threading.Event()
+        _queue_stop_events[seg_key] = new_stop_event
+
+        t = threading.Thread(
+            target=_segment_queue_runner,
+            args=(dead_ids, road, start_ic, end_ic, socketio, app_obj, db_inst),
+            kwargs={'stop_event': new_stop_event},
+            daemon=True,   # 서버 종료 시 자동 정리
+            name=f"queue-runner-retry-{road}-{start_ic}-{end_ic}",
+        )
+        t.start()
+        _queue_greenlets[seg_key] = t   # stop_segment 에서 참조할 수 있도록 등록
+
+    if requeue_total:
+        print(f"🔄 [탭복귀] 총 {requeue_total}개 끊긴 카메라 재시작 큐 등록 완료")
+
+
 # ── Socket.IO 이벤트 핸들러 등록 함수 ────────────────────────────────────────
 
 def register_monitoring_socket_events(socketio):
@@ -163,13 +226,26 @@ def register_monitoring_socket_events(socketio):
         프론트엔드 모니터링 탭 진입 시 수신.
         SID 를 _monitoring_sids 에 등록하고,
         이전에 일시정지된 감지기가 있으면 모두 재개한다.
+        또한 스트림 열기 실패로 스레드가 죽은 카메라가 있으면 재시작 큐에 등록한다.
         """
         from flask import request as req  # gevent 환경에서 request context 안전하게 접근
         sid = req.sid
-        _monitoring_sids.add(sid)  # 이 소켓을 monitoring 클라이언트로 등록
+        _monitoring_sids.add(sid)   # 이 소켓을 monitoring 클라이언트로 등록
         print(f"🟢 [monitoring] 탭 진입 SID={sid} (연결 수: {len(_monitoring_sids)})")
-        # 일시정지 상태인 감지기가 있으면 재개
+
+        # 일시정지 상태인 감지기 재개 (죽은 감지기는 이 단계에서 active_detectors 에서 제거됨)
         _resume_all_monitoring()
+
+        # 탭 복귀 시 연결이 끊겼던(스트림 열기 실패·스레드 사망) 카메라를 재시작 큐에 등록한다.
+        # _segment_cameras 가 비어있으면 start_segment 를 한 번도 안 한 것이므로 아무것도 안 한다.
+        if _segment_cameras:
+            try:
+                app_obj  = current_app._get_current_object()   # Flask 앱 컨텍스트 획득
+                from models import db as db_inst               # DB 세션
+                _restart_dead_segment_cameras(socketio, app_obj, db_inst)
+            except Exception as _e:
+                # 재시작 실패가 탭 진입 자체를 방해해서는 안 된다
+                print(f"⚠️ [monitoring_join] 끊긴 카메라 재시작 중 오류: {_e}")
 
     @socketio.on('disconnect')
     def on_monitoring_disconnect():

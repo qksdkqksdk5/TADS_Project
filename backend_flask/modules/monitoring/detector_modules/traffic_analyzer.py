@@ -1,17 +1,17 @@
 # 파일 경로: C:\final_pj\src\traffic_analyzer.py
 # 역할: ByteTrack 추적 결과(tracks·speeds)를 받아
 #        정체 레벨(SMOOTH/SLOW/JAM), 밀도맵, KPI를 산출하는 정체 탐지 모듈.
-#        Phase 1: 절대 km/h 대신 baseline 대비 비율(normalized_mag) 기반.
+#        절대 km/h 대신 baseline 대비 비율(normalized_mag) 기반.
 #        cv2·torch에 의존하지 않으며 numpy만 사용한다.
 
 import numpy as np                                    # 수치 계산 전용
 
-from feature_extractor import FeatureExtractor        # 7차원 feature 벡터 계산기
+from feature_extractor import FeatureExtractor        # feature 벡터 계산기
 from congestion_judge import CongestionJudge          # jam_score 계산 + 레벨 판정
 
 
 # ======================================================================
-# TrafficAnalyzer — 밀도·속도·정체 레벨 판정 (Phase 1 래퍼)
+# TrafficAnalyzer — 밀도·속도·정체 레벨 판정
 # ======================================================================
 
 class TrafficAnalyzer:
@@ -95,7 +95,7 @@ class TrafficAnalyzer:
     def set_valid_cell_count(self, n: int):
         """방향별 유효 셀 수를 FeatureExtractor에 전달한다.
 
-        bbox_coverage를 셀 점유율로 계산할 때 방향별 road area 편향 제거용.
+        flow_occupancy를 셀 점유율로 계산할 때 방향별 road area 편향 제거용.
         detector.py가 _compute_direction_cell_counts() 후 호출한다.
 
         Args:
@@ -152,7 +152,7 @@ class TrafficAnalyzer:
         if self.feature_extractor is None:            # set_state() 미호출 시
             return                                    # feature 계산 불가
 
-        x_t = self.feature_extractor.compute(         # 7차원 feature 벡터 계산
+        x_t = self.feature_extractor.compute(         # feature 벡터 계산
             tracks, speeds, self.flow_map, frame_num
         )
         if x_t is None:                               # baseline 미설정 (학습 중)

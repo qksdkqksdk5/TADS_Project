@@ -48,7 +48,7 @@ class FlowMap:
         self.cell_w = 1.0                                 # 셀 하나의 너비
         self.cell_h = 1.0                                 # 셀 하나의 높이
 
-        # Phase 1 정체 탐지용 — 셀별 정상 normalized_speed EMA
+        # 셀별 정상 normalized_speed EMA
         self.speed_ref = np.zeros((grid_size, grid_size), np.float32)  # 셀별 정상 norm_speed 기준값
 
         # apply_boundary_erosion() / apply_overlap_erosion()이 제거한 셀 — 재학습 금지
@@ -603,7 +603,7 @@ class FlowMap:
                         mk = " ⚠️" if cnt < self.min_samples else ""
                         print(f"   [{r:2d},{c:2d}] {cnt:6d} {angle:8.1f} {m:6.3f}{mk} {sm}")
 
-    # ==================== Phase 1 정체 탐지용 — 셀별 속도 학습 ====================
+    # ==================== 셀별 속도 학습 ====================
     def learn_baseline(self, fx: float, fy: float, norm_speed: float):
         """SMOOTH 온라인 구간에서 셀별 정상 normalized_speed를 EMA로 갱신한다.
 
