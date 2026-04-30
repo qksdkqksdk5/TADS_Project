@@ -63,3 +63,13 @@ export const stopSegment = (host, road, start_ic, end_ic) =>
 // 백엔드가 기존 감지기를 중지하고 새 MonitoringDetector를 시작한다.
 export const restartCamera = (host, camera_id) =>
   createClient(host).post(`/restart_camera`, { camera_id });
+
+// 학습된 플로우맵 시각화 데이터를 가져온다.
+// 반환값: grid_size, flow/count 배열, A/B 채널, 마스크, ref_frame(base64) 등
+// 학습 미완료 카메라는 404를 반환한다.
+export const fetchFlowMapViz = (host, camera_id) =>
+  createClient(host).get(`/flow_map_viz/${encodeURIComponent(camera_id)}`);
+
+// hist_jam_a.csv ↔ hist_jam_b.csv 방향 교환 — A/B 방향이 뒤바뀐 경우 수동 보정
+export const swapHist = (host, camera_id) =>
+  createClient(host).post(`/swap_hist`, { camera_id });

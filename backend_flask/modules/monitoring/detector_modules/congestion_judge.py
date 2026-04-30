@@ -140,13 +140,14 @@ class CongestionJudge:
 
         # ── jam_score EMA 스무딩 (비대칭) ────────────────────────────
         # 악화(올라갈 때)는 alpha_up으로 빠르게, 호전(내려갈 때)는 alpha_down으로 느리게
+        # 원본 알파값은 6fps 기준으로 튜닝된 프레임당 상수이므로 실제 FPS에 맞게 정규화.
+        # alpha_new = 1 - (1 - alpha_6fps)^(6 / actual_fps)
+        # → FPS가 달라져도 동일한 시간 도메인 응답 특성을 유지한다.
         self._ema_jam: float = 0.0                     # EMA 누적값 (표시에 사용)
-        self._alpha_up: float = getattr(               # 악화 방향 EMA 속도
-            cfg, "jam_ema_alpha_up", 0.15
-        )
-        self._alpha_down: float = getattr(             # 호전 방향 EMA 속도
-            cfg, "jam_ema_alpha_down", 0.04
-        )
+        _fps_ref = 6.0                                 # 기준 FPS (알파값 튜닝 기준점)
+        _scale   = _fps_ref / max(fps, 1.0)            # 정규화 지수 (6fps/실제fps)
+        self._alpha_up: float = 1.0 - (1.0 - getattr(cfg, "jam_ema_alpha_up",   0.40)) ** _scale   # 악화 방향 EMA 알파 (FPS 정규화)
+        self._alpha_down: float = 1.0 - (1.0 - getattr(cfg, "jam_ema_alpha_down", 0.04)) ** _scale  # 호전 방향 EMA 알파 (FPS 정규화)
 
         # ── 정체 지속 시간 추적 ──────────────────────────────────────
         self._congestion_start_frame: int | None = None  # 정체 시작 프레임 (SMOOTH이면 None)

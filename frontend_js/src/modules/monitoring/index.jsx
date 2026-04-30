@@ -9,7 +9,8 @@ import MonitoringMap from './components/MonitoringMap';
 import CctvPlayer    from './components/CctvPlayer';
 import EventLog      from './components/EventLog';
 import ActionPanel   from './components/ActionPanel';
-import { fetchItsCctv, restartCamera } from './api';
+import FlowMapViz    from './components/FlowMapViz';
+import { restartCamera } from './api';
 
 // ── 시계 ─────────────────────────────────────────────────────
 function Clock() {
@@ -48,6 +49,14 @@ function LiveDot({ connected }) {
 // onNavigate(dir): dir = -1(이전) | +1(다음) — 방향키 내비게이션 콜백
 // currentIdx, total: 팝업 헤더에 표시할 "현재/전체" 카운터 (없으면 숨김)
 function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose, onNavigate, currentIdx, total, streamFailures, onRestartCamera }) {
+  // ── 진단 도구 상태 (AI 모니터링 카메라 전용) ─────────────────────────
+  const [showFlowViz, setShowFlowViz] = useState(false);   // 플로우맵 모달 열림 여부
+
+  // 카메라 전환 시 플로우맵 모달 닫기
+  useEffect(() => {
+    setShowFlowViz(false);
+  }, [selectedId]);
+
   // ESC → 닫기, ← → → 이전/다음 카메라
   useEffect(() => {
     const handler = (e) => {
@@ -112,9 +121,29 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose,
             )}
           </div>
 
+          {/* 중앙: 플로우맵 보기 버튼 — AI 모니터링 카메라 전용 */}
+          {!selectedItsCctv && (
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+              <button
+                onClick={() => setShowFlowViz(true)}
+                title="학습된 플로우맵(차량 흐름 방향 격자)을 시각화합니다"
+                style={{
+                  padding: '3px 8px', borderRadius: '5px', fontSize: '10px',
+                  cursor: 'pointer',
+                  background: showFlowViz ? '#1e3a5f' : '#1e293b',
+                  border: `1px solid ${showFlowViz ? '#2563eb44' : '#334155'}`,
+                  color: showFlowViz ? '#93c5fd' : '#94a3b8',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.15s',
+                }}
+              >
+                🗺️ 플로우맵 보기
+              </button>
+            </div>
+          )}
+
           {/* 우측: 레벨 기준 칩 + 닫기 버튼 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-            {/* 레벨 기준 칩 3개 — X 버튼 왼쪽 */}
             <span style={{ fontSize: '10px', color: '#334155', userSelect: 'none' }}>레벨 기준</span>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px 7px', background: '#22c55e12', border: '1px solid #22c55e33', borderRadius: '5px' }}>
               <span style={{ fontSize: '10px', color: '#22c55e', fontWeight: 700, lineHeight: 1.2 }}>원활</span>
@@ -168,6 +197,15 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose,
             </div>
           )}
         </div>
+
+        {/* 플로우맵 시각화 모달 — AI 모니터링 카메라에서 '플로우맵 보기' 클릭 시 표시 */}
+        {showFlowViz && (
+          <FlowMapViz
+            host={host}
+            cameraId={selectedId}
+            onClose={() => setShowFlowViz(false)}
+          />
+        )}
       </div>
     </div>
   );
