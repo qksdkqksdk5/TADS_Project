@@ -409,7 +409,6 @@ class ReverseDetector(BaseDetector):
             with self.frame_lock:
                 self.latest_frame = _cache_frame
             if self.is_simulation:
-                # 시뮬레이션은 캐시 필수 (학습 없음)
                 hit = self._try_load_cache(_cache_frame)
                 st.is_learning = False  # 시뮬레이션은 학습 안 함
                 if not hit:
@@ -472,8 +471,6 @@ class ReverseDetector(BaseDetector):
             # 전처리
             frame = cv2.resize(frame, (640, 360))
             shared.latest_frames[self.video_origin] = frame
-            # with self.frame_lock:
-            #     self.latest_frame = frame
 
             if self.flow.frame_w == 0:
                 self.flow.init_grid(640, 360)
@@ -573,6 +570,8 @@ class ReverseDetector(BaseDetector):
 
             # ── YOLO 트래킹 ───────────────────────────────────────────────
             tracks     = _FRAME_POOL.submit(self.tracker.track, frame).result()
+            if not isinstance(tracks, list):
+                tracks = []
             active_ids = {t["id"] for t in tracks}
 
             for t in tracks:
@@ -599,6 +598,9 @@ class ReverseDetector(BaseDetector):
 
             # ── 세션 알림 상태 확인 ───────────────────────────────────────
             already_sent = shared.alert_sent_session.get(session_key, False) if session_key else False
+
+            # ── 시각화 후 캡처를 위한 임시 저장 리스트 ───────────────────
+            _pending_alerts = []
 
             # ── 차량별 처리 ───────────────────────────────────────────────
             for t in tracks:
@@ -680,7 +682,6 @@ class ReverseDetector(BaseDetector):
                                     traj_ndx=ndx, traj_ndy=ndy,
                                 )
                             elif not st.waiting_stable and not already_sent:
-                                # ✅ detector_modules judge 호출 (정교한 판정)
                                 is_wrong, _, _ = self.judge.check(
                                     tid, traj, ndx, ndy, mag, cy,
                                     bbox_h=bh,
@@ -692,33 +693,24 @@ class ReverseDetector(BaseDetector):
                     if tid in st.wrong_way_ids:
                         is_wrong = True
 
-                # ── 역주행 신규 탐지 → 알림 ──────────────────────────────
+                # ── 역주행 신규 탐지 → 임시 저장 (시각화 후 캡처 위해) ────
                 if tid in st.wrong_way_ids and tid not in self._wrongway_alerted and not already_sent:
                     self._wrongway_alerted.add(tid)
                     if session_key:
                         shared.alert_sent_session[session_key] = True
                     label = self.idm.get_display_label(tid) or str(tid)
-                    self.alert_queue.put((frame.copy(), datetime.now(), tid))
+                    _pending_alerts.append((datetime.now(), tid))
                     print(f"🚨 [{self.cctv_name}] 역주행 탐지 ID:{tid} label:{label}")
 
                 # ── 시각화 ────────────────────────────────────────────────
                 color = (0, 0, 255) if (is_wrong or tid in st.wrong_way_ids) else (0, 255, 0)
 
-                # 1. 바운딩 박스
-                # cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-
-                # 2. 화살표 표시 (추가된 부분)
-                # ndx, ndy는 -1~1 사이의 정규화된 방향 벡터입니다.
-                # mag(속도)가 어느 정도 있을 때만 화살표를 그립니다.
                 if mag > 1.0:
-                    arrow_length = 22  # 화살표 길이 (픽셀)
+                    arrow_length = 22
                     start_pt = (int(cx), int(cy))
                     end_pt = (int(cx + ndx * arrow_length), int(cy + ndy * arrow_length))
-                    
-                    # tipLength: 화살표 촉의 크기 비율
                     cv2.arrowedLine(frame, start_pt, end_pt, color, 2, tipLength=0.3)
 
-                # 3. 라벨 텍스트
                 label_text = self.idm.get_display_label(tid) or f"{tid}"
                 cv2.putText(frame, label_text, (int(x1)+7, int(y1)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
@@ -728,6 +720,10 @@ class ReverseDetector(BaseDetector):
             for g in gone:
                 self._track_direction.pop(g, None)
                 self._wrongway_alerted.discard(g)
+
+            # ── 모든 차량 시각화 완료 후 alert_queue에 넣기 ──────────────
+            for alert_time, tid in _pending_alerts:
+                self.alert_queue.put((frame.copy(), alert_time, tid))
 
             with self.frame_lock:
                 self.latest_frame = frame
@@ -758,9 +754,13 @@ class ReverseDetector(BaseDetector):
         return False
 
     def stop(self):
+        self.is_running = False
+        time.sleep(0.3)  # FFmpeg 내부 스레드 정리 대기
         super().stop()
         if self.cap is not None:
-            if self.cap.isOpened():
-                self.cap.release()
-            self.cap = None
+            cap = self.cap
+            self.cap = None  # 먼저 None으로 설정해서 루프에서 접근 못하게
+            time.sleep(0.1)
+            if cap.isOpened():
+                cap.release()
         print(f"🛑 [{self.cctv_name}] ReverseDetector 정지")

@@ -1,0 +1,112 @@
+{
+  "cctv_name": "[세종포천선] [세종]남한산성터널(세종 47)",
+  "memory_key": "세종포천선_세종_남한산성터널_세종_47",
+  "lane_count": 5,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -3.073357582092285,
+          896.662841796875
+        ]
+      },
+      "x_mid": -375.70719718933105,
+      "count": 2,
+      "ratio": 0.2222222222222222,
+      "member_ids": [
+        52,
+        138
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.132145404815674,
+          822.1197509765625
+        ]
+      },
+      "x_mid": -60.588446617126465,
+      "count": 2,
+      "ratio": 0.2222222222222222,
+      "member_ids": [
+        21,
+        135
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.6831817626953125,
+          747.872802734375
+        ]
+      },
+      "x_mid": 51.035552978515625,
+      "count": 2,
+      "ratio": 0.2222222222222222,
+      "member_ids": [
+        62,
+        110
+      ],
+      "source_cluster_ids": [
+        3
+      ]
+    },
+    {
+      "lane_id": 3,
+      "cluster_id": 3,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.2843157052993774,
+          772.1047973632812
+        ]
+      },
+      "x_mid": 240.398095369339,
+      "count": 2,
+      "ratio": 0.2222222222222222,
+      "member_ids": [
+        74,
+        139
+      ],
+      "source_cluster_ids": [
+        4
+      ]
+    },
+    {
+      "lane_id": 4,
+      "cluster_id": 4,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.7709326148033142,
+          662.9322509765625
+        ]
+      },
+      "x_mid": 343.7661484479904,
+      "count": 1,
+      "ratio": 0.1111111111111111,
+      "member_ids": [
+        50
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 12:55:27"
+}

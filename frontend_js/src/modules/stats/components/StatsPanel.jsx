@@ -5,6 +5,13 @@
 import React, { useState, useEffect } from 'react';
 import { fetchStatsSummary, fetchStatsHistory } from '../api'; // ✅ api.js
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+  
+};
+
 function StatsPanel({ isMobile, host }) {
   const [viewMode, setViewMode]   = useState("summary");
   const [dataMode, setDataMode]   = useState("real");
@@ -139,8 +146,8 @@ function StatsPanel({ isMobile, host }) {
                 <div key={log.id} style={historyCardStyle}>
                   <div style={historyImageWrapper}>
                     {log.image_path ? (
-                      <img src={`http://${host}:5000${log.image_path}`} style={historyImage} alt="event"
-                        onClick={() => window.open(`http://${host}:5000${log.image_path}`)} />
+                      <img src={`${getOrigin(host)}${log.image_path}`} style={historyImage} alt="event"
+                        onClick={() => window.open(`${getOrigin(host)}${log.image_path}`)} />
                     ) : (
                       <div style={noImgStyle}>NO IMG</div>
                     )}

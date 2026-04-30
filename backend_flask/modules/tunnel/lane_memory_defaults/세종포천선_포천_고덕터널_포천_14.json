@@ -1,0 +1,73 @@
+{
+  "cctv_name": "[세종포천선] [포천]고덕터널(포천 14)",
+  "memory_key": "세종포천선_포천_고덕터널_포천_14",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.540919065475464,
+          850.6467895507812
+        ]
+      },
+      "x_mid": -201.2937035560608,
+      "count": 1,
+      "ratio": 0.125,
+      "member_ids": [
+        56
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.6186137199401855,
+          745.8580322265625
+        ]
+      },
+      "x_mid": 75.75195217132568,
+      "count": 6,
+      "ratio": 0.75,
+      "member_ids": [
+        4,
+        6,
+        24,
+        44,
+        48,
+        57
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.84666907787323,
+          670.6819458007812
+        ]
+      },
+      "x_mid": 320.16094756126404,
+      "count": 1,
+      "ratio": 0.125,
+      "member_ids": [
+        53
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 13:11:39"
+}

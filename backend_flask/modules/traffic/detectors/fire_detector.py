@@ -173,6 +173,7 @@ class FireDetector(BaseDetector):
                     image_path=full_image_path
                 )
 
+                print(f"🔌 [소켓 확인] socketio={self.socketio is not None}, app={self.app is not None}")
                 if self.socketio:
                     self.socketio.emit('anomaly_detected', {
                         "alert_id":     new_alert.id,

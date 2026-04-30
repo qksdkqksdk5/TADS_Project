@@ -5,6 +5,7 @@ import ControlBox     from './components/ControlBox';
 import VideoStream    from './components/VideoStream';
 import PlateList      from './components/PlateList';
 import AnalyticsModal from './components/AnalyticsModal';
+import ModelInfoModal from './components/ModelInfoModal';
 
 // ✅ isMobile은 Dashboard에서 prop으로 받아서 사용 (내부 훅 제거)
 export default function PlateModule({ host, user, isMobile }) {
@@ -21,7 +22,9 @@ export default function PlateModule({ host, user, isMobile }) {
   const [resultVideos, setResultVideos]           = useState([]);
   const [videoFilter, setVideoFilter]             = useState('');
   const [showAnalytics, setShowAnalytics]         = useState(false);
+  const [showModelInfo, setShowModelInfo] = useState(false);
   const pollRef = useRef(null);
+  
 
   useEffect(() => {
     if (!connected) return;
@@ -47,6 +50,7 @@ export default function PlateModule({ host, user, isMobile }) {
       .catch(() => setConnected(false));
   }, []);
 
+  // review01 - 시작 후 1초마다 영상/결과 폴링 (영상 필터링도 포함)
   useEffect(() => {
     if (!started) return;
     pollRef.current = setInterval(async () => {
@@ -91,6 +95,7 @@ export default function PlateModule({ host, user, isMobile }) {
     ));
   };
 
+  // review02 - 컴포넌트 언마운트 시 연결 상태면 서버에 stop 요청 + 상태 초기화
   useEffect(() => {
     return () => {
       if (connected) {
@@ -108,6 +113,7 @@ export default function PlateModule({ host, user, isMobile }) {
             videos={videos}
             onStart={handleStart}
             onAnalytics={() => setShowAnalytics(true)}
+            onModelInfo={() => setShowModelInfo(true)}
           />
           <VideoStream
             started={started}
@@ -131,6 +137,11 @@ export default function PlateModule({ host, user, isMobile }) {
         <AnalyticsModal
           baseUrl={BASE_URL}
           onClose={() => setShowAnalytics(false)}
+        />
+      )}
+      {showModelInfo && (
+        <ModelInfoModal
+          onClose={() => setShowModelInfo(false)}
         />
       )}
     </div>

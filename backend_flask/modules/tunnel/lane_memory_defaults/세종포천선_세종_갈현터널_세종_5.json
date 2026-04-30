@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[세종포천선] [세종]갈현터널(세종 5)",
+  "memory_key": "세종포천선_세종_갈현터널_세종_5",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.550720453262329,
+          939.6328735351562
+        ]
+      },
+      "x_mid": -116.365394115448,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        13
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.7766196131706238,
+          742.0706176757812
+        ]
+      },
+      "x_mid": 420.550097823143,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        12
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 17:49:01"
+}

@@ -1,0 +1,88 @@
+{
+  "cctv_name": "[경부선] [부산]경부동탄터널(부산5)",
+  "memory_key": "경부선_부산_경부동탄터널_부산5",
+  "lane_count": 4,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -4.025450706481934,
+          1136.37060546875
+        ]
+      },
+      "x_mid": -530.1659870147705,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        18
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -3.657022476196289,
+          1068.15185546875
+        ]
+      },
+      "x_mid": -445.8554496765137,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        5
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.022245407104492,
+          855.5443725585938
+        ]
+      },
+      "x_mid": 18.334774017333984,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        84
+      ],
+      "source_cluster_ids": [
+        3
+      ]
+    },
+    {
+      "lane_id": 3,
+      "cluster_id": 3,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          0.25111350417137146,
+          508.73724365234375
+        ]
+      },
+      "x_mid": 612.6982343792915,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 12:16:18"
+}

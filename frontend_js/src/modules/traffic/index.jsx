@@ -10,6 +10,7 @@ const getOrigin = (host) => {
   if (host.startsWith('http')) return host;
   const outsideHost = 'itsras.illit.kr';
   return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+  
 };
 
 export default function TrafficModule({ socket, user, activeTab, isMobile, host,
@@ -35,7 +36,8 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
       }, 100);
     } else if (activeTab === "cctv") {
       setVideoUrl("");
-      if (cctvData.length === 0) loadCctvUrl();
+      // 🔥 항상 최신 URL 로드 (탭 재진입 시에도)
+      loadCctvUrl();
     }
   }, [activeTab, host]);
 
@@ -43,28 +45,14 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
     const prevTab = prevTabRef.current;
     
     if (prevTab !== activeTab) {
-      // 1. 시뮬레이션 탭을 완전히 벗어날 때만 시뮬레이션 중지
       if (prevTab === "sim" && activeTab !== "sim") {
         console.log("🛑 시뮬레이션 종료 (시뮬레이션 탭을 벗어남)");
         stopSimulation(host);
       }
-
-      // 2. CCTV 관제 탭을 벗어날 때 (일반 분석기만 종료)
-      if (prevTab === "cctv" && cctvData.length > 0) {
-        console.log("🧹 실시간 분석 리소스 정리 (시뮬레이션 제외)");
-        cctvData.forEach(item => {
-          if (!item.name) return;
-          
-          // 핵심: 일반 분석(reverse, fire)만 중지 명령을 보냅니다.
-          // 백엔드 stopDetection에서 명시적으로 일반 이름만 타겟팅해야 합니다.
-          stopDetection(host, { name: item.name, type: 'reverse' }).catch(() => {});
-          stopDetection(host, { name: item.name, type: 'fire' }).catch(() => {});
-        });
-      }
     }
 
     prevTabRef.current = activeTab;
-  }, [activeTab, host, cctvData]);
+  }, [activeTab, host]); // ← cctvData 제거
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -121,7 +109,7 @@ export default function TrafficModule({ socket, user, activeTab, isMobile, host,
 
       <div style={{ flex: 3.2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ ...panelWrapper, flex: 1, marginBottom: (isEmergency && showMap) ? (isMobile ? '10px' : '20px') : '0px', transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} host={host} user={user} loadCctvUrl={loadCctvUrl}/>
+          <VideoPanel videoUrl={videoUrl} activeTab={activeTab} cctvData={cctvData} setCctvData={setCctvData} host={host} user={user} loadCctvUrl={loadCctvUrl}/>
         </div>
 
         {isEmergency && !showMap && (

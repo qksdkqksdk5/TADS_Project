@@ -1,7 +1,7 @@
 # ==========================================
 # 파일명: routes.py
 # 위치: backend_flask/modules/tunnel/routes.py
-# 역할:
+# 역할: 프론트엔드와 직접 통신하는 API로 pipeline_adapter에 전달하는 역할만 담당
 # - health
 # - 캐시된 CCTV 목록 조회
 # - 프론트에서 CCTV 후보 리스트 저장
@@ -10,7 +10,7 @@
 # - 상태 조회
 # - 실시간 영상 스트리밍
 # - 차선 재추정 요청
-# - 차선 메모리 저장
+# - 차선 메모리 저장 등
 #
 # 참고:
 # - 환기 대응(ventilation) 정보는 routes.py에서 계산하지 않음
@@ -250,6 +250,44 @@ def lane_save():
         }), 500
 
     status_code = 200 if result.get("ok") else 400
+    return jsonify(result), status_code
+
+
+# =========================================================
+# 목표 차선 수 설정
+# =========================================================
+@tunnel_bp.route("/lane/target-count", methods=["POST"])
+def lane_target_count():
+    data = request.get_json(silent=True) or {}
+
+    try:
+        lane_count = int(data.get("lane_count"))
+    except Exception:
+        return jsonify({
+            "ok": False,
+            "message": "lane_count는 2, 3, 4 중 하나여야 합니다."
+        }), 400
+
+    if lane_count not in (2, 3, 4):
+        return jsonify({
+            "ok": False,
+            "message": "lane_count는 2, 3, 4 중 하나여야 합니다."
+        }), 400
+
+    try:
+        result = service.set_target_lane_count(lane_count)
+    except AttributeError:
+        return jsonify({
+            "ok": False,
+            "message": "service.py에 set_target_lane_count() 메서드가 없습니다."
+        }), 500
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": f"목표 차선 수 설정 중 오류: {str(e)}"
+        }), 500
+
+    status_code = 200 if result.get("ok", False) else 400
     return jsonify(result), status_code
 
 

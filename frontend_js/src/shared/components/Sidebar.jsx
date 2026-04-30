@@ -20,6 +20,7 @@ function Sidebar({ activeTab, onTabChange, user, onLogout, isMobile }) {
     { id: "raspi",  label: "라즈베리파이 CCTV", icon: "🖥️" },
     { id: "plate",  label: "번호판 인식",        icon: "🔍" },
     { id: "stats",  label: "통계 데이터",        icon: "📊" },
+    { id: "llm", label: "LLM 분석", icon: "🧠" }
   ];
 
   const sidebarWidth = isMobile ? '100%' : (isCollapsed ? '80px' : '240px');

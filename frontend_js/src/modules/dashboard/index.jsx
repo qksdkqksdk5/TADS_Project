@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Sidebar      from '../../shared/components/Sidebar';
 import ChatAssistant from '../../shared/components/chat/ChatAssistant';
+import LLMDashboard from '../llm/LLMDashboard';
 import TrafficModule  from '../traffic';
 import PlateModule    from '../plate';
 import MonitoringModule from '../monitoring';
@@ -11,8 +12,8 @@ import RaspiModule    from '../raspi';
 import StatsModule    from '../stats';
 import { useAnomalyDetection } from '../traffic/hooks/useAnomalyDetection';
 
-const VALID_TABS = ["cctv", "webcam", "sim", "stats", "plate", "monitoring", "tunnel", "raspi"];
-const MODULE_TABS = ["stats", "plate", "monitoring", "tunnel", "raspi"];
+const VALID_TABS = ["cctv", "webcam", "sim", "stats", "plate", "monitoring", "tunnel", "raspi", "llm"];
+const MODULE_TABS = ["stats", "plate", "monitoring", "tunnel", "raspi", "llm"];
 
 export default function Dashboard({ socket, outsideSocket, user, setUser, onLogout }) {
   const { tab } = useParams();
@@ -29,11 +30,11 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
   const { isEmergency, pendingAlerts, logs, mapRef,
           resolveEmergency, resolveAllAlertsAction, moveToAlert, createMarker, clearMarkersRef } =
     useAnomalyDetection(
-      socket,
+      outsideSocket,
       activeTab,
       (newTab) => navigate(`/dashboard/${newTab}`),
       setVideoUrl,
-      host,
+      outsideHost,
       user?.name
     );
 
@@ -92,7 +93,7 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
         }}>
 
           {activeTab === "stats" && (
-            <div style={moduleWrapper}><StatsModule isMobile={isMobile} host={host} /></div>
+            <div style={moduleWrapper}><StatsModule isMobile={isMobile} host={outsideHost} /></div>
           )}
           {activeTab === "plate" && (
             <div style={moduleWrapper}><PlateModule isMobile={isMobile} host={host} user={user} /></div>
@@ -106,14 +107,18 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
           {activeTab === "raspi" && (
             <div style={moduleWrapper}><RaspiModule isMobile={isMobile} host={outsideHost} socket={outsideSocket}/></div>
           )}
-
+          {activeTab === "llm" && (
+            <div style={moduleWrapper}>
+              <LLMDashboard host={host} />
+            </div>
+          )}
           {!isModuleTab && (
             <TrafficModule
-              socket={socket}
+              socket={outsideSocket}
               user={user}
               activeTab={activeTab}
               isMobile={isMobile}
-              host={host}
+              host={outsideHost}
               isEmergency={isEmergency}
               pendingAlerts={pendingAlerts}
               logs={logs}

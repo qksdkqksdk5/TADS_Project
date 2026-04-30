@@ -1,22 +1,28 @@
-// src/modules/tunnel/compinents/EventLog.jsx
-// 역할: 터널 탭 내 이벤트 로그 패널 (단일 컴포넌트로 분리)
+// src/modules/tunnel/components/EventLog.jsx
+// 역할: 터널 탭 내 이벤트 로그 패널
 
-export default function EventLog({ events }) {
-  return (
-    <div style={{ background: "#1a1a2e", padding: 20, borderRadius: 10 }}>
-      <h3>🚨 이벤트 로그</h3>
+export default function EventLog({ status }) {
+  const eventLogs = Array.isArray(status?.event_logs) ? status.event_logs : [];
+  const events = Array.isArray(status?.events) ? status.events : [];
 
-      {events.length === 0 ? (
-        <div style={{ color: "#aaa" }}>
-          이상 징후 없음 (정상 흐름 유지)
+  if (eventLogs.length > 0) {
+    return eventLogs
+      .slice()
+      .reverse()
+      .map((event, idx) => (
+        <div key={`${event}-${idx}`} className="event-item">
+          {event}
         </div>
-      ) : (
-        <ul>
-          {events.slice(0, 5).map((e, i) => (
-            <li key={i}>{e}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+      ));
+  }
+
+  if (events.length > 0) {
+    return events.map((event, idx) => (
+      <div key={`${event}-${idx}`} className="event-item">
+        {event}
+      </div>
+    ));
+  }
+
+  return <div className="event-empty">이상 징후 없음 (정상 흐름 유지)</div>;
 }

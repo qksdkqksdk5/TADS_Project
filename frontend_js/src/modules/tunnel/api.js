@@ -1,3 +1,12 @@
+// ==========================================
+// # 파일명: api.js
+// # 역할: 터널 관련 백엔드 API 호출을 모아둔 파일(통신 코드 분리)
+//        (장점 : 화면 코드와 통신 코드를 분리하면 유지보수 용이 )
+
+// # 프론트 화면 코드 안에서 직접 URL을 호출하지 않고, api.js의 함수로 분리해서 재사용성과 가독성을 높임
+
+// # ==========================================
+
 import axios from "axios";
 
 /* =========================================================
@@ -41,6 +50,8 @@ export const getTunnelCctvList = async (BACKEND_URL) => {
   return res.data;
 };
 
+export const fetchTunnelCctvList = getTunnelCctvList;
+
 /* =========================================================
  * 랜덤 CCTV 선택
  * ========================================================= */
@@ -63,6 +74,39 @@ export const selectCctvByName = async (BACKEND_URL, name) => {
  * ========================================================= */
 export const stopTunnelStream = async (BACKEND_URL) => {
   const res = await axios.post(`${BACKEND_URL}/api/tunnel/stream/stop`);
+  return res.data;
+};
+
+/* =========================================================
+ * 목표 차선 수 설정
+ * ========================================================= */
+export const setTunnelTargetLaneCount = async (BACKEND_URL, laneCount) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/target-count`, {
+    lane_count: laneCount,
+  });
+  return res.data;
+};
+
+export const requestLaneReestimate = async (BACKEND_URL) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/reestimate`);
+  return res.data;
+};
+
+export const saveTunnelLaneMemory = async (BACKEND_URL) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/lane/save`);
+  return res.data;
+};
+
+export const fetchTunnelEventStats = async (BACKEND_URL) => {
+  const res = await axios.get(`${BACKEND_URL}/api/tunnel/event/stats`);
+  return res.data;
+};
+
+export const resolveTunnelAccidentEvent = async (BACKEND_URL, eventId, action) => {
+  const res = await axios.post(`${BACKEND_URL}/api/tunnel/event/resolve`, {
+    event_id: eventId,
+    action,
+  });
   return res.data;
 };
 

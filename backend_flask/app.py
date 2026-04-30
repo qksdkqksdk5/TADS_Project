@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="`torch.distri
 app = Flask(__name__)
 CORS(app, resources={r"/*": {
     "origins": "*", 
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "PATCH","OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization", "ngrok-skip-browser-warning"]
 }})
 
@@ -103,4 +103,4 @@ log.setLevel(logging.ERROR)
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

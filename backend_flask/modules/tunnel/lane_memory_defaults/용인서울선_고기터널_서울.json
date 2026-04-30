@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[용인서울선]고기터널 서울",
+  "memory_key": "용인서울선_고기터널_서울",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.6014975309371948,
+          814.9595947265625
+        ]
+      },
+      "x_mid": 151.93961691856384,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        3
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.883460283279419,
+          740.9383544921875
+        ]
+      },
+      "x_mid": 375.18579721450806,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 17:25:20"
+}

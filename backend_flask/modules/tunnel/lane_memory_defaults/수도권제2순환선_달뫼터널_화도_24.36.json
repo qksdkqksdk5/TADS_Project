@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[수도권제2순환선] 달뫼터널(화도)24.36",
+  "memory_key": "수도권제2순환선_달뫼터널_화도_24.36",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.9143471717834473,
+          823.0460205078125
+        ]
+      },
+      "x_mid": 30.506291389465332,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        24
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.2294951677322388,
+          808.4277954101562
+        ]
+      },
+      "x_mid": 299.4167959690094,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        20
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-24 11:11:12"
+}

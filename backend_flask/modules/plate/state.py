@@ -24,7 +24,7 @@ ASPECT_RATIO_MIN = 1.5
 ASPECT_RATIO_MAX = 5.0
 MAX_BOX_AREA_RATIO = 0.1
 MIN_BOX_AREA_RATIO = 0.0003
-VOTE_THRESHOLD = 3
+VOTE_THRESHOLD = 4
 
 # --- [검출 설정] ---
 PAD          = 8      # 번호판 크롭 패딩

@@ -1,0 +1,75 @@
+{
+  "cctv_name": "[용인서울선]성복터널 용인",
+  "memory_key": "용인서울선_성복터널_용인",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.206852436065674,
+          929.449951171875
+        ]
+      },
+      "x_mid": 15.813042640686035,
+      "count": 4,
+      "ratio": 0.4,
+      "member_ids": [
+        25,
+        31,
+        123,
+        161
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.5549650192260742,
+          813.3031005859375
+        ]
+      },
+      "x_mid": 169.54758262634277,
+      "count": 3,
+      "ratio": 0.3,
+      "member_ids": [
+        27,
+        63,
+        128
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.6321254372596741,
+          651.4256591796875
+        ]
+      },
+      "x_mid": 389.72572815418243,
+      "count": 3,
+      "ratio": 0.3,
+      "member_ids": [
+        72,
+        121,
+        147
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 17:18:32"
+}

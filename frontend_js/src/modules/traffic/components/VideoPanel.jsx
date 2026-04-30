@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import Swal from 'sweetalert2';
-import { captureNow, updateCaptureMemo, stopDetection, getDetectionStatus } from '../api';
+import { captureNow, updateCaptureMemo, stopDetection, getDetectionStatus, fetchCctvUrl } from '../api';
 
 const getOrigin = (host) => {
   if (host.startsWith('http')) return host;
@@ -16,11 +16,8 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
 
   useEffect(() => {
     if (isHls && url && videoRef.current) {
-      if (hlsRef.current) hlsRef.current.destroy();
 
-      if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        videoRef.current.src = url;
-      } else if (Hls.isSupported()) {
+      if (!hlsRef.current) {
         const hls = new Hls({
           fragLoadingMaxRetry: 10,
           manifestLoadingMaxRetry: 10,
@@ -29,36 +26,37 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
           manifestLoadingRetryDelay: 1000,
         });
 
-        hls.loadSource(url);
         hls.attachMedia(videoRef.current);
 
         hls.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                // ✅ 403 Forbidden(토큰 만료)인지 확인
-                if (data.response && data.response.code === 403) {
-                  console.warn(`🔒 [${name}] 토큰 만료됨 (403). URL 갱신을 요청합니다.`);
-                  if (onRefreshUrl) onRefreshUrl(); // 부모의 갱신 함수 실행
+                if (
+                  data.response?.code === 403 ||
+                  data.response?.code === 401 ||
+                  data.details === 'manifestLoadError'
+                ) {
+                  onRefreshUrl && onRefreshUrl();
                 } else {
-                  // 일반적인 네트워크 끊김은 다시 시도
-                  console.log("🌐 네트워크 오류 - 재시도 중...");
                   hls.startLoad();
                 }
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                console.log("🎬 미디어 오류 - 복구 시도...");
                 hls.recoverMediaError();
                 break;
               default:
-                console.error("❌ 치명적 오류 - 스트림 종료");
                 hls.destroy();
                 break;
             }
           }
         });
+
         hlsRef.current = hls;
       }
+
+      // 🔥 source만 교체
+      hlsRef.current.loadSource(url);
     }
     return () => { if (hlsRef.current) hlsRef.current.destroy(); };
   }, [url, isHls, onRefreshUrl]); // dependency에 onRefreshUrl 추가
@@ -89,30 +87,57 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
   );
 };
 
-const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
+const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, user }) => {
   const isCctvMode = activeTab === "cctv";
   const [isFlashing,    setIsFlashing]    = useState(false);
   const [expandedMedia, setExpandedMedia] = useState(null);
   const [reverseOn,     setReverseOn]     = useState(false);
   const [fireOn,        setFireOn]        = useState(false);
 
-  // ✅ 새로고침 후 백엔드 detector 상태와 UI 동기화
   useEffect(() => {
-    if (cctvData.length > 0) {
-      getDetectionStatus(host).then(res => {
-        const active = res.data.active || [];
-        setReverseOn(active.some(name => name.includes('_reverse') && !name.includes('sim')));
-        setFireOn(active.some(name => name.includes('_fire') && !name.includes('sim')));
-      }).catch(() => {});
-    }
-  }, [cctvData]);
+    if (!isCctvMode) return;
 
-  useEffect(() => {
+    console.log("🟢 CCTV 모드 → 자동 URL 갱신 시작");
+
+    const interval = setInterval(() => {
+      handleUrlRefresh();
+    }, 60000); // 60초
+
     return () => {
-      setReverseOn(false);
-      setFireOn(false);
+      console.log("🔴 CCTV 모드 종료 → 갱신 중지");
+      clearInterval(interval);
     };
   }, [activeTab]);
+
+  const didInitRef = useRef(false);
+
+  // cctv 탭 최초 진입 시 1회만 백엔드 상태 동기화
+  useEffect(() => {
+    if (!isCctvMode) {
+      // cctv 탭이 아닐 때는 상태 초기화 + ref 리셋
+      setReverseOn(false);
+      setFireOn(false);
+      didInitRef.current = false;
+      return;
+    }
+
+    // cctv 탭인데 이미 초기화했으면 스킵 (cctvData URL 갱신으로 재실행돼도 무시)
+    if (didInitRef.current) return;
+
+    // cctvData가 아직 안 왔으면 대기
+    if (cctvData.length === 0) return;
+
+    didInitRef.current = true;
+
+    getDetectionStatus(host).then(res => {
+      const active = res.data.active || [];
+      setReverseOn(active.some(name => name.includes('_reverse') && !name.includes('sim')));
+      setFireOn(active.some(name => name.includes('_fire') && !name.includes('sim')));
+    }).catch(() => {
+      setReverseOn(false);
+      setFireOn(false);
+    });
+  }, [isCctvMode, cctvData]); // activeTab 의존성 제거
 
   const handleToggle = async (type, currentOn, setOn) => {
     const idx = type === 'reverse' ? 0 : 1;
@@ -121,16 +146,29 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
 
     if (currentOn) {
       setOn(false);
-      try { await stopDetection(host, { name: item.name, type }); } catch {}
+      try {
+        await stopDetection(host, { name: item.name, type });
+        await new Promise(res => setTimeout(res, 500));
+      } catch {}
     } else {
-      // 🟢 AI ON 시
       console.log(`🚀 ${item.name} 분석 시작 시도...`);
-      
-      // 1. 백엔드에게 "주소가 죽었을 수 있으니 최신 주소로 갱신해줘"라고 요청 (옵션)
-      // 혹은 단순히 딜레이를 주어 브라우저 소켓 해제 대기
-      await new Promise(resolve => setTimeout(resolve, 800)); 
-      
-      // 2. ON으로 변경 (이때 video_feed 라우트가 호출됨)
+      try {
+        // 백엔드에 감지기 생성 요청
+        const origin = getOrigin(host);
+        await fetch(`${origin}/api/its/start_detection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url:  item.url,
+            name: item.name,
+            lat:  item.lat,
+            lng:  item.lng,
+            type
+          })
+        });
+      } catch (err) {
+        console.error('감지 시작 실패:', err);
+      }
       setOn(true);
     }
   };
@@ -203,7 +241,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], host, user }) => {
                 <div key={idx} style={{ cursor: 'zoom-in', width: '100%', height: '100%' }}
                   onClick={() => setExpandedMedia({ url: finalUrl, isHls, name: item.name })}>
                   <SingleMedia
-                    key={finalUrl}
+                    key={idx}
                     url={finalUrl} isHls={isHls} name={displayName}
                     showToggle={isReverse || isFire}
                     isOn={isOn}

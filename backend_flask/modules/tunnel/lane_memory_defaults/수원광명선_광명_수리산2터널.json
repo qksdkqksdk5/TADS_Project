@@ -1,0 +1,68 @@
+{
+  "cctv_name": "[수원광명선] 광명 수리산2터널",
+  "memory_key": "수원광명선_광명_수리산2터널",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.10353422164917,
+          800.5744018554688
+        ]
+      },
+      "x_mid": -70.2887659072876,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        22
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.8258683681488037,
+          932.3057861328125
+        ]
+      },
+      "x_mid": 176.39628171920776,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        19
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.9272336959838867,
+          824.5037841796875
+        ]
+      },
+      "x_mid": 440.6290340423584,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        21
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 18:25:13"
+}

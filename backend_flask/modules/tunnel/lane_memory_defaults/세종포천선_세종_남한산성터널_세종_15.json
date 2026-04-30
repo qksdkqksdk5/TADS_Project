@@ -1,0 +1,29 @@
+{
+  "cctv_name": "[세종포천선] [세종]남한산성터널(세종 15)",
+  "memory_key": "세종포천선_세종_남한산성터널_세종_15",
+  "lane_count": 1,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.0749881267547607,
+          885.02734375
+        ]
+      },
+      "x_mid": 25.982259273529053,
+      "count": 2,
+      "ratio": 1.0,
+      "member_ids": [
+        25,
+        26
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 14:52:00"
+}

@@ -13,16 +13,20 @@ export default function DwellChart({ dwell }) {
     data.reduce((sum, d) => sum + d.time, 0) / (data.length || 1);
 
   return (
-    <div style={{ background: "#1a1a2e", padding: 20, borderRadius: 10 }}>
+    <div className="chart-panel">
       <h3>📊 체류시간</h3>
       <div>평균 체류시간: {avg.toFixed(1)} sec</div>
 
-      <BarChart width={400} height={200} data={data}>
-        <XAxis dataKey="name" />
-        <YAxis />
-        <Tooltip />
-        <Bar dataKey="time" />
-      </BarChart>
+      {data.length > 0 ? (
+        <BarChart width={400} height={200} data={data}>
+          <XAxis dataKey="name" />
+          <YAxis />
+          <Tooltip />
+          <Bar dataKey="time" />
+        </BarChart>
+      ) : (
+        <div className="chart-empty-text">표시할 체류시간 데이터가 없습니다.</div>
+      )}
     </div>
   );
 }

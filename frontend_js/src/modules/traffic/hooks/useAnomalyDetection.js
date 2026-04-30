@@ -152,7 +152,7 @@ export function useAnomalyDetection(socket, activeTab, setActiveTab, setVideoUrl
     };
 
     const handleAnomaly = async (data) => {
-
+      console.log('🚨 anomaly_detected 수신:', data); // 임시 디버그
       // 1. 중복 알림 방지 체크
       if (pendingAlertsRef.current.some(a => String(a.id) === String(data.alert_id))) return;
 

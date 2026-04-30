@@ -1,0 +1,88 @@
+{
+  "cctv_name": "[경부선] [서울]경부동탄터널(입구방음터널)",
+  "memory_key": "경부선_서울_경부동탄터널_입구방음터널",
+  "lane_count": 4,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -3.2313907146453857,
+          1390.8721923828125
+        ]
+      },
+      "x_mid": 53.0764365196228,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        169
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.787473440170288,
+          1339.9384765625
+        ]
+      },
+      "x_mid": 185.92447233200073,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        179
+      ],
+      "source_cluster_ids": [
+        3
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.4539021253585815,
+          975.3446655273438
+        ]
+      },
+      "x_mid": 373.429185628891,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        162
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 3,
+      "cluster_id": 3,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.9827000498771667,
+          902.3782958984375
+        ]
+      },
+      "x_mid": 495.54047524929047,
+      "count": 1,
+      "ratio": 0.25,
+      "member_ids": [
+        171
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    }
+  ],
+  "saved_at": "2026-04-23 12:35:21"
+}

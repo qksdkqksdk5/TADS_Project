@@ -10,16 +10,20 @@ export default function SpeedChart({ vehicles, count }) {
   }));
 
   return (
-    <div style={{ background: "#1a1a2e", padding: 20, borderRadius: 10 }}>
+    <div className="chart-panel">
       <h3>📊 차량 속도 (ROI)</h3>
       <div>총 차량 수: {count}</div>
 
-      <BarChart width={400} height={200} data={data}>
-        <XAxis dataKey="name" />
-        <YAxis />
-        <Tooltip />
-        <Bar dataKey="speed" />
-      </BarChart>
+      {data.length > 0 ? (
+        <BarChart width={400} height={200} data={data}>
+          <XAxis dataKey="name" />
+          <YAxis />
+          <Tooltip />
+          <Bar dataKey="speed" />
+        </BarChart>
+      ) : (
+        <div className="chart-empty-text">표시할 차량 속도 데이터가 없습니다.</div>
+      )}
     </div>
   );
 }

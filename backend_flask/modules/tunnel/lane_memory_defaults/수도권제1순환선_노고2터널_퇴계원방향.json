@@ -1,0 +1,90 @@
+{
+  "cctv_name": "[수도권제1순환선] 노고2터널(퇴계원방향)",
+  "memory_key": "수도권제1순환선_노고2터널_퇴계원방향",
+  "lane_count": 4,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -3.6357791423797607,
+          809.1223754882812
+        ]
+      },
+      "x_mid": -696.0901894569397,
+      "count": 1,
+      "ratio": 0.16666666666666666,
+      "member_ids": [
+        81
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.138265371322632,
+          657.825439453125
+        ]
+      },
+      "x_mid": -227.41642427444458,
+      "count": 1,
+      "ratio": 0.16666666666666666,
+      "member_ids": [
+        9
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.6378896236419678,
+          675.8745727539062
+        ]
+      },
+      "x_mid": -2.211731433868408,
+      "count": 3,
+      "ratio": 0.5,
+      "member_ids": [
+        11,
+        62,
+        76
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    },
+    {
+      "lane_id": 3,
+      "cluster_id": 3,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.8521652817726135,
+          623.5979614257812
+        ]
+      },
+      "x_mid": 270.80153477191925,
+      "count": 1,
+      "ratio": 0.16666666666666666,
+      "member_ids": [
+        82
+      ],
+      "source_cluster_ids": [
+        3
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 14:18:43"
+}

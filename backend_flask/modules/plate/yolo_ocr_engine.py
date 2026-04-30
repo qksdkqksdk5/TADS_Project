@@ -18,6 +18,7 @@ ocr_result_queue = queue.Queue()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OCR_MODEL_PATH = os.path.join(BASE_DIR, 'ocr_openvino_model')
 
+#review01
 # ── 번호판 정규식 패턴 ────────────────────────────────────────────────────────
 # 1. 영업용(노란색) 필수 패턴: 지역명2자 + 숫자2~3 + 한글1 + 숫자4
 #    (지역명이 반드시 포함되어야 함)
@@ -42,17 +43,35 @@ def get_shared_ocr_model():
                 _shared_ocr_model = YOLO(OCR_MODEL_PATH, task='detect')
     return _shared_ocr_model
 
-# 🔥 색상 검출 함수 추가
+# review02 - 색상 검출 함수
 def detect_plate_color(plate_img):
     if plate_img is None or plate_img.size == 0:
         return "white"
-    hsv = cv2.cvtColor(plate_img, cv2.COLOR_BGR2HSV)
-    # 노란색 범위 설정
-    lower_yellow = np.array([15, 70, 70])
-    upper_yellow = np.array([35, 255, 255])
-    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-    yellow_ratio = (cv2.countNonZero(mask) / (plate_img.shape[0] * plate_img.shape[1])) * 100
-    return "yellow" if yellow_ratio > 20 else "white"
+        
+    # 1. 전처리: 가우시안 블러 (노이즈 억제)
+    blurred = cv2.GaussianBlur(plate_img, (5, 5), 0)
+    
+    # 2. BGR -> Lab 변환
+    # L : 밝기 a : 녹색-빨강 b : 파랑-노랑
+    lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2Lab)
+    
+    # 3. Lab 범위 설정
+    lower_lab = np.array([0, 0, 140]) 
+    upper_lab = np.array([255, 137, 255])
+    
+    mask = cv2.inRange(lab, lower_lab, upper_lab)
+    
+    # 4. 모폴로지 연산 (작은 조명 노이즈 제거)
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    
+    # 5. 노란색 비율 계산
+    yellow_pixels = cv2.countNonZero(mask)
+    total_pixels = plate_img.shape[0] * plate_img.shape[1]
+    yellow_ratio = (yellow_pixels / total_pixels) * 100
+    
+    # 15~20% 기준 (직접 튜닝한 결과에 따라 조정)
+    return "yellow" if yellow_ratio > 17 else "white"
 
 def _parse_ocr_result(results, model_names: dict) -> str:
     chars_data = []
@@ -91,14 +110,14 @@ def ocr_worker():
             item = ocr_input_queue.get(timeout=1)
             if item is None: break
 
-            
             track_id, plate_img = item
 
-            # 🔥 1. 색상 먼저 파악
+            # review03 - 색상 인식 → OCR → 패턴 매칭 → 결과 전달 (메모리 활용 포함)
+            # 1. 색상 먼저 파악
             color_type = detect_plate_color(plate_img)
 
             # 2. OCR 예측
-            results = ocr_model.predict(plate_img, conf=0.66, imgsz=640, verbose=False, device='cpu')
+            results = ocr_model.predict(plate_img, conf=0.7, imgsz=640, verbose=False, device='cpu')
 
             if len(results) > 0 and len(results[0].boxes) > 0:
                 conf_scores = results[0].boxes.conf.cpu().numpy() # 각 글자의 점수들
@@ -113,7 +132,7 @@ def ocr_worker():
             
             final_text = None
 
-            # 🔥 4. 색상별 맞춤형 로직 적용
+            # 4. 색상별 맞춤형 로직 적용
             if color_type == "yellow":
                 # 노란색: 지역명이 포함된 엄격한 패턴 탐색
                 match = RE_YELLOW_STRICT.search(clean_text)
@@ -121,21 +140,24 @@ def ocr_worker():
                     region_part = match.group(1)
                     number_part = match.group(2)
                     final_text = region_part + number_part
-                    # 발견된 지역명 메모리에 저장
+                    
                     with _region_lock:
                         _region_seen[track_id] = region_part
-                    print(f"   ㄴ ✅ [영업용 통과] ID:{track_id} -> '{final_text}'")
+                    print(f"   ㄴ ✅ [영업용 완벽 통과] ID:{track_id} -> '{final_text}'")
                 else:
-                    # 지역명이 안 보이면 메모리 확인
+                    # 지역명을 못 찾았을 경우
                     num_match = RE_WHITE_NORMAL.search(clean_text)
                     if num_match:
                         number_only = num_match.group(1)
                         with _region_lock:
                             if track_id in _region_seen:
+                                # 이미 저장된 지역명이 있다면 결합
                                 final_text = _region_seen[track_id] + number_only
                                 print(f"   ㄴ ✅ [영업용 복원] ID:{track_id} -> '{final_text}' (메모리 참조)")
                             else:
-                                print(f"   ㄴ ⏳ [영업용 대기] ID:{track_id} 지역명 미발견: '{number_only}'")
+                                # 지역명이 아예 처음이라면 숫자만이라도 전송
+                                final_text = number_only 
+                                print(f"   ㄴ ⚠️ [영업용 지역명 미발견] ID:{track_id} -> '{final_text}' (숫자만 우선 송출)")
             
             else:
                 # 흰색/기타: 일반적인 번호판 패턴 탐색

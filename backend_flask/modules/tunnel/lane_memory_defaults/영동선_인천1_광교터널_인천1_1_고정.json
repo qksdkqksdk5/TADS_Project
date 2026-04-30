@@ -1,0 +1,48 @@
+{
+  "cctv_name": "[영동선] [인천1]광교터널(인천1 1 고정)",
+  "memory_key": "영동선_인천1_광교터널_인천1_1_고정",
+  "lane_count": 2,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.9768651723861694,
+          945.2432250976562
+        ]
+      },
+      "x_mid": 126.8210437297821,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        1
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -0.8840712904930115,
+          772.904296875
+        ]
+      },
+      "x_mid": 406.89878261089325,
+      "count": 1,
+      "ratio": 0.5,
+      "member_ids": [
+        2
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-28 15:58:02"
+}

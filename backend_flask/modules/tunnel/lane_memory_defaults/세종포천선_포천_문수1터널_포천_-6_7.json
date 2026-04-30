@@ -1,0 +1,68 @@
+{
+  "cctv_name": "[세종포천선] [포천]문수1터널(포천)-6/7",
+  "memory_key": "세종포천선_포천_문수1터널_포천_-6_7",
+  "lane_count": 3,
+  "centerlines": [
+    {
+      "lane_id": 0,
+      "cluster_id": 0,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -3.4241044521331787,
+          912.66259765625
+        ]
+      },
+      "x_mid": -504.916645526886,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        7
+      ],
+      "source_cluster_ids": [
+        0
+      ]
+    },
+    {
+      "lane_id": 1,
+      "cluster_id": 1,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -2.4235875606536865,
+          854.1241455078125
+        ]
+      },
+      "x_mid": -149.24110460281372,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        36
+      ],
+      "source_cluster_ids": [
+        2
+      ]
+    },
+    {
+      "lane_id": 2,
+      "cluster_id": 2,
+      "rep_model": {
+        "type": "linear",
+        "coef": [
+          -1.229516863822937,
+          769.4130249023438
+        ]
+      },
+      "x_mid": 260.3930432796478,
+      "count": 1,
+      "ratio": 0.3333333333333333,
+      "member_ids": [
+        32
+      ],
+      "source_cluster_ids": [
+        1
+      ]
+    }
+  ],
+  "saved_at": "2026-04-27 17:44:43"
+}
