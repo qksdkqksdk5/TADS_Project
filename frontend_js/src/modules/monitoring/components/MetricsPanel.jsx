@@ -245,23 +245,34 @@ export default function MetricsPanel({ data }) {
       )}
 
       {/* ── 정체 예측 영역 — 1h·2h·3h 3열 구조 ─────────────────────────────────
-          flex: 1 + minHeight: 0 → 패널에서 남은 공간을 채우되, 부족하면 줄어들어 overflow 방지 */}
+          flex: 1 + minHeight: 0 → 패널에서 남은 공간을 채우되, 부족하면 줄어들어 overflow 방지
+          학습 중(is_learning) / 재보정 중(relearning)일 때는 예측 불가 안내로 대체한다. */}
       <div style={{ ...sectionStyle, flex: 1, minHeight: 0, borderBottom: 'none', display: 'flex', flexDirection: 'column' }}>
         <div style={labelStyle}>정체 예측 (1h·2h·3h)</div>
 
-        {/* 상행·하행 두 행이 가용 공간을 나눠 차지하고, 공간 부족 시 함께 축소 */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px', flex: 1, minHeight: 0 }}>
-          {/* 왼쪽 방향 예측 — CCTV 화면 기준 왼쪽 차선 */}
-          <PredictionBadge
-            direction={leftBadge.label}                      // 방향 레이블
-            prediction={aIsLeft ? prediction_a : prediction_b} // A가 왼쪽이면 A예측, 아니면 B예측
-          />
-          {/* 오른쪽 방향 예측 — CCTV 화면 기준 오른쪽 차선 */}
-          <PredictionBadge
-            direction={rightBadge.label}
-            prediction={aIsLeft ? prediction_b : prediction_a}
-          />
-        </div>
+        {/* 학습 완료 전에는 예측 데이터가 없으므로 안내 문구를 표시한다 */}
+        {(is_learning || relearning) ? (
+          <div style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '11px', color: '#475569',
+          }}>
+            학습 완료 후 예측 가능
+          </div>
+        ) : (
+          /* 상행·하행 두 행이 가용 공간을 나눠 차지하고, 공간 부족 시 함께 축소 */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px', flex: 1, minHeight: 0 }}>
+            {/* 왼쪽 방향 예측 — CCTV 화면 기준 왼쪽 차선 */}
+            <PredictionBadge
+              direction={leftBadge.label}                      // 방향 레이블
+              prediction={aIsLeft ? prediction_a : prediction_b} // A가 왼쪽이면 A예측, 아니면 B예측
+            />
+            {/* 오른쪽 방향 예측 — CCTV 화면 기준 오른쪽 차선 */}
+            <PredictionBadge
+              direction={rightBadge.label}
+              prediction={aIsLeft ? prediction_b : prediction_a}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

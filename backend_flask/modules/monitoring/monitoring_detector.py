@@ -835,6 +835,61 @@ class MonitoringDetector(BaseDetector):
             "wrongway_ids":      list(st.wrong_way_ids),
         }
 
+    @staticmethod
+    def _draw_tracks_on_frame(frame: np.ndarray, tracks: list) -> None:
+        """중앙점·궤적·방향 화살표를 frame에 직접 그린다.
+
+        좌표는 이미 _stream_scale이 적용된 스트림 해상도 기준이므로
+        별도 스케일 변환 없이 바로 사용한다.
+
+        Args:
+            frame : 그릴 대상 프레임 (BGR, in-place 수정).
+            tracks: latest_tracks_info 스냅샷.
+        """
+        NORMAL_COLOR = (94, 197, 34)   # BGR ← #22c55e (녹색)
+        WRONG_COLOR  = (68,  68, 239)  # BGR ← #ef4444 (빨간색)
+
+        fh, fw = frame.shape[:2]                       # 프레임 높이·너비 (픽셀)
+        max_seg2 = (min(fw, fh) * 0.08) ** 2           # 순간이동 판정 거리² (px²)
+
+        for t in tracks:
+            color = WRONG_COLOR if t.get('is_wrongway') else NORMAL_COLOR  # 역주행이면 빨강, 정상이면 초록
+            cx, cy = t['cx'], t['cy']                  # 차량 중앙점 좌표
+            trail  = t.get('trail', [])                # 궤적 점 목록
+
+            # ── 궤적 선 (오래된 점 → 어둡게, 최신 점 → 밝게) ──────────
+            n = len(trail)                             # 궤적 점 개수
+            if n >= 2:
+                for i in range(1, n):
+                    dx = trail[i][0] - trail[i - 1][0]  # 두 점의 x 방향 차이
+                    dy = trail[i][1] - trail[i - 1][1]  # 두 점의 y 방향 차이
+                    if dx * dx + dy * dy > max_seg2:   # 순간이동 구간 skip (끊긴 선 방지)
+                        continue
+                    alpha    = i / n                   # 0(어둠) → 1(밝음)
+                    seg_color = tuple(int(c * alpha) for c in color)  # 밝기를 alpha에 비례해 조절
+                    cv2.line(frame,
+                             (trail[i - 1][0], trail[i - 1][1]),
+                             (trail[i][0],     trail[i][1]),
+                             seg_color, 1, cv2.LINE_AA)  # 안티앨리어싱 선 그리기
+
+            # ── 중앙점 (채운 원) ─────────────────────────────────────
+            cv2.circle(frame, (cx, cy), 4, color, -1, cv2.LINE_AA)  # 반지름 4px 채운 원
+
+            # ── 방향 화살표 ──────────────────────────────────────────
+            vx, vy = t.get('vx', 0.0), t.get('vy', 0.0)  # 속도 벡터 (정규화됨)
+            if vx * vx + vy * vy > 0.01:              # 속도가 충분할 때만 화살표 그리기
+                ex = int(cx + vx * 20)                 # 화살표 끝점 x (20px 스케일)
+                ey = int(cy + vy * 20)                 # 화살표 끝점 y
+                cv2.arrowedLine(frame, (cx, cy), (ex, ey),
+                                color, 2, cv2.LINE_AA, tipLength=0.35)  # 화살표 선 그리기
+
+            # ── 역주행 라벨 ──────────────────────────────────────────
+            if t.get('is_wrongway'):                   # 역주행 차량에만 라벨 표시
+                cv2.putText(frame, f"! {t['id']}",
+                            (cx + 6, cy - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            color, 1, cv2.LINE_AA)     # 차량 ID와 경고 기호 표시
+
     # ────────────────────────────────────────────────────────────────────
     # MJPEG 스트림 (base_detector.generate_frames 오버라이드)
     # ────────────────────────────────────────────────────────────────────
@@ -851,8 +906,9 @@ class MonitoringDetector(BaseDetector):
 
         while self.is_running:
             with self.frame_lock:
-                frame_id = self._stream_frame_id
-                frame    = self.latest_frame
+                frame_id    = self._stream_frame_id
+                frame       = self.latest_frame
+                tracks_snap = list(self.latest_tracks_info)  # 동일 lock 내 스냅샷 (스레드 안전)
 
             if frame is not None and frame_id != last_frame_id:
                 last_frame_id = frame_id
@@ -866,6 +922,11 @@ class MonitoringDetector(BaseDetector):
                         frame_copy, (int(w * ss), int(h * ss)),
                         interpolation=cv2.INTER_LINEAR,
                     )
+
+                # 트랙 오버레이 — 다운스케일 이후, 인코딩 이전에 그린다
+                # 좌표는 current_tracks_info 수집 시 이미 ss 적용돼 있음
+                if tracks_snap:
+                    self._draw_tracks_on_frame(frame_copy, tracks_snap)
 
                 ret, buffer = cv2.imencode(
                     '.jpg', frame_copy, [cv2.IMWRITE_JPEG_QUALITY, 60]

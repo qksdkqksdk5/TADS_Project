@@ -1,11 +1,7 @@
 /* eslint-disable */
 // src/modules/monitoring/components/CctvPlayer.jsx
-import { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
+import { useEffect, useState } from 'react';
 
-const POLL_MS      = 500;    // 바운딩박스 폴링 주기 (ms)
-const NORMAL_COLOR = '#22c55e';  // 정상 차량 색
-const WRONG_COLOR  = '#ef4444';  // 역주행 차량 색
 const LEVEL_LABEL  = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체', JAM: '정체' };
 const LEVEL_COLOR  = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
@@ -113,10 +109,6 @@ function ItsProxyPlayer({ host, cam }) {
 // streamStatus: { fail_count, next_retry_in } — 백엔드 연결 실패 정보 (없으면 undefined)
 // onRestartCamera: "다시 시도" 버튼 클릭 시 호출 (camera_id를 인자로 받음)
 function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera }) {
-  const imgRef    = useRef(null);
-  const canvasRef = useRef(null);
-  const tracksRef = useRef([]);
-  const rafRef    = useRef(null);
   const [imgError,  setImgError]  = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
@@ -130,133 +122,9 @@ function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera
 // >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
 
   useEffect(() => {
-    tracksRef.current = [];
     setImgError(false);
     setStreamKey(k => k + 1);
   }, [cameraId]);
-
-  // 바운딩박스 폴링 + 서버 재시작 감지 → MJPEG 자동 재연결
-  // tracks 요청이 실패(서버 다운)했다가 다시 성공하면 서버가 재시작된 것 → streamKey 올려서 img src 재요청
-  useEffect(() => {
-    let wasDown = false;
-    const poll = setInterval(async () => {
-      try {
-        const res = await axios.get(
-// <<<<<<< HEAD
-//           `${(host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https'}://${host}/api/monitoring/tracks/${cameraId}`,
-// =======
-          // `https://${host}/api/monitoring/tracks/${cameraId}`,
-          `http://${host}:5000/api/monitoring/tracks/${cameraId}`,
-// >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
-          { timeout: 400 },
-        );
-        tracksRef.current = Array.isArray(res.data) ? res.data : [];
-        if (wasDown) {
-          wasDown = false;
-          setImgError(false);
-          setStreamKey(k => k + 1);
-        }
-      } catch {
-        wasDown = true;
-        tracksRef.current = [];
-      }
-    }, POLL_MS);
-    return () => clearInterval(poll);
-  }, [host, cameraId]);
-
-  // RAF 그리기 루프
-  useEffect(() => {
-    const draw = () => {
-      const img    = imgRef.current;
-      const canvas = canvasRef.current;
-      if (img && canvas) {
-        const dw = img.clientWidth;
-        const dh = img.clientHeight;
-        if (dw > 0 && dh > 0) {
-          if (canvas.width  !== dw) canvas.width  = dw;
-          if (canvas.height !== dh) canvas.height = dh;
-          const ctx = canvas.getContext('2d');
-          ctx.clearRect(0, 0, dw, dh);
-          const nw = img.naturalWidth  || dw;
-          const nh = img.naturalHeight || dh;
-          const scale = Math.min(dw / nw, dh / nh);
-          const dispW = nw * scale;
-          const dispH = nh * scale;
-          const offX  = (dw - dispW) / 2;
-          const offY  = (dh - dispH) / 2;
-
-          tracksRef.current.forEach(t => {
-            const color  = t.is_wrongway ? WRONG_COLOR : NORMAL_COLOR;
-            const trail  = (t.trail || []).map(([px, py]) => [px * scale + offX, py * scale + offY]);
-            const cx_    = t.cx * scale + offX;
-            const cy_    = t.cy * scale + offY;
-
-            // 궤적 선 (오래된 점은 투명, 최신 점은 불투명)
-            // 연속 두 점의 거리가 화면 짧은 변의 8% 초과이면 해당 구간을 그리지 않는다.
-            // → 신호 끊김 후 차량이 순간이동한 것처럼 보이는 긴 선(꼬리) 제거.
-            if (trail.length >= 2) {
-              const maxSeg = Math.min(dw, dh) * 0.08; // 순간이동 판정 거리 (픽셀)
-              const maxSeg2 = maxSeg * maxSeg;         // 제곱 비교로 sqrt 생략
-              for (let i = 1; i < trail.length; i++) {
-                const dx = trail[i][0] - trail[i - 1][0];
-                const dy = trail[i][1] - trail[i - 1][1];
-                if (dx * dx + dy * dy > maxSeg2) continue; // 순간이동 구간 skip
-                ctx.globalAlpha = (i / trail.length) * 0.85;
-                ctx.strokeStyle = color;
-                ctx.lineWidth   = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(trail[i - 1][0], trail[i - 1][1]);
-                ctx.lineTo(trail[i][0],     trail[i][1]);
-                ctx.stroke();
-              }
-              ctx.globalAlpha = 1;
-            }
-
-            // 중앙점 (채운 원)
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(cx_, cy_, 4, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 방향 화살표
-            const vx = t.vx || 0, vy = t.vy || 0;
-            const vmag = Math.sqrt(vx * vx + vy * vy);
-            if (vmag > 0.1) {
-              const arrowLen = 20;
-              const ex = cx_ + vx * arrowLen;
-              const ey = cy_ + vy * arrowLen;
-              ctx.strokeStyle = color;
-              ctx.lineWidth   = 2;
-              ctx.beginPath();
-              ctx.moveTo(cx_, cy_);
-              ctx.lineTo(ex, ey);
-              ctx.stroke();
-              // 화살촉
-              const headLen = 7;
-              const angle   = Math.atan2(vy, vx);
-              ctx.beginPath();
-              ctx.moveTo(ex, ey);
-              ctx.lineTo(ex - headLen * Math.cos(angle - Math.PI / 6), ey - headLen * Math.sin(angle - Math.PI / 6));
-              ctx.moveTo(ex, ey);
-              ctx.lineTo(ex - headLen * Math.cos(angle + Math.PI / 6), ey - headLen * Math.sin(angle + Math.PI / 6));
-              ctx.stroke();
-            }
-
-            // 역주행 라벨
-            if (t.is_wrongway) {
-              ctx.fillStyle = color;
-              ctx.font      = 'bold 11px sans-serif';
-              ctx.fillText(`⚠️ ${t.id}`, cx_ + 6, cy_ - 6);
-            }
-          });
-          ctx.globalAlpha = 1;
-        }
-      }
-      rafRef.current = requestAnimationFrame(draw);
-    };
-    rafRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
 
   const { is_learning, relearning, waiting_stable, learning_progress, learning_total, level } =
     cameraData || {};
@@ -274,7 +142,6 @@ function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera
       )}
       <img
         key={streamKey}
-        ref={imgRef}
         src={streamUrl}
         alt="CCTV"
         onError={() => {
@@ -284,12 +151,6 @@ function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera
         onLoad={() => setImgError(false)}
         style={{ width: '100%', height: '100%', objectFit: 'contain', display: imgError ? 'none' : 'block' }}
       />
-      {!imgError && (
-        <canvas
-          ref={canvasRef}
-          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-        />
-      )}
       {!imgError && (
         <StatusOverlay
           is_learning={is_learning} relearning={relearning} waiting_stable={waiting_stable}

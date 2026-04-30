@@ -208,6 +208,8 @@ __marimo__/
 
 *.mp4
 *.jpg
+# flow_maps 폴더 안의 .jpg 파일은 예외적으로 git에 포함 (카메라별 기준 프레임 이미지)
+!backend_flask/modules/monitoring/flow_maps/**/*.jpg
 
 # -------------------------------------------------------------------
 # Frontend Custom (동훈님의 프로젝트를 위한 추가 설정)

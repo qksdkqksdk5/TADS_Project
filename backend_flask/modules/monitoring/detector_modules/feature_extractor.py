@@ -49,6 +49,19 @@ class FeatureExtractor:
         _dwell_sec = getattr(cfg, "dwell_threshold_sec", 0.5)
         self._dwell_thr_frames: int = max(1, int(_dwell_sec * fps))  # 최소 1프레임 보장
 
+        # ── EMA 알파 FPS 정규화 ───────────────────────────────────────
+        # cell_dwell_ema_up/down, nm_baseline_ema_up/down은 모두 6fps 기준으로
+        # 튜닝된 프레임당 상수. FPS가 달라지면 같은 실시간 상황에서 EMA 누적 속도가
+        # 비례해 달라지므로 (30fps = 5배 빠른 누적) 아래 공식으로 정규화한다.
+        # alpha_new = 1 - (1 - alpha_6fps)^(6 / actual_fps)
+        # → FPS가 얼마든 "1초 체류 시 동일한 EMA 값"을 보장.
+        _fps_ref = 6.0                                              # 기준 FPS (튜닝 기준점)
+        _scale   = _fps_ref / max(fps, 1.0)                        # 정규화 지수 (6fps/실제fps)
+        self._cde_up      = 1.0 - (1.0 - getattr(cfg, "cell_dwell_ema_up",    0.03)) ** _scale  # 셀 점유 EMA 상승 알파
+        self._cde_down    = 1.0 - (1.0 - getattr(cfg, "cell_dwell_ema_down",  0.02)) ** _scale  # 셀 점유 EMA 하강 알파
+        self._nm_ema_up   = 1.0 - (1.0 - getattr(cfg, "nm_baseline_ema_up",   0.05)) ** _scale  # nm baseline EMA 상승 알파
+        self._nm_ema_down = 1.0 - (1.0 - getattr(cfg, "nm_baseline_ema_down", 0.005)) ** _scale  # nm baseline EMA 하강 알파
+
         # ── 방향별 자기보정 nm baseline (비대칭 EMA) ─────────────────
         self._nm_baseline: float = 0.0                 # 방향 고유 정상속도 기준 (자동 보정)
         self._nm_baseline_count: int = 0               # 누적 업데이트 횟수 (warmup 판단용)
@@ -258,8 +271,8 @@ class FeatureExtractor:
             self._cell_dwell_ema = np.zeros(
                 (self.cfg.grid_size, self.cfg.grid_size), dtype=float
             )
-        _cde_up   = getattr(self.cfg, "cell_dwell_ema_up",   0.05)
-        _cde_down = getattr(self.cfg, "cell_dwell_ema_down", 0.02)
+        _cde_up   = self._cde_up    # FPS 정규화된 셀 점유 EMA 상승 알파 (__init__에서 계산)
+        _cde_down = self._cde_down  # FPS 정규화된 셀 점유 EMA 하강 알파 (__init__에서 계산)
 
         for _r in range(self.cfg.grid_size):
             for _c in range(self.cfg.grid_size):
@@ -332,8 +345,8 @@ class FeatureExtractor:
         rep_norm_mag = float(np.median(upper_half)) if norm_mags else 0.0  # 상위 50% 중앙값
 
         # ── 방향별 자기보정 nm baseline 업데이트 (비대칭 EMA) ─────────
-        _ema_up   = getattr(self.cfg, "nm_baseline_ema_up",   0.05)
-        _ema_down = getattr(self.cfg, "nm_baseline_ema_down", 0.005)
+        _ema_up   = self._nm_ema_up    # FPS 정규화된 nm baseline EMA 상승 알파 (__init__에서 계산)
+        _ema_down = self._nm_ema_down  # FPS 정규화된 nm baseline EMA 하강 알파 (__init__에서 계산)
         _warmup   = getattr(self.cfg, "nm_baseline_warmup",   300)
         if rep_norm_mag > 0 and speed_known_count >= 2:    # 차량 2대 이상일 때만 업데이트
             if self._nm_baseline_count == 0:               # 첫 업데이트 — 초기값 설정

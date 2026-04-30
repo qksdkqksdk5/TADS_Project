@@ -332,11 +332,12 @@ function buildColoredSegments(features, cameras) {
 // null이면 아직 서버로부터 데이터가 오지 않은 것 → 폴링 retry가 대신 처리
 // road: SectionList에서 선택된 도로 키 ('gyeongbu' | 'jungang' | ...)
 export default function MonitoringMap({ host, cameras, selectedId, onSelect, onViewItsCctv, itsCctvList = [], selectedItsId, serverRoadGeo, road = 'gyeongbu' }) {
-  const mapRef        = useRef(null);
-  const overlaysRef   = useRef({});     // 모니터링 카메라 마커
-  const itsOverlayRef = useRef({});     // ITS CCTV 마커
-  const popupRef      = useRef(null);
-  const polylinesRef  = useRef([]);     // 도로 색상 폴리라인들
+  const mapRef           = useRef(null);
+  const overlaysRef      = useRef({});           // 모니터링 카메라 마커
+  const itsOverlayRef    = useRef({});           // ITS CCTV 마커
+  const popupRef         = useRef(null);
+  const polylinesRef     = useRef([]);           // 도로 색상 폴리라인들
+  const prevSelectedIdRef = useRef(null);        // 직전에 선택된 카메라 ID — panTo 중복 방지용
   const [roadGeo, setRoadGeo] = useState(null);
 
   // 전역 클릭 핸들러
@@ -546,15 +547,19 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
   }, [itsCctvList, selectedItsId]);
 
   // ── 선택 카메라 팝업 + 지도 이동 ─────────────────────────
+  // cameras가 WebSocket으로 업데이트될 때마다 이 effect가 실행되지만,
+  // panTo는 selectedId가 실제로 바뀐 경우에만 호출한다.
+  // (이전: cameras 변경 시마다 panTo → 지도가 계속 선택 위치로 되돌아가는 버그)
   useEffect(() => {
     if (!mapRef.current) return;
-    popupRef.current?.setMap(null);
+    popupRef.current?.setMap(null);                // 기존 팝업 제거
     popupRef.current = null;
 
     if (!selectedId || !cameras[selectedId]) return;
     const cam = cameras[selectedId];
     if (!cam.lat || !cam.lng) return;
 
+    // 팝업(정보 말풍선)은 항상 최신 데이터로 다시 그린다
     const popup = new window.kakao.maps.CustomOverlay({
       position: new window.kakao.maps.LatLng(cam.lat, cam.lng),
       content: makePopupContent(cam),
@@ -562,7 +567,12 @@ export default function MonitoringMap({ host, cameras, selectedId, onSelect, onV
     });
     popup.setMap(mapRef.current);
     popupRef.current = popup;
-    mapRef.current.panTo(new window.kakao.maps.LatLng(cam.lat, cam.lng));
+
+    // 지도 이동(panTo)은 selectedId가 바뀐 경우에만 실행 — cameras 업데이트 시는 건너뜀
+    if (selectedId !== prevSelectedIdRef.current) {
+      mapRef.current.panTo(new window.kakao.maps.LatLng(cam.lat, cam.lng));
+      prevSelectedIdRef.current = selectedId;      // 이동한 ID를 기억해 다음 번 비교에 사용
+    }
   }, [selectedId, cameras]);
 
   return (

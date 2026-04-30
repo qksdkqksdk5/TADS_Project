@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request, current_app, Response
 from modules.traffic.detectors.manager import detector_manager
 from modules.monitoring.monitoring_detector import MonitoringDetector, _FRAME_POOL
 from modules.monitoring import its_helper
+from modules.monitoring.detector_modules.flow_map_viz_helper import load_flow_map_data   # 플로우맵 시각화 헬퍼
 
 # 동시 AI 모니터링 카메라 최대 개수 (YOLO 모델 동시 로드 한계)
 MAX_CONCURRENT_MONITORS = 3
@@ -1386,6 +1387,87 @@ def restart_camera():
     return jsonify({"status": "ok", "camera_id": camera_id}), 200
 
 
+# ── hist_jam_a.csv ↔ hist_jam_b.csv 교환 API ────────────────────────────────
+
+@monitoring_bp.route('/swap_hist', methods=['POST'])
+def swap_hist():
+    """
+    특정 카메라의 hist_jam_a.csv ↔ hist_jam_b.csv 슬롯 데이터를 교환한다.
+
+    카메라 설치 방향이 바뀌어 a/b 방향 이력이 뒤섞인 경우 사용한다.
+    교환 후 해당 카메라의 HistoricalPredictor를 재로드해 즉시 반영한다.
+
+    Body (JSON):
+        camera_id  str  필수 — 교환할 카메라 ID
+
+    Returns:
+        200  {"status": "ok",    "camera_id": ..., "message": "교환 완료"}
+        400  {"status": "error", "message": "camera_id 필요"}
+        404  {"status": "error", "message": "hist CSV 파일 없음"}
+        500  {"status": "error", "message": "교환 실패: ..."}
+    """
+    from pathlib import Path
+    from modules.monitoring.detector_modules.fix_hist_direction import swap_csvs  # CSV 교환 함수 임포트
+
+    data      = request.get_json(silent=True) or {}         # 요청 바디 JSON 파싱
+    camera_id = data.get('camera_id', '').strip()           # 카메라 ID 추출
+
+    # camera_id 누락 시 즉시 반환
+    if not camera_id:
+        return jsonify({"status": "error", "message": "camera_id 필요"}), 400
+
+    # flow_maps 디렉터리에서 camera_id에 해당하는 폴더 탐색
+    # 폴더명이 camera_id를 포함하는 첫 번째 폴더를 사용한다.
+    _base_dir      = os.path.dirname(os.path.abspath(__file__))        # monitoring/ 절대 경로
+    _flow_maps_root = Path(_base_dir) / "flow_maps"                   # flow_maps/ 루트
+
+    # camera_id와 일치하는 폴더를 찾는다 (폴더명 = camera_id)
+    cam_dir = _flow_maps_root / camera_id                              # {flow_maps}/{camera_id}/
+
+    # 정확한 경로가 없으면 camera_id를 포함하는 첫 번째 폴더로 fallback
+    if not cam_dir.exists():
+        matches = [d for d in _flow_maps_root.iterdir() if d.is_dir() and camera_id in d.name]
+        if not matches:
+            return jsonify({
+                "status":  "error",
+                "message": f"camera_id={camera_id}에 해당하는 flow_maps 폴더 없음",
+            }), 404
+        cam_dir = matches[0]                                           # 첫 번째 일치 폴더 사용
+
+    path_a = str(cam_dir / "hist_jam_a.csv")                          # hist_jam_a.csv 경로
+    path_b = str(cam_dir / "hist_jam_b.csv")                          # hist_jam_b.csv 경로
+
+    # 두 CSV 중 하나도 없으면 오류 반환
+    if not os.path.exists(path_a) and not os.path.exists(path_b):
+        return jsonify({
+            "status":  "error",
+            "message": f"{cam_dir.name} 폴더에 hist_jam_a.csv / hist_jam_b.csv 없음",
+        }), 404
+
+    try:
+        swap_csvs(path_a, path_b, dry_run=False)                      # 실제 교환 수행
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"교환 실패: {e}"}), 500
+
+    # 실행 중인 MonitoringDetector에 hist 재로드 신호 전달
+    # (HistoricalPredictor가 파일을 직접 읽으므로 reload 메서드 호출)
+    key = _monitoring_key(camera_id)                                   # 'monitoring_{camera_id}'
+    with detector_manager._lock:
+        det = detector_manager.active_detectors.get(key)
+    if det is not None and hasattr(det, '_reload_hist'):
+        try:
+            det._reload_hist()                                         # 실시간 반영 시도
+        except Exception:
+            pass                                                       # 실패해도 교환 결과는 유지
+
+    print(f"🔄 [{camera_id}] hist_jam_a.csv ↔ hist_jam_b.csv 교환 완료")
+    return jsonify({
+        "status":    "ok",
+        "camera_id": camera_id,
+        "message":   "hist CSV 교환 완료 — 다음 예측 시 자동 반영됩니다",
+    }), 200
+
+
 # ── 큐 러너 실시간 진단 엔드포인트 ───────────────────────────────────────────
 
 @monitoring_bp.route('/its/queue_status', methods=['GET'])
@@ -1447,3 +1529,43 @@ def its_queue_status():
         },
         'server_time': datetime.now(timezone.utc).isoformat(),  # 서버 현재 시각
     }), 200
+
+
+# ── 플로우맵 시각화 API ───────────────────────────────────────────────────────
+
+@monitoring_bp.route('/flow_map_viz/<camera_id>', methods=['GET'])
+def flow_map_viz(camera_id):
+    """학습된 플로우맵 데이터를 시각화용 JSON으로 반환한다.
+
+    프론트엔드 FlowMapViz 컴포넌트가 이 데이터를 받아
+    Canvas 위에 방향 화살표를 그려 학습 상태를 시각화한다.
+
+    Args:
+        camera_id: flow_maps/{camera_id}/ 폴더명과 일치하는 카메라 식별자.
+
+    Returns:
+        200: grid_size, flow/count 배열, A/B 채널, 마스크, ref_frame(base64) 포함 JSON.
+        404: flow_map.npy 파일이 없을 때 — 아직 학습 미완료 상태.
+        400: camera_id 에 경로 탐색 문자(.. /)가 포함된 경우 — 보안 검사.
+    """
+    # ── 보안: camera_id에 경로 탐색 문자 차단 ────────────────────────────
+    # '..' 이나 슬래시가 포함되면 flow_maps 폴더 밖을 읽을 수 있어 위험하다
+    if ".." in camera_id or "/" in camera_id or "\\" in camera_id:
+        return jsonify({"error": "유효하지 않은 camera_id"}), 400
+
+    # flow_maps 폴더는 monitoring.py 와 같은 디렉터리에 위치한다
+    flow_map_dir = (
+        os.path.dirname(os.path.abspath(__file__))   # monitoring.py 가 있는 폴더
+        + os.sep + "flow_maps"                        # flow_maps 서브폴더
+        + os.sep + camera_id                          # 카메라 ID 서브폴더
+    )
+    from pathlib import Path as _Path   # 함수 스코프 임포트 (최상단 임포트와 충돌 방지)
+    flow_map_dir = _Path(flow_map_dir)
+
+    try:
+        data = load_flow_map_data(flow_map_dir)   # 헬퍼 함수 호출 → dict 반환
+    except FileNotFoundError:
+        # 학습 미완료 또는 잘못된 camera_id
+        return jsonify({"error": "학습된 플로우맵이 없습니다. 학습 완료 후 다시 시도하세요."}), 404
+
+    return jsonify(data), 200

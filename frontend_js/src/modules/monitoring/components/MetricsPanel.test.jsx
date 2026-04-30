@@ -208,4 +208,29 @@ describe('MetricsPanel — 정체 예측 섹션 (132차 3열 UI)', () => {
     // "50%", "40%" 등 신뢰도 백분율 텍스트가 없어야 한다
     expect(screen.queryByText(/\d+%/)).toBeNull();
   });
+
+  it('is_learning=true 이면 예측 뱃지 대신 "학습 완료 후 예측 가능" 안내가 표시된다', () => {
+    // 초기 학습 중: 예측 데이터가 있어도 예측 뱃지를 숨기고 안내 문구로 대체
+    render(<MetricsPanel data={makeData({
+      is_learning:  true,
+      prediction_a: makePrediction(),
+      prediction_b: makePrediction(),
+    })} />);
+
+    expect(screen.getByText('학습 완료 후 예측 가능')).toBeTruthy();
+    // 예측 뱃지(시간대 헤더)는 보이지 않아야 한다
+    expect(screen.queryByText('1h')).toBeNull();
+  });
+
+  it('relearning=true 이면 예측 뱃지 대신 "학습 완료 후 예측 가능" 안내가 표시된다', () => {
+    // 재보정 중: 마찬가지로 예측 뱃지를 숨긴다
+    render(<MetricsPanel data={makeData({
+      relearning:   true,
+      prediction_a: makePrediction(),
+      prediction_b: makePrediction(),
+    })} />);
+
+    expect(screen.getByText('학습 완료 후 예측 가능')).toBeTruthy();
+    expect(screen.queryByText('1h')).toBeNull();
+  });
 });

@@ -1,5 +1,7 @@
 /* eslint-disable */
 // src/modules/monitoring/components/ActionPanel.jsx
+// 역할: 정체 발생 시 운영자가 취할 수 있는 교통 대응 조치 버튼을 표시한다.
+// 진단 도구(hist 교환, 플로우맵 보기)는 팝업 헤더(index.jsx)로 이동됐다.
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import useGoldenTimer from '../hooks/useGoldenTimer';
@@ -24,7 +26,6 @@ const ACTION_BUTTONS = {
   ],
 };
 
-
 const LEVEL_COLOR = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
 export default function ActionPanel({ host, cameraId, cameraData }) {
@@ -46,12 +47,11 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
     if (sentActions[actionId] || loadingMap[actionId]) return;
 
     // 현재 로그인 사용자 이름 (sessionStorage)
-    const user     = JSON.parse(sessionStorage.getItem('user') || '{}');
-    const actedBy  = user.name || '관리자';
+    const user    = JSON.parse(sessionStorage.getItem('user') || '{}');
+    const actedBy = user.name || '관리자';
 
     setLoadingMap(prev => ({ ...prev, [actionId]: true }));
     try {
-      // await axios.post(`https://${host}/api/monitoring/action`, {
       await axios.post(`http://${host}:5000/api/monitoring/action`, {
         camera_id:   cameraId,
         action_type: actionId,
@@ -114,7 +114,6 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
               onClick={() => handleAction(btn.id)}
             />
           ))}
-
         </div>
       )}
     </Wrapper>
