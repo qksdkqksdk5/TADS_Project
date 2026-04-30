@@ -10,19 +10,16 @@ import axios from 'axios'; // HTTP 요청 라이브러리
 const getProto = (host) =>
   (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
 
-// ✅ 헤더가 포함된 axios 인스턴스를 생성한다
-// host: 서버 주소 (예: "localhost:5000" 또는 "abc123.ngrok.io")
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 const createClient = (host) => axios.create({
-// <<<<<<< HEAD
-//   baseURL: `${getProto(host)}://${host}/api/monitoring`,
-// =======
-  baseURL: `https://${host}/api/monitoring`,
-  // baseURL: `http://${host}:5000/api/monitoring`, // ⚠️ 병합 충돌 해결 필요 — 실제 사용할 URL로 정리해야 한다
-// >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
-  headers: {
-    'ngrok-skip-browser-warning': 'true' // ngrok 브라우저 경고 팝업을 API 요청에서 우회하기 위한 헤더
-  },
-  timeout: 15000, // 15초 안에 서버가 응답하지 않으면 자동으로 에러 발생 → catch 블록에서 "처리 중..." 버튼 해제
+  baseURL: `${getOrigin(host)}/api/monitoring`,
+  headers: { 'ngrok-skip-browser-warning': 'true' },
+  timeout: 15000,
 });
 
 // 카메라 모니터링 시작 — params: { camera_id, rtsp_url 등 카메라 설정 }

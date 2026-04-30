@@ -73,7 +73,7 @@ def get_cctv_url():
             for i in range(4)
         ]
         return jsonify({"success": True, "cctvData": cached_cctv_list})
-
+    
 # @its_bp.route('/get_cctv_url', methods=['GET'])
 # def get_cctv_url():
 #     global cached_cctv_list

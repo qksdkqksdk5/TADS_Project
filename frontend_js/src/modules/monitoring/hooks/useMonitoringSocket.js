@@ -12,6 +12,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 // io() 함수로 서버에 연결하면 이벤트를 주고받을 수 있다 (문자처럼 즉시 전달)
 import { io } from 'socket.io-client';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 /**
  * 모니터링 전용 Socket.IO 실시간 연결 훅.
  *
@@ -123,8 +129,7 @@ export function useMonitoringSocket(host, callbacks = {}) {
     // Socket.IO 서버에 연결 — http://호스트:5000 으로 접속
     // polling → websocket 순서로 시도: polling은 일반 HTTP라 방화벽 통과가 쉽고,
     // 연결 성공 후 websocket으로 업그레이드해 실시간 양방향 통신으로 전환한다
-    // const sock = io(`http://${host}:5000`, {
-    const sock = io(`https://${host}/`, {
+    const sock = io(`${getOrigin(host)}/`, {
       transports: ['polling', 'websocket'], // 연결 방식: polling 먼저 시도 후 websocket 업그레이드
       reconnectionAttempts: 5,              // 연결 실패 시 최대 5번까지 재시도
       timeout: 5000,                        // 5초 안에 연결 안 되면 실패로 처리

@@ -6,6 +6,12 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import useGoldenTimer from '../hooks/useGoldenTimer';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 // ── 레벨별 대응 버튼 목록 ─────────────────────────────────────
 const ACTION_BUTTONS = {
   SLOW: [
@@ -52,8 +58,7 @@ export default function ActionPanel({ host, cameraId, cameraData }) {
 
     setLoadingMap(prev => ({ ...prev, [actionId]: true }));
     try {
-      // await axios.post(`http://${host}:5000/api/monitoring/action`, {
-      await axios.post(`https://${host}/api/monitoring/action`, {
+      await axios.post(`${getOrigin(host)}/api/monitoring/action`, {
         camera_id:   cameraId,
         action_type: actionId,
         acted_by:    actedBy,

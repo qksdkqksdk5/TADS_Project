@@ -2,6 +2,12 @@
 // src/modules/monitoring/components/CctvPlayer.jsx
 import { useEffect, useState } from 'react';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 const LEVEL_LABEL  = { SMOOTH: '원활', SLOW: '서행', CONGESTED: '정체', JAM: '정체' };
 const LEVEL_COLOR  = { SMOOTH: '#22c55e', SLOW: '#eab308', CONGESTED: '#ef4444', JAM: '#ef4444' };
 
@@ -63,8 +69,7 @@ function ItsProxyPlayer({ host, cam }) {
 
   if (!cam) return <Placeholder icon="📷" text="카메라를 선택하세요" />;
 
-  const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
-  // const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
+  const proxyUrl = `${getOrigin(host)}/api/monitoring/its/view_feed`
     + `?camera_id=${encodeURIComponent(cam.camera_id)}`
     + `&url=${encodeURIComponent(cam.url)}`;
 
@@ -111,15 +116,7 @@ function ItsProxyPlayer({ host, cam }) {
 function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera }) {
   const [imgError,  setImgError]  = useState(false);
   const [streamKey, setStreamKey] = useState(0);
-
-// <<<<<<< HEAD
-//   // localhost/127.0.0.1이면 http, 외부 호스트면 https 사용
-//   const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
-//   const streamUrl = `${proto}://${host}/api/monitoring/video_feed/${cameraId}`;
-// =======
-  const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
-  // const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
-// >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
+  const streamUrl = `${getOrigin(host)}/api/monitoring/video_feed/${cameraId}`;
 
   useEffect(() => {
     setImgError(false);

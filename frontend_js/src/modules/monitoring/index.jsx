@@ -12,6 +12,12 @@ import ActionPanel   from './components/ActionPanel';
 import FlowMapViz    from './components/FlowMapViz';
 import { restartCamera } from './api';
 
+const getOrigin = (host) => {
+  if (host.startsWith('http')) return host;
+  const outsideHost = 'itsras.illit.kr';
+  return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
+};
+
 // ── 시계 ─────────────────────────────────────────────────────
 function Clock() {
   const [time, setTime] = useState(new Date());
@@ -213,6 +219,7 @@ function CameraPopup({ host, selectedId, selectedData, selectedItsCctv, onClose,
 
 // ── 메인 컴포넌트 ─────────────────────────────────────────────
 export default function MonitoringModule({ host, isMobile }) {
+  const origin = getOrigin(host);
   const [selectedId,      setSelectedId]      = useState(null);
   const [soundOn,         setSoundOn]         = useState(true);
   const [flashActive,     setFlashActive]     = useState(false);

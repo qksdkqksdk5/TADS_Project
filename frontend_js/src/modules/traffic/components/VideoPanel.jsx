@@ -10,49 +10,36 @@ const getOrigin = (host) => {
   return host === outsideHost ? `https://${host}` : `http://${host}:5000`;
 };
 
-const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle, onRefreshUrl}) => {
+const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle}) => {
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
+  const [hasError, setHasError] = useState(false);
   
   useEffect(() => {
     if (isHls && url && videoRef.current) {
-
-      if (!hlsRef.current) {
-        const hls = new Hls({
-          fragLoadingMaxRetry: 10,
-          manifestLoadingMaxRetry: 10,
-          levelLoadingMaxRetry: 10,
-          fragLoadingRetryDelay: 1000,
-          manifestLoadingRetryDelay: 1000,
-        });
-
-        hls.attachMedia(videoRef.current);
-
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                setTimeout(() => hls.startLoad(), 3000);
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                hls.destroy();
-                hlsRef.current = null;
-                break;
-            }
-          }
-        });
-
-        hlsRef.current = hls;
-        hlsRef.current.loadSource(url);  // ← 새로 만든 직후에만 호출
-      } else {
-        // 이미 인스턴스 있으면 source만 교체 (null 체크 포함)
-        if (hlsRef.current) {
-          hlsRef.current.loadSource(url);
-        }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
       }
+
+      const hls = new Hls({
+        fragLoadingMaxRetry: 1,
+        manifestLoadingMaxRetry: 1,
+        levelLoadingMaxRetry: 1,
+      });
+
+      hls.attachMedia(videoRef.current);
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          setHasError(true); // 에러 UI로 전환
+          hls.destroy();     // HLS 객체 제거 (네트워크 요청 중단)
+          hlsRef.current = null;
+        }
+      });
+
+      hls.loadSource(url);
+      hlsRef.current = hls;
     }
     return () => {
       if (hlsRef.current) {
@@ -64,18 +51,32 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
 
   return (
     <div style={gridItemStyle}>
-      {isHls ? (
-        <video ref={videoRef} autoPlay muted playsInline style={{ ...mediaStyle, ...customStyle }} />
+      {hasError ? (
+        /* ✅ 에러 발생 시 표시할 화면 (재요청 안함) */
+        <div style={{ ...mediaStyle, ...customStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', color: '#666', border: '1px solid #333' }}>
+          <div style={{ fontSize: '20px', marginBottom: '8px' }}>⚠️</div>
+          <div style={{ fontSize: '11px' }}>연결이 원활하지 않습니다.</div>
+          <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.6 }}>새로고침(F5)을 해주세요.</div>
+        </div>
       ) : (
-        <img
-          src={url}
-          style={{ ...mediaStyle, ...customStyle, filter: isFlashing ? 'brightness(2.5)' : 'none', transition: 'filter 0.15s ease' }}
-          alt="streaming"
-        />
+        /* ✅ 정상 작동 시 화면 */
+        <>
+          {isHls ? (
+            <video ref={videoRef} autoPlay muted playsInline style={{ ...mediaStyle, ...customStyle }} />
+          ) : (
+            <img
+              src={url}
+              style={{ ...mediaStyle, ...customStyle, filter: isFlashing ? 'brightness(2.5)' : 'none', transition: 'filter 0.15s ease' }}
+              alt="streaming"
+              onError={() => setHasError(true)} // 이미지 링크가 403 등으로 깨졌을 때 처리
+            />
+          )}
+        </>
       )}
+      
       <div style={miniLabelStyle}>{name}</div>
 
-      {/* ✅ 각 영상 우상단 토글 버튼 */}
+      {/* ✅ 각 영상 우상단 토글 버튼 (에러 상관없이 항상 표시) */}
       {showToggle && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggle(); }}
@@ -219,7 +220,6 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
                       ? handleToggle('reverse', reverseOn, setReverseOn)
                       : handleToggle('fire', fireOn, setFireOn)
                     }
-                    onRefreshUrl={handleUrlRefresh}
                   />
                 </div>
               );
