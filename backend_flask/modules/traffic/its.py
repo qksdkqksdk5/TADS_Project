@@ -74,18 +74,6 @@ def get_cctv_url():
         ]
         return jsonify({"success": True, "cctvData": cached_cctv_list})
 
-@its_bp.route('/hls_proxy')
-def hls_proxy():
-    url = request.args.get('url')
-    if not url:
-        return "url 파라미터 필요", 400
-    
-    try:
-        resp = requests.get(url, stream=True, timeout=10)
-        content_type = resp.headers.get('Content-Type', 'application/vnd.apple.mpegurl')
-        return Response(resp.content, content_type=content_type)
-    except Exception as e:
-        return str(e), 500
 # @its_bp.route('/get_cctv_url', methods=['GET'])
 # def get_cctv_url():
 #     global cached_cctv_list

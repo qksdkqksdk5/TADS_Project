@@ -13,8 +13,6 @@ const getOrigin = (host) => {
 const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle, onRefreshUrl}) => {
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
-  const lastRefreshRef = useRef(0); 
-  const retryCountRef = useRef(0);
   
   useEffect(() => {
     if (isHls && url && videoRef.current) {
@@ -34,25 +32,7 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                if (
-                  data.response?.code === 403 ||
-                  data.response?.code === 401 ||
-                  data.details === 'manifestLoadError'
-                ) {
-                  const now = Date.now();
-                  if (now - lastRefreshRef.current > 30000) {
-                    lastRefreshRef.current = now;
-                    retryCountRef.current = 0;
-                    onRefreshUrl && onRefreshUrl();
-                  } else {
-                    setTimeout(() => hls.startLoad(), 3000);
-                  }
-                } else {
-                  retryCountRef.current += 1;
-                  if (retryCountRef.current < 5) {
-                    setTimeout(() => hls.startLoad(), 2000 * retryCountRef.current);
-                  }
-                }
+                setTimeout(() => hls.startLoad(), 3000);
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
                 hls.recoverMediaError();
@@ -114,7 +94,6 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
   const [expandedMedia, setExpandedMedia] = useState(null);
   const [reverseOn,     setReverseOn]     = useState(false);
   const [fireOn,        setFireOn]        = useState(false);
-  const lastGlobalRefreshRef = useRef(0);
   const didInitRef = useRef(false);
 
   // cctv 탭 최초 진입 시 1회만 백엔드 상태 동기화
@@ -193,26 +172,6 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
     } catch (err) { console.error("캡처 오류:", err); }
   };
 
-  // 1. URL 갱신 함수 추가
-  const handleUrlRefresh = async () => {
-    const now = Date.now();
-    if (now - lastGlobalRefreshRef.current < 30000) {
-      console.log("🔄 갱신 쿨다운 중, 스킵");
-      return;
-    }
-    lastGlobalRefreshRef.current = now;
-
-    console.log("🔄 CCTV 전체 URL 갱신 시도...");
-    try {
-      const response = await fetchCctvUrl(host, true);
-      if (response.data.success) {
-        setCctvData(response.data.cctvData);
-      }
-    } catch (err) {
-      console.error("URL 갱신 실패:", err);
-    }
-  };
-
   return (
     <div style={containerStyle}>
       <div style={labelStyle}>
@@ -231,7 +190,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
               const isFire    = idx === 1;
               const isOn      = isReverse ? reverseOn : (isFire ? fireOn : false);
 
-              let finalUrl = `${getOrigin(host)}/api/its/hls_proxy?url=${encodeURIComponent(item.url)}`;
+              let finalUrl = item.url;
               let isHls    = true;
 
               if (isReverse && reverseOn) {
