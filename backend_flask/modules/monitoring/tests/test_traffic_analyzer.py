@@ -1,5 +1,5 @@
 # 파일 경로: modules/monitoring/tests/test_traffic_analyzer.py
-# 역할: TrafficAnalyzer + CongestionPredictor 단위 테스트 (GRU 제거 이후)
+# 역할: TrafficAnalyzer + CongestionPredictor 단위 테스트
 # 실행: pytest modules/monitoring/tests/test_traffic_analyzer.py -v
 
 import sys
