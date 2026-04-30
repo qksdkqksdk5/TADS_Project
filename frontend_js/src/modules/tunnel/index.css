@@ -4,6 +4,12 @@
 //     (장점 : 같은 스타일을 여러 컴포넌트에서 재사용)
 // # ========================================== */
 
+main {
+  padding: 0 !important;
+  display: flex;
+  justify-content: center;
+}
+
 .smart-page {
   width: 100%;
   height: 100%;
@@ -11,7 +17,8 @@
   background: #07101f;
   color: #ffffff;
   box-sizing: border-box;
-  padding: clamp(8px, 1.2vh, 14px);
+  /* padding: clamp(8px, 1.2vh, 14px); */
+  padding: clamp(4px, 0.7vh, 8px);
   overflow: hidden;
 }
 
@@ -22,7 +29,7 @@
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 100vh;
   overflow: hidden;
 }
 
@@ -38,8 +45,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: clamp(10px, 1.4vh, 14px) 16px;
-  margin-bottom: clamp(8px, 1vh, 10px);
+  /* padding: clamp(10px, 1.4vh, 14px) 16px; */
+  /* margin-bottom: clamp(8px, 1vh, 10px); */
+  padding: clamp(6px, 0.8vh, 10px) 16px; 
+  margin-bottom: clamp(4px, 0.6vh, 8px);
   flex: 0 0 auto;
 }
 
@@ -108,21 +117,25 @@
 .top-grid {
   display: grid;
   grid-template-columns: 2.2fr 1fr;
-  gap: clamp(10px, 1.3vh, 14px);
-  margin-bottom: clamp(10px, 1.3vh, 14px);
+  /* gap: clamp(10px, 1.3vh, 14px); */
+  /* margin-bottom: clamp(10px, 1.3vh, 14px); */
+  gap: clamp(6px, 0.8vh, 10px);           
+  margin-bottom: clamp(6px, 0.8vh, 10px);
   min-height: 0;
 }
 
 .panel-video,
-.panel-status,
-.panel-air {
-  padding: clamp(12px, 1.4vh, 15px);
+.panel-status 
+{
+  /* padding: clamp(12px, 1.4vh, 15px); */
+  padding: clamp(8px, 1vh, 12px); 
 }
 
 .panel-status {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  /* gap: 9px; */
+  gap: 6px;
   min-height: 0;
 }
 
@@ -289,11 +302,18 @@
   font-weight: 600;
 }
 
-.status-subpanel {
+/* .status-subpanel {
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(146, 169, 214, 0.13);
   border-radius: 14px;
   padding: 10px;
+} */
+.status-subpanel {
+  flex: 1 1 2;           /* 남은 공간만큼만 차지 */
+  min-height: 0;     /* flex 자식이 줄어들 수 있도록 */
+  overflow: hidden;  /* 넘치면 잘라냄 */
+  display: flex;
+  flex-direction: column;
 }
 
 .status-subpanel-title {
@@ -668,8 +688,9 @@
  * 하단 공기질 패널
  * ========================================================= */
 .panel-air {
-  padding: clamp(12px, 1.4vh, 15px);
-  flex: 0 1 auto;
+  padding: clamp(10px, 1.2vh, 15px);
+  flex: 0 0 auto;
+  height: fit-content;
   min-height: 0;
   overflow: hidden;
 }
