@@ -163,8 +163,8 @@ class FireDetector(BaseDetector):
                 self.db.session.add(fire_detail)
                 self.db.session.commit()
 
-                # MY_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1486171062763917493/iXzgoMLR0--lCf3YsPRyTXgan40UNS_WXnKstiwPfAGxk5bjihwFiyTWqAaHEMVWseqk"
-                MY_DISCORD_WEBHOOK_URL = ""
+                MY_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1486171062763917493/iXzgoMLR0--lCf3YsPRyTXgan40UNS_WXnKstiwPfAGxk5bjihwFiyTWqAaHEMVWseqk"
+                # MY_DISCORD_WEBHOOK_URL = ""
                 
                 send_discord_notification(
                     MY_DISCORD_WEBHOOK_URL,

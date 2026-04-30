@@ -123,7 +123,8 @@ export function useMonitoringSocket(host, callbacks = {}) {
     // Socket.IO 서버에 연결 — http://호스트:5000 으로 접속
     // polling → websocket 순서로 시도: polling은 일반 HTTP라 방화벽 통과가 쉽고,
     // 연결 성공 후 websocket으로 업그레이드해 실시간 양방향 통신으로 전환한다
-    const sock = io(`http://${host}:5000`, {
+    // const sock = io(`http://${host}:5000`, {
+    const sock = io(`https://${host}/`, {
       transports: ['polling', 'websocket'], // 연결 방식: polling 먼저 시도 후 websocket 업그레이드
       reconnectionAttempts: 5,              // 연결 실패 시 최대 5번까지 재시도
       timeout: 5000,                        // 5초 안에 연결 안 되면 실패로 처리

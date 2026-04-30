@@ -13,7 +13,9 @@ const getOrigin = (host) => {
 const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle, customStyle, onRefreshUrl}) => {
   const videoRef = useRef(null);
   const hlsRef   = useRef(null);
-
+  const lastRefreshRef = useRef(0); 
+  const retryCountRef = useRef(0);
+  
   useEffect(() => {
     if (isHls && url && videoRef.current) {
 
@@ -37,9 +39,19 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
                   data.response?.code === 401 ||
                   data.details === 'manifestLoadError'
                 ) {
-                  onRefreshUrl && onRefreshUrl();
+                  const now = Date.now();
+                  if (now - lastRefreshRef.current > 30000) {
+                    lastRefreshRef.current = now;
+                    retryCountRef.current = 0;
+                    onRefreshUrl && onRefreshUrl();
+                  } else {
+                    setTimeout(() => hls.startLoad(), 3000);
+                  }
                 } else {
-                  hls.startLoad();
+                  retryCountRef.current += 1;
+                  if (retryCountRef.current < 5) {
+                    setTimeout(() => hls.startLoad(), 2000 * retryCountRef.current);
+                  }
                 }
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
@@ -47,19 +59,28 @@ const SingleMedia = ({ url, isHls, name, isFlashing, onToggle, isOn, showToggle,
                 break;
               default:
                 hls.destroy();
+                hlsRef.current = null;
                 break;
             }
           }
         });
 
         hlsRef.current = hls;
+        hlsRef.current.loadSource(url);  // ← 새로 만든 직후에만 호출
+      } else {
+        // 이미 인스턴스 있으면 source만 교체 (null 체크 포함)
+        if (hlsRef.current) {
+          hlsRef.current.loadSource(url);
+        }
       }
-
-      // 🔥 source만 교체
-      hlsRef.current.loadSource(url);
     }
-    return () => { if (hlsRef.current) hlsRef.current.destroy(); };
-  }, [url, isHls, onRefreshUrl]); // dependency에 onRefreshUrl 추가
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [url, isHls]);
 
   return (
     <div style={gridItemStyle}>
@@ -93,22 +114,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
   const [expandedMedia, setExpandedMedia] = useState(null);
   const [reverseOn,     setReverseOn]     = useState(false);
   const [fireOn,        setFireOn]        = useState(false);
-
-  useEffect(() => {
-    if (!isCctvMode) return;
-
-    console.log("🟢 CCTV 모드 → 자동 URL 갱신 시작");
-
-    const interval = setInterval(() => {
-      handleUrlRefresh();
-    }, 60000); // 60초
-
-    return () => {
-      console.log("🔴 CCTV 모드 종료 → 갱신 중지");
-      clearInterval(interval);
-    };
-  }, [activeTab]);
-
+  const lastGlobalRefreshRef = useRef(0);
   const didInitRef = useRef(false);
 
   // cctv 탭 최초 진입 시 1회만 백엔드 상태 동기화
@@ -189,13 +195,18 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
 
   // 1. URL 갱신 함수 추가
   const handleUrlRefresh = async () => {
-    console.log("🔄 CCTV 토큰 만료 감지: 전체 URL 갱신 시도...");
+    const now = Date.now();
+    if (now - lastGlobalRefreshRef.current < 30000) {
+      console.log("🔄 갱신 쿨다운 중, 스킵");
+      return;
+    }
+    lastGlobalRefreshRef.current = now;
+
+    console.log("🔄 CCTV 전체 URL 갱신 시도...");
     try {
-      const response = await fetchCctvUrl(host, true); // force=true 전달
+      const response = await fetchCctvUrl(host, true);
       if (response.data.success) {
-        // 부모인 TrafficModule 등에서 내려준 setCctvData가 있다면 호출
-        // (만약 props에 없다면 VideoPanel 내부 state로 관리하도록 수정 필요)
-        setCctvData(response.data.cctvData); 
+        setCctvData(response.data.cctvData);
       }
     } catch (err) {
       console.error("URL 갱신 실패:", err);
@@ -220,7 +231,7 @@ const VideoPanel = ({ videoUrl, activeTab, cctvData = [], setCctvData, host, use
               const isFire    = idx === 1;
               const isOn      = isReverse ? reverseOn : (isFire ? fireOn : false);
 
-              let finalUrl = item.url;
+              let finalUrl = `${getOrigin(host)}/api/its/hls_proxy?url=${encodeURIComponent(item.url)}`;
               let isHls    = true;
 
               if (isReverse && reverseOn) {

@@ -73,33 +73,7 @@ def detect_plate_color(plate_img):
     # 15~20% 기준 (직접 튜닝한 결과에 따라 조정)
     return "yellow" if yellow_ratio > 17 else "white"
 
-def _parse_ocr_result(results, model_names: dict) -> str:
-    chars_data = []
-    if results and len(results[0].boxes) > 0:
-        for box in results[0].boxes:
-            cls_id = int(box.cls[0].item())
-            label = model_names[cls_id]
-            if label in ('license_plate', 'plate'): continue
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            chars_data.append({'label': label, 'cx': (x1+x2)/2, 'cy': (y1+y2)/2, 'h': y2-y1})
-
-    if not chars_data: return ""
-    chars_data.sort(key=lambda c: c['cy'])
-    avg_h = sum(c['h'] for c in chars_data) / len(chars_data)
-    lines = []
-    current_line = [chars_data[0]]
-    for char in chars_data[1:]:
-        if char['cy'] - current_line[-1]['cy'] > avg_h * 0.5:
-            lines.append(current_line); current_line = [char]
-        else: current_line.append(char)
-    lines.append(current_line)
-
-    final_text = ""
-    for line in lines:
-        line.sort(key=lambda c: c['cx'])
-        for char in line: final_text += char['label']
-    return final_text
-
+# ocr_worker는 백그라운드에서 OCR 처리 전담, 색상 인식 → OCR → 패턴 매칭 → 결과 전달 (메모리 활용 포함)
 def ocr_worker():
     """ 백그라운드 OCR 전담 스레드 (프로젝트 통합 버전) """
     print("🔍 YOLO-OCR 스레드 준비 완료 [색상인식 + 지능형 필터 모드]")
@@ -182,11 +156,13 @@ def ocr_worker():
             print(f"❌ YOLO-OCR 오류: {e}")
             continue
 
+# 트래킹 종료 시 호출하여 메모리 관리
 def clear_region_cache(track_id: int):
     """ 트래킹 종료 시 호출하여 메모리 관리 """
     with _region_lock:
         _region_seen.pop(track_id, None)
 
+# 단발성 리프로세싱용
 def run_ocr_once(img, ocr_instance=None) -> str:
     """ 단발성 리프로세싱용 """
     model = ocr_instance or get_shared_ocr_model()
@@ -202,3 +178,31 @@ def run_ocr_once(img, ocr_instance=None) -> str:
         match = RE_WHITE_NORMAL.search(clean)
         
     return match.group(0) if match else "인식 실패"
+
+# ocr 결과에서 글자 정보 추출 및 정렬
+def _parse_ocr_result(results, model_names: dict) -> str:
+    chars_data = []
+    if results and len(results[0].boxes) > 0:
+        for box in results[0].boxes:
+            cls_id = int(box.cls[0].item())
+            label = model_names[cls_id]
+            if label in ('license_plate', 'plate'): continue
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            chars_data.append({'label': label, 'cx': (x1+x2)/2, 'cy': (y1+y2)/2, 'h': y2-y1})
+
+    if not chars_data: return ""
+    chars_data.sort(key=lambda c: c['cy'])
+    avg_h = sum(c['h'] for c in chars_data) / len(chars_data)
+    lines = []
+    current_line = [chars_data[0]]
+    for char in chars_data[1:]:
+        if char['cy'] - current_line[-1]['cy'] > avg_h * 0.5:
+            lines.append(current_line); current_line = [char]
+        else: current_line.append(char)
+    lines.append(current_line)
+
+    final_text = ""
+    for line in lines:
+        line.sort(key=lambda c: c['cx'])
+        for char in line: final_text += char['label']
+    return final_text

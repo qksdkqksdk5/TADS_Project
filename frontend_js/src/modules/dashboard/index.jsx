@@ -99,7 +99,7 @@ export default function Dashboard({ socket, outsideSocket, user, setUser, onLogo
             <div style={moduleWrapper}><PlateModule isMobile={isMobile} host={host} user={user} /></div>
           )}
           {activeTab === "monitoring" && (
-            <div style={moduleWrapper}><MonitoringModule isMobile={isMobile} host={host} /></div>
+            <div style={moduleWrapper}><MonitoringModule isMobile={isMobile} host={outsideHost} /></div>
           )}
           {activeTab === "tunnel" && (
             <div style={moduleWrapper}><TunnelModule isMobile={isMobile} host={host} /></div>

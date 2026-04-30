@@ -36,7 +36,6 @@ engine = create_engine(
 history_col = None
 mongo_client = None
 
-# chat.py 내부 get_mongo_collection() 수정
 def get_mongo_collection():
     global history_col, mongo_client
     if history_col is not None:
@@ -73,7 +72,7 @@ def init_rag_system():
 
     embeddings = OpenAIEmbeddings()
 
-    # 🟡 수정: 이미 persist된 DB가 있으면 재생성 없이 로드만 (임베딩 비용 절약)
+    # 이미 persist된 DB가 있으면 재생성 없이 로드만 (임베딩 비용 절약)
     if os.path.exists(persist_db_path) and os.listdir(persist_db_path):
         print("기존 Chroma DB 로드")
         return Chroma(
@@ -93,7 +92,7 @@ def init_rag_system():
     )
 
 try:
-    vector_db = init_rag_system()  # 🔴 수정: RAG 초기화 실패해도 서버 다운 방지
+    vector_db = init_rag_system()  # RAG 초기화 실패해도 서버 다운 방지
 except Exception as e:
     print(f"RAG 초기화 실패 (RAG 비활성화): {e}")
     vector_db = None
@@ -143,7 +142,7 @@ def ask_tads():
 
         current_history_col = get_mongo_collection()
 
-        # 🔴 수정: history_col이 None이면 스킵 (MongoDB 연결 실패 시 크래시 방지)
+        # history_col이 None이면 스킵 (MongoDB 연결 실패 시 크래시 방지)
         if current_history_col is not None:
             last_log = current_history_col.find_one(
                 {"user_name": user_name},
@@ -382,6 +381,7 @@ def get_llm_kpi():
         "correct": correct
     })
 
+# 지금은 사용 하지 않지만, 향후 의도별 정확도 분석을 위해 남겨둠
 @chat_bp.route('/llm/kpi/detail', methods=['GET'])
 def get_llm_kpi_detail():
     col = get_mongo_collection()

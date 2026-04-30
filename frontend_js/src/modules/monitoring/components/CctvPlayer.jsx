@@ -63,8 +63,8 @@ function ItsProxyPlayer({ host, cam }) {
 
   if (!cam) return <Placeholder icon="📷" text="카메라를 선택하세요" />;
 
-  // const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
-  const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
+  const proxyUrl = `https://${host}/api/monitoring/its/view_feed`
+  // const proxyUrl = `http://${host}:5000/api/monitoring/its/view_feed`
     + `?camera_id=${encodeURIComponent(cam.camera_id)}`
     + `&url=${encodeURIComponent(cam.url)}`;
 
@@ -117,8 +117,8 @@ function MjpegPlayer({ host, cameraId, cameraData, streamStatus, onRestartCamera
 //   const proto = (host.startsWith('localhost') || host.startsWith('127.')) ? 'http' : 'https';
 //   const streamUrl = `${proto}://${host}/api/monitoring/video_feed/${cameraId}`;
 // =======
-  // const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
-  const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
+  const streamUrl = `https://${host}/api/monitoring/video_feed/${cameraId}`;
+  // const streamUrl = `http://${host}:5000/api/monitoring/video_feed/${cameraId}`;
 // >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
 
   useEffect(() => {

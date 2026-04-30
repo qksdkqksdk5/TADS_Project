@@ -16,8 +16,8 @@ const createClient = (host) => axios.create({
 // <<<<<<< HEAD
 //   baseURL: `${getProto(host)}://${host}/api/monitoring`,
 // =======
-  // baseURL: `https://${host}/api/monitoring`,
-  baseURL: `http://${host}:5000/api/monitoring`, // ⚠️ 병합 충돌 해결 필요 — 실제 사용할 URL로 정리해야 한다
+  baseURL: `https://${host}/api/monitoring`,
+  // baseURL: `http://${host}:5000/api/monitoring`, // ⚠️ 병합 충돌 해결 필요 — 실제 사용할 URL로 정리해야 한다
 // >>>>>>> 330c99599c04dd624521b83664f8ac057c3177e9
   headers: {
     'ngrok-skip-browser-warning': 'true' // ngrok 브라우저 경고 팝업을 API 요청에서 우회하기 위한 헤더

@@ -45,7 +45,6 @@ _video_token_lock    = threading.Lock()
 
 # review01
 def _io_worker():
-    print("👷 [IO Worker] 시작")
     while True:
         task = io_queue.get()
         if task is None:  # 프로세스 종료 시에만 보내는 신호
@@ -63,18 +62,16 @@ def _io_worker():
                 print(f"⚠️ [IO Worker] 구버전 작업 스킵")
             else:
                 os.makedirs(os.path.dirname(img_path), exist_ok=True)
-                cv2.imwrite(img_path, plate_img)
-                db_func(**db_params)
+                cv2.imwrite(img_path, plate_img)  # 이미지 저장
+                db_func(**db_params)              # DB 저장/업데이트
 
         except Exception as e:
             print(f"❌ [IO Worker] {e}")
         finally:
             io_queue.task_done()
 
-
 # 프로세스 시작 시 1회만 실행
 threading.Thread(target=_io_worker, daemon=True, name="IOWorker").start()
-
 
 # ── ALPR 모델 ─────────────────────────────────────────────────────────────────
 def get_shared_alpr_model():
@@ -85,14 +82,6 @@ def get_shared_alpr_model():
                 print(f"📦 [System] ALPR YOLO 모델 최초 1회 로드 중... ({MODEL_PATH})")
                 _shared_alpr_model = YOLO(MODEL_PATH, task='detect')
     return _shared_alpr_model
-
-
-def _yolo_track(model, frame, conf, img_size):
-    return model.track(
-        source=frame, conf=conf,
-        persist=True, verbose=False, imgsz=img_size
-    )
-
 
 # ── 메인 영상 처리 ────────────────────────────────────────────────────────────
 def process_video():
@@ -244,7 +233,6 @@ def process_video():
         ocr_input_queue.put(None)
         print(f"🏁 [plate] process_video 종료 (token={my_token[:8]})")
 
-
 # ── UI 동기화 + IO 큐 등록 ────────────────────────────────────────────────────
 def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                       video_filename, video_save_dir,
@@ -333,3 +321,10 @@ def _save_and_sync_ui(track_id, plate_img, clean_text, is_fixed,
                 state['all_results'].pop()
 
     return current_img_url
+
+
+def _yolo_track(model, frame, conf, img_size):
+    return model.track(
+        source=frame, conf=conf,
+        persist=True, verbose=False, imgsz=img_size
+    )

@@ -310,7 +310,8 @@ class ReverseDetector(BaseDetector):
                 ))
                 self.db.session.commit()
 
-                MY_DISCORD_WEBHOOK_URL = ""
+                MY_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1486171062763917493/iXzgoMLR0--lCf3YsPRyTXgan40UNS_WXnKstiwPfAGxk5bjihwFiyTWqAaHEMVWseqk"
+                # MY_DISCORD_WEBHOOK_URL = ""
                 threading.Thread(
                     target=discord_task,
                     args=(MY_DISCORD_WEBHOOK_URL, self.cctv_name, full_path),

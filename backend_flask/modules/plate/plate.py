@@ -22,7 +22,7 @@ else:
 
 plate_bp = Blueprint('plate', __name__)
 
-# review01 - 서버 시작 시 DB에서 전체기록 복원
+# review01 - 시작 시 DB에서 전체기록 복원
 def _restore_from_db():
     """서버 재시작 시 DB 데이터를 all_results에 복원"""
     rows = get_all_results()
@@ -144,7 +144,7 @@ def get_preprocess_methods():
     """지원하는 전처리 방법 목록 반환"""
     return jsonify({"methods": PREPROCESS_METHODS}), 200
 
-@plate_bp.route('/init', methods=['GET'])  # ✅ 탭 진입 시 호출할 엔드포인트 추가
+@plate_bp.route('/init', methods=['GET'])  
 def init():
     """탭 진입 시 DB 복원만 수행 (영상 시작 안 함)"""
     _restore_from_db()
@@ -154,7 +154,7 @@ def init():
         ))
     return jsonify({"status": "ok", "restored": len(state['all_results']), "videos": videos}), 200
 
-#review02 - 시작 요청 시 DB 복원 + 태스크 시작
+#review02 - 시작 요청 시 기존 루프 정지 + 상태 초기화 + 백그라운드 태스크 시작
 @plate_bp.route('/start', methods=['POST'])
 def start():
     from flask import current_app
@@ -220,6 +220,7 @@ def stop_plate_processing():
     print("🛑 [API] 사용자의 요청으로 번호판 인식 중지를 명령했습니다.")
     return jsonify({"success": True, "message": "Stopping processing..."})
 
+# 영상 스트리밍 
 @plate_bp.route('/stream')
 def stream():
     """MJPEG 영상 스트리밍"""
@@ -237,12 +238,14 @@ def stream():
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+# 실시간 번호판 정보 반환 (화면 업데이트용)
 @plate_bp.route('/plates', methods=['GET'])
 def get_plates():
-    """현재 화면 번호판 (최근 5개)"""
+    """현재 화면 번호판 정보 반환 (실시간 업데이트)"""
     with state_lock:
         return jsonify(state['plates']), 200
 
+# OCR 결과 반환 
 @plate_bp.route('/results', methods=['GET'])
 def get_results():
     """누적 인식 결과 — 영상별 필터 지원"""
@@ -258,6 +261,7 @@ def get_results():
             results = [r for r in results if r.get('video') == video_filter]
     return jsonify({"results": results, "videos": videos}), 200
 
+# 저장된 번호판 캡처 이미지 제공 (서브폴더 경로 지원)
 @plate_bp.route('/image/<path:filename>', methods=['GET'])
 def plate_image(filename):
     """저장된 번호판 캡처 이미지 제공 (서브폴더 경로 지원)"""
@@ -382,6 +386,7 @@ def reprocess():
         "preprocess_results": result.get('preprocess_results', {}),
     }), 200
 
+# 글자별 정오 비교 함수 (verify 엔드포인트에서 사용)
 def _compare_chars(recognized: str, ground_truth: str) -> list:
     """글자별 정오 비교 결과 생성"""
     max_len = max(len(recognized), len(ground_truth))
@@ -395,9 +400,10 @@ def _compare_chars(recognized: str, ground_truth: str) -> list:
         for i in range(max_len)
     ]
 
+# 분석 데이터 반환 엔드포인트
 @plate_bp.route('/analytics', methods=['GET'])
 def analytics():
-    """CSV 기반 분석 데이터 반환 — 로직은 analytics.py에 위임"""
+    """DB 기반 분석 데이터 반환 — 로직은 analytics.py에 위임"""
     from .analytics import get_analytics
     result = get_analytics(
         video_filter  = request.args.get('video', ''),
