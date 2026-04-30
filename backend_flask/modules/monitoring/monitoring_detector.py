@@ -1070,7 +1070,7 @@ class MonitoringDetector(BaseDetector):
         # 스트림 다운스케일 비율 확정 (640px 상한)
         self._stream_scale = min(1.0, 640 / fw) if fw > 640 else 1.0
 
-        # ── TrafficAnalyzer ×2 초기화 (Rule 기반 단독, GRU 제거) ────
+        # ── TrafficAnalyzer ×2 초기화 ────
         self.traffic_analyzer_a = TrafficAnalyzer(
             cfg, frame_w=fw, frame_h=fh, fps=fps, flow_map=self.flow
         )

@@ -1468,6 +1468,84 @@ def swap_hist():
     }), 200
 
 
+# ── hist_jam_a.csv / hist_jam_b.csv 업로드 교체 API ─────────────────────────
+
+@monitoring_bp.route('/upload_hist', methods=['POST'])
+def upload_hist():
+    """
+    특정 카메라의 hist_jam_a.csv 또는 hist_jam_b.csv를 업로드한 파일로 교체한다.
+
+    Form (multipart/form-data):
+        camera_id  str   필수 — 교체할 카메라 ID
+        slot       str   필수 — 교체할 슬롯 ("a" 또는 "b")
+        file       file  필수 — 업로드할 .csv 파일
+
+    Returns:
+        200  {"status": "ok",    "camera_id": ..., "slot": ..., "message": "교체 완료"}
+        400  {"status": "error", "message": "..."}
+        404  {"status": "error", "message": "..."}
+        500  {"status": "error", "message": "교체 실패: ..."}
+    """
+    from pathlib import Path                                              # 경로 조작용
+
+    camera_id = request.form.get('camera_id', '').strip()               # 폼 필드에서 카메라 ID 추출
+    slot      = request.form.get('slot', '').strip().lower()            # 슬롯 ("a" 또는 "b") 추출
+
+    # 필수 필드 검증
+    if not camera_id:
+        return jsonify({"status": "error", "message": "camera_id 필요"}), 400
+    if slot not in ('a', 'b'):
+        return jsonify({"status": "error", "message": "slot은 'a' 또는 'b' 이어야 합니다"}), 400
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "file 필드 필요"}), 400
+
+    uploaded = request.files['file']                                     # 업로드된 파일 객체
+    if not uploaded.filename.endswith('.csv'):                           # 확장자 검증
+        return jsonify({"status": "error", "message": ".csv 파일만 허용됩니다"}), 400
+
+    # flow_maps 디렉터리에서 camera_id에 해당하는 폴더 탐색
+    _base_dir       = os.path.dirname(os.path.abspath(__file__))        # monitoring/ 절대 경로
+    _flow_maps_root = Path(_base_dir) / "flow_maps"                    # flow_maps/ 루트
+    cam_dir         = _flow_maps_root / camera_id                       # {flow_maps}/{camera_id}/
+
+    # 정확한 경로가 없으면 camera_id를 포함하는 첫 번째 폴더로 fallback
+    if not cam_dir.exists():
+        if not _flow_maps_root.exists():
+            return jsonify({"status": "error", "message": "flow_maps 폴더 없음"}), 404
+        matches = [d for d in _flow_maps_root.iterdir() if d.is_dir() and camera_id in d.name]
+        if not matches:
+            return jsonify({
+                "status":  "error",
+                "message": f"camera_id={camera_id}에 해당하는 flow_maps 폴더 없음",
+            }), 404
+        cam_dir = matches[0]                                             # 첫 번째 일치 폴더 사용
+
+    dest_path = cam_dir / f"hist_jam_{slot}.csv"                        # 저장 대상 경로
+
+    try:
+        uploaded.save(str(dest_path))                                    # 파일 저장 (기존 파일 덮어쓰기)
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"교체 실패: {e}"}), 500
+
+    # 실행 중인 MonitoringDetector에 hist 재로드 신호 전달
+    key = _monitoring_key(camera_id)                                     # 'monitoring_{camera_id}'
+    with detector_manager._lock:
+        det = detector_manager.active_detectors.get(key)
+    if det is not None and hasattr(det, '_reload_hist'):
+        try:
+            det._reload_hist()                                           # 실시간 반영 시도
+        except Exception:
+            pass                                                         # 실패해도 저장 결과는 유지
+
+    print(f"📂 [{camera_id}] hist_jam_{slot}.csv 교체 완료 ({dest_path})")
+    return jsonify({
+        "status":    "ok",
+        "camera_id": camera_id,
+        "slot":      slot,
+        "message":   f"hist_jam_{slot}.csv 교체 완료 — 다음 예측 시 자동 반영됩니다",
+    }), 200
+
+
 # ── 큐 러너 실시간 진단 엔드포인트 ───────────────────────────────────────────
 
 @monitoring_bp.route('/its/queue_status', methods=['GET'])
