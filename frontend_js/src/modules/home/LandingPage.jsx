@@ -36,9 +36,10 @@ export default function LandingPage() {
   }, [mobileMenuOpen]);
 
   const stats = [
-    { value: '94.2%', label: 'mAP @50-95', desc: '탐지 정확도' },
-    { value: '0.8초', label: '감지 지연율', desc: '실시간 반응' },
+    { value: '2단계', label: 'Admin Auth', desc: '보안 접근 제어' },
+    // { value: '94.2%', label: 'mAP @50-95', desc: '탐지 정확도' },
     { value: '24/7', label: '운영 시간', desc: '무중단 모니터링' },
+    { value: '0.8초', label: '감지 지연율', desc: '실시간 반응' },
     { value: '4개+', label: '감지 모듈', desc: '통합 분석 엔진' },
   ];
 
@@ -91,11 +92,19 @@ export default function LandingPage() {
       tags: ['Data Aggregation', 'Chart.js', 'Dashboard', 'Report Generation'],
       color: '#3b82f6',
     },
+    {
+      icon: '🤖',
+      title: 'AI AGENT',
+      desc: '자연어 질문을 SQL로 자동 변환하여 역주행·화재·번호판 데이터를 즉시 조회합니다. RAG 기반 운영 지식 검색으로 대응 절차를 안내하고, MongoDB로 대화 맥락을 유지합니다. LLM 대시보드에서 의도 분류 정확도와 응답 지연 시간을 실시간으로 모니터링합니다.',
+      tags: ['GPT-4o-mini', 'RAG', 'LangChain', 'Chroma', 'Text-to-SQL', 'MongoDB'],
+      color: '#a855f7',
+    },
   ];
 
   const techStack = [
     { category: 'AI / ML',   items: ['YOLOv8', 'YOLOv11', 'ByteTrack', 'OpenVINO', 'CustomOCR', 'FlowMap'] },
-    { category: 'Backend',   items: ['Flask', 'Socket.IO', 'MySQL', 'SQLAlchemy', 'Gevent'] },
+    { category: 'LLM / RAG', items: ['GPT-4o-mini', 'LangChain', 'Chroma', 'RAG'] },
+    { category: 'Backend',   items: ['Flask', 'Socket.IO', 'MySQL', 'SQLAlchemy', 'MongoDB', 'Gevent'] },
     { category: 'Frontend',  items: ['React', 'Vite', 'Kakao Maps', 'Chart.js', 'Hls.js'] },
     { category: 'Infra',     items: ['Docker', 'AWS EC2', 'RDS', 'Nginx', 'GitHub Actions'] },
   ];
@@ -297,7 +306,7 @@ export default function LandingPage() {
           <div style={styles.logo} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div style={styles.logoDot} />
             <span style={styles.logoText}>TADS</span>
-            <span style={styles.logoBadge}>v1.0</span>
+            <span style={styles.logoBadge}>v4.0.1</span>
           </div>
 
           {/* 데스크톱 메뉴 */}
@@ -364,8 +373,8 @@ export default function LandingPage() {
           </h1>
 
           <p className="fade-up fade-up-3" style={styles.heroDesc}>
-            딥러닝 기반 실시간 역주행·화재 감지부터 번호판 인식,<br className="hero-br" />
-            열화상 CCTV까지 통합된 교통 안전 관제 플랫폼입니다.
+            역주행·화재·터널·교통 흐름·번호판을 하나의 대시보드에서<br className="hero-br" />
+            실시간 탐지부터 자연어 조회까지 통합된 교통 관제 플랫폼
           </p>
 
           {/* ✅ 모바일: 2열, 데스크톱: 4열 */}
@@ -392,7 +401,7 @@ export default function LandingPage() {
         <div style={styles.sectionHeader}>
           <div style={styles.sectionTag}>CORE MODULES</div>
           <h2 style={styles.sectionTitle}>핵심 감지 모듈</h2>
-          <p style={styles.sectionDesc}>설계하고 구현한 AI 기반 교통 관제 핵심 기능들입니다.</p>
+          <p style={styles.sectionDesc}>설계하고 구현한 AI 기반 교통 관제 핵심 기능들</p>
         </div>
 
         {/* ✅ 모바일: 1열, 데스크톱: 3열 */}
@@ -421,7 +430,7 @@ export default function LandingPage() {
           <h2 style={styles.sectionTitle}>기술 스택</h2>
         </div>
 
-        {/* ✅ 모바일: 2열, 데스크톱: 4열 */}
+        {/* ✅ 모바일: 2열, 데스크톱: 5열 (카테고리 5개로 증가) */}
         <div style={isMobile ? styles.techGridMobile : styles.techGrid}>
           {techStack.map((t, i) => (
             <div key={i} style={styles.techCard}>
@@ -461,6 +470,7 @@ export default function LandingPage() {
               { label: '역주행 감지 모델', value: 'YOLOv11 + ByteTrack + FlowMap' },
               { label: '화재 감지 모델', value: 'YOLOv8 (OpenVINO 경량화)' },
               { label: '번호판 OCR', value: 'Custom YOLO-OCR + Vote 알고리즘' },
+              { label: 'AI AGENT', value: 'GPT-4o-mini + RAG (Chroma) + Text-to-SQL' },
               { label: '실시간 통신', value: 'Flask-SocketIO + Gevent' },
               { label: '배포 환경', value: 'Docker + AWS EC2 + RDS' },
             ].map((item, i) => (
@@ -687,10 +697,10 @@ const styles = {
   featureDesc:  { fontSize: '14px', color: 'rgba(255,255,255,0.45)', lineHeight: '1.7' },
 
   // ── TECH STACK ──
-  // ✅ 데스크톱 4열
+  // ✅ 데스크톱 5열 (카테고리 5개에 맞게 조정)
   techGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
+    gridTemplateColumns: 'repeat(5, 1fr)',
     gap: '20px',
     maxWidth: '1200px',
     margin: '0 auto',

@@ -43,33 +43,33 @@ TADS는 이를 해결하기 위해:
 
 ### 📡 CCTV Monitoring
 
-![dashboard](./assets/dashboard_main_v1.png)
+![dashboard](./assets/dashboard_main.png)
 
 ### 🚦 Traffic Flow Monitoring
 
-![traffic](./assets/traffic_flow_1.png)
+![traffic](./assets/traffic_flow_v1.png)
 
-![traffic](./assets/traffic_flow_2.png)
+![traffic](./assets/traffic_flow_v2.png)
 
 ### 🚇 Smart Tunnel
 
-![tunnel](./assets/smart_tunnel_v1.png)
+![tunnel](./assets/smart_tunnel.png)
 
 ### 🔍 License Plate Recognition
 
-![ocr](./assets/license_plate.png)
+![ocr](./assets/license_plate_v1.png)
 
 ### 📷 Raspberry Pi CCTV
 
-![raspi](./assets/raspberry_cctv_v1.png)
+![raspi](./assets/raspberry_cctv.png)
 
 ### 📊 Statistics
 
-![stats](./assets/statistics.png)
+![stats](./assets/statistics_v1.png)
 
-### 👤 AI-AGENT
+### 🤖 AI AGENT
 
-![llm](./assets/AI_AGENT_v1.png)
+![llm](./assets/AI_AGENT.png)
 
 ---
 
@@ -127,6 +127,26 @@ TADS는 이를 해결하기 위해:
 * 이상 이벤트 실시간 집계
 * 시간/위치 기반 분석
 * 대시보드 시각화
+
+---
+
+### 🤖 7. AI AGENT (TADS AI 어시스턴트)
+
+* **자연어 질의응답** — "이번주 역주행 몇 건?" 같은 질문을 SQL로 자동 변환하여 DB 조회
+* **RAG 기반 운영 지식 안내** — 역주행/화재 대응 절차, 시스템 기능 설명 즉시 답변
+* **대화 맥락 유지** — MongoDB 기반 직전 대화 기억, 이어서 질문 가능
+* **사진/이미지 조회** — "화재 사진 보여줘" → 캡처 이미지 채팅창 내 즉시 표시
+* **LLM 성능 모니터링** — 의도 분류 정확도 및 응답 지연 시간 대시보드 제공
+
+**지원 질문 유형**
+
+| 유형 | 예시 |
+|------|------|
+| 데이터 조회 (SQL) | "이번주 역주행 결과 보여줘", "홍길동 관리자가 처리한 화재 목록" |
+| 운영 지식 (RAG) | "역주행 감지되면 어떻게 해야 해?", "TADS가 뭐야?" |
+| 복합 (BOTH) | "오늘 화재 데이터 보여주고 대응 방법도 알려줘" |
+
+👉 **관제사가 직접 데이터를 검색하지 않고 자연어로 즉시 조회 가능**
 
 ---
 
@@ -203,6 +223,43 @@ TADS는 이를 해결하기 위해:
 
 ---
 
+### 🤖 5. LLM 의도 분류 정확도 문제
+
+**문제**
+
+* "화재는?" 같은 짧은 후속 질문의 의도를 문맥 없이 분류하기 어려움
+* "이번주 말고 저번주"처럼 구어체 수정이 포함된 경우 RAG로 오분류
+
+**해결**
+
+* MongoDB로 직전 대화 기록을 조회하여 의도 분류 프롬프트에 주입
+* 이전 의도가 SQL이고 후속 질문이 짧으면 SQL 유지 규칙 명시
+* 구어체 수정 표현이 있어도 데이터 조회 의도가 남으면 SQL로 처리
+
+**결과**
+
+* 대화 맥락 기반 의도 분류 정확도 향상
+* LLM 대시보드에서 실제 vs 예상 의도 비교로 지속 개선
+
+---
+
+### 🔒 6. LLM SQL 인젝션 방어
+
+**문제**
+
+* LLM이 생성한 SQL에 INSERT / DROP 등 위험 쿼리가 포함될 가능성
+
+**해결**
+
+* `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE` 키워드 검출 시 즉시 차단
+* SELECT 쿼리만 MySQL 실행 허용
+
+**결과**
+
+* DB 쓰기 접근 원천 차단, 읽기 전용 안전 운영
+
+---
+
 ## 🏗️ System Architecture (Real-World Design)
 
 본 시스템은 실제 환경의 제약을 고려하여
@@ -235,14 +292,15 @@ TADS는 이를 해결하기 위해:
                            ↓
                     [React Dashboard]
 
-                           ↓
-                ┌──────────────────────┐
-                │  분석 및 응용 모듈    │
-                ├──────────────────────┤
-                │ • Traffic Flow 분석  │
-                │ • Smart Tunnel 분석  │
-                │ • 통계 / 리포트       │
-                └──────────────────────┘
+          ┌────────────────┴────────────────┐
+          ▼                                 ▼
+ [분석 및 응용 모듈]                  [AI AGENT 모듈]
+ ┌──────────────────┐          ┌──────────────────────┐
+ │ Traffic Flow 분석 │          │ GPT-4o-mini          │
+ │ Smart Tunnel 분석 │          │ 의도 분류 → SQL 생성  │
+ │ 통계 / 리포트     │          │ RAG (Chroma VectorDB)│
+ └──────────────────┘          │ MongoDB 대화 기록     │
+                               └──────────────────────┘
 ```
 
 ---
@@ -268,9 +326,14 @@ TADS는 이를 해결하기 위해:
 
   * 저비용 IoT 확장형 감시 시스템
 
+* **AI AGENT**
+
+  * 관제 데이터를 자연어로 즉시 조회
+  * 운영 지침을 RAG로 실시간 안내
+
 👉 즉, 본 시스템은
 
-> ❗ **“실제 환경 + 테스트 환경을 분리한 현실적인 AI 시스템”**
+> ❗ **"실제 환경 + 테스트 환경을 분리한 현실적인 AI 시스템"**
 
 으로 설계되었습니다.
 
@@ -286,12 +349,19 @@ TADS는 이를 해결하기 위해:
 * Custom OCR
 * FlowMap
 
+### LLM / RAG
+
+* OpenAI GPT-4o-mini
+* LangChain + Chroma (Vector DB)
+* RAG (Retrieval-Augmented Generation)
+
 ### Backend
 
 * Flask
 * Socket.IO
 * MySQL
 * SQLAlchemy
+* MongoDB (대화 기록)
 
 ### Frontend
 
@@ -313,13 +383,15 @@ TADS는 이를 해결하기 위해:
 
 ## ⚙️ Performance
 
-| 항목     | 내용            |
-| ------ | ------------- |
-| 탐지 정확도 | 94.2% mAP     |
-| 지연 시간  | 약 0.8초        |
-| 운영 환경  | AWS EC2 (CPU) |
-| 최적화    | OpenVINO      |
-| 안정성    | Swap 4GB      |
+| 항목 | 내용 |
+|------|------|
+| 탐지 정확도 | 94.2% mAP |
+| 지연 시간 | 약 0.8초 |
+| 운영 환경 | AWS EC2 (CPU) |
+| 최적화 | OpenVINO |
+| 안정성 | Swap 4GB |
+| AI AGENT 응답 | 평균 약 1.2초 (GPT-4o-mini) |
+| 의도 분류 정확도 | LLM 대시보드에서 실시간 측정 |
 
 ---
 
@@ -330,9 +402,10 @@ TADS는 이를 해결하기 위해:
 > ❗ **실제 배포 환경에서 동작하는 통합 관제 시스템**
 
 * YOLO + Tracking + Flow 분석 통합
-* CPU 환경 최적화
+* CPU 환경 최적화 (OpenVINO)
 * 웹 기반 실시간 관제 시스템
-* AI + Backend + Frontend + Infra 통합 경험
+* **LLM + RAG + Text-to-SQL 통합 AI 어시스턴트**
+* AI + Backend + Frontend + Infra 풀스택 통합 경험
 
 👉 **실무형 AI 시스템 설계 및 운영 경험을 보여주는 프로젝트**
 
@@ -341,14 +414,14 @@ TADS는 이를 해결하기 위해:
 ## 📌 Future Work
 
 * GPU 기반 성능 확장
-* 실시간 알림 시스템
+* 실시간 알림 시스템 (Slack / Email 연동)
 * 지도 기반 시각화 고도화
 * 이상 상황 분류 모델 개선
+* AI AGENT 멀티턴 대화 지원 (최근 N턴 히스토리 전달)
+* AI AGENT 응답 스트리밍 적용 (체감 속도 향상)
 
 ---
 
 ## 🧑‍💻 Author
 
 * Traffic Anomaly Detection System (TADS)
-
-
