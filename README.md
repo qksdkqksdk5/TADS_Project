@@ -43,7 +43,7 @@ TADS는 이를 해결하기 위해:
 
 ### 📡 CCTV Monitoring
 
-![dashboard](./assets/dashboard_main.png)
+![dashboard](./assets/dashboard_main_v1.png)
 
 ### 🚦 Traffic Flow Monitoring
 

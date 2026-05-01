@@ -306,7 +306,7 @@ export default function LandingPage() {
           <div style={styles.logo} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div style={styles.logoDot} />
             <span style={styles.logoText}>TADS</span>
-            <span style={styles.logoBadge}>v4.0.1</span>
+            <span style={styles.logoBadge}>v4.0.3</span>
           </div>
 
           {/* 데스크톱 메뉴 */}
@@ -323,7 +323,7 @@ export default function LandingPage() {
             관리자 로그인 →
           </button>
 
-          {/* ✅ 모바일 햄버거 */}
+          {/* 모바일 햄버거 */}
           <button className="hamburger" onClick={() => setMobileMenuOpen(true)} aria-label="메뉴 열기">
             <span /><span /><span />
           </button>
